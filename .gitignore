@@ -1,0 +1,28 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+server.toml
+
+# Runtime data
+.paper-wiki/
+.superpowers/
+.worktrees/
+paper-workspace/
+
+# Frontend and Rust build output
+node_modules/
+dist/
+target/
+*.tsbuildinfo
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+target/
+web/node_modules/
+web/dist/
+*.env.local
+deploy/*.env
+*.log
