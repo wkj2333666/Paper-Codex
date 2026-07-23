@@ -1,0 +1,26 @@
+[Unit]
+Description=Paper Codex research workspace (user service)
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/paper-codex
+EnvironmentFile=%h/projects/paper-codex/.runtime/paper-codex.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/projects/paper-codex/.runtime/current/paper-codex
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+KillMode=mixed
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/projects/paper-codex/.runtime %h/projects/paper-codex/paper-workspace %h/.codex
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=true
+RestrictSUIDSGID=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

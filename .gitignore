@@ -15,6 +15,7 @@ node_modules/
 dist/
 target/
 .cargo-target/
+.runtime/
 *.tsbuildinfo
 
 # Editor and OS files
@@ -30,6 +31,8 @@ deploy/*.env
 *.log
 
 # Maintainer-local deployment
-/deploy/
+/deploy/*
+!/deploy/paper-codex.user.service
+!/deploy/paper-codex.user.env.example
 /scripts/backup.sh
 /paper-codex.env
