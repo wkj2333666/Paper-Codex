@@ -117,11 +117,11 @@ cargo test --all-targets --locked
 scripts/build-release.sh
 ```
 
-GitHub Actions 会在 push 和 pull request 时重复这些检查。推送 `v*` 标签后，Actions 还会为 x86_64、aarch64 和 armv7 Linux 构建 release 压缩包，因此用户不需要在本地编译完整的 Rust release。
+GitHub Actions 会在 push 和 pull request 时重复这些检查。推送 `v*` 标签后，Actions 会使用 [`cross`](https://github.com/cross-rs/cross) 构建以下 Linux 目标的 release 压缩包：`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`armv7-unknown-linux-gnueabihf`、`x86_64-unknown-linux-musl`、`aarch64-unknown-linux-musl`、`riscv64gc-unknown-linux-gnu`、`powerpc64le-unknown-linux-gnu` 和 `s390x-unknown-linux-gnu`，用户不需要在本地安装每种目标的 linker。
 
 ## Release
 
-Release 压缩包包含对应架构的后端二进制、编译后的网页资源和通用的 `systemd --user` 模板。每个 Release 都提供 x86_64、aarch64 和 armv7 Linux 压缩包。压缩包与具体部署环境解耦，不包含域名、Caddy 配置、机器路径或私有环境文件。
+Release 压缩包包含对应目标的后端二进制、编译后的网页资源和通用的 `systemd --user` 模板。每个 Release 都提供上述八种 Linux 目标的压缩包。树莓派 64 位系统使用 `aarch64-unknown-linux-gnu`，32 位系统使用 `armv7-unknown-linux-gnueabihf`。压缩包与具体部署环境解耦，不包含域名、Caddy 配置、机器路径或私有环境文件。
 
 本地部署时，把 release 解压到项目目录，将 `PAPER_CODEX_STATIC_DIR` 指向其中的 `web/`，并把 `paper-workspace/` 与环境文件保留在 release 内容之外。`deploy/` 中的公开模板和 release workflow 是参考实现，请根据自己的操作系统和网络边界调整。
 

@@ -12,6 +12,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: stable
+  CROSS_VERSION: "0.2.5"
+
 jobs:
   frontend:
     name: Frontend checks and assets
@@ -71,40 +76,32 @@ jobs:
         run: cargo test --all-targets --locked
 
   build:
-    name: Build ${{ matrix.arch }} release
+    name: Build ${{ matrix.target }} release
     needs: [frontend, verify]
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: x86_64
-            target: x86_64-unknown-linux-gnu
-            runner: ubuntu-24.04
-            cross: false
-          - arch: aarch64
-            target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
-            cross: false
-          - arch: armv7
-            target: armv7-unknown-linux-gnueabihf
-            runner: ubuntu-24.04
-            cross: true
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - armv7-unknown-linux-gnueabihf
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - riscv64gc-unknown-linux-gnu
+          - powerpc64le-unknown-linux-gnu
+          - s390x-unknown-linux-gnu
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
       - name: Set up Rust
         run: |
-          rustup toolchain install stable --profile minimal --target "${{ matrix.target }}"
-          rustup default stable
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
 
-      - name: Install ARMv7 cross compiler
-        if: matrix.cross
+      - name: Install pinned cross compiler
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
-          echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc" >> "$GITHUB_ENV"
+          cargo +"$RUST_TOOLCHAIN" install cross --version "$CROSS_VERSION" --locked
 
       - name: Download frontend assets
         uses: actions/download-artifact@v4
@@ -113,16 +110,17 @@ jobs:
           path: web/dist
 
       - name: Build backend
-        run: cargo build --release --locked --target "${{ matrix.target }}"
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cross +"$RUST_TOOLCHAIN" build --release --locked --target "$TARGET"
 
       - name: Package project-local runtime
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_ARCH: ${{ matrix.arch }}
           RELEASE_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          package="paper-codex-${RELEASE_TAG}-${RELEASE_ARCH}-${RELEASE_TARGET}"
+          package="paper-codex-${RELEASE_TAG}-${RELEASE_TARGET}"
           install -d "${package}/web"
           install -m 0755 "target/${RELEASE_TARGET}/release/paper-codex" "${package}/paper-codex"
           cp -a web/dist/. "${package}/web/"
@@ -143,7 +141,7 @@ jobs:
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.arch }}
+          name: release-${{ matrix.target }}
           path: |
             paper-codex-*.tar.gz
             paper-codex-*.tar.gz.sha256
@@ -170,7 +168,7 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           assets=(dist/*.tar.gz dist/*.tar.gz.sha256)
-          test "${#assets[@]}" -eq 6
+          test "${#assets[@]}" -eq 16
           gh release create "${RELEASE_TAG}" "${assets[@]}" \
             --repo "${GH_REPO}" \
             --verify-tag \

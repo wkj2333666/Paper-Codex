@@ -117,11 +117,11 @@ For the full local release check, use:
 scripts/build-release.sh
 ```
 
-The GitHub Actions workflow repeats these checks on pushes and pull requests. When a `v*` tag is pushed, it builds release archives for x86_64, aarch64, and armv7 Linux targets, so users do not need to compile the full Rust release locally.
+The GitHub Actions workflow repeats these checks on pushes and pull requests. When a `v*` tag is pushed, it uses [`cross`](https://github.com/cross-rs/cross) to build release archives for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `riscv64gc-unknown-linux-gnu`, `powerpc64le-unknown-linux-gnu`, and `s390x-unknown-linux-gnu`, so users do not need to install every target linker locally.
 
 ## Releases
 
-Release archives contain one target-specific backend binary, compiled web assets, and generic `systemd --user` templates. Each release provides x86_64, aarch64, and armv7 Linux archives. The archives are intentionally deployment-neutral: they do not contain a domain name, Caddy configuration, machine path, or private environment file.
+Release archives contain one target-specific backend binary, compiled web assets, and generic `systemd --user` templates. Each release provides the eight Linux target archives listed above. For Raspberry Pi, use `aarch64-unknown-linux-gnu` on a 64-bit OS or `armv7-unknown-linux-gnueabihf` on a 32-bit OS. The archives are intentionally deployment-neutral: they do not contain a domain name, Caddy configuration, machine path, or private environment file.
 
 For a local deployment, unpack a release into the project directory, point `PAPER_CODEX_STATIC_DIR` at its `web/` directory, and keep `paper-workspace/` and the environment file outside the release contents. The release workflow and templates in `deploy/` are the public reference; adapt them to your operating system and network boundary.
 
