@@ -103,7 +103,7 @@ jobs:
         if: matrix.cross
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y gcc-arm-linux-gnueabihf
+          sudo apt-get install --no-install-recommends -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
           echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc" >> "$GITHUB_ENV"
 
       - name: Download frontend assets
