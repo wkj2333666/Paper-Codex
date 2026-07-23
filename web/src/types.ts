@@ -23,6 +23,6 @@ export interface MessageCitation { id:string; message_id:string; paper_id:string
 export interface Annotation { id:string; citation_id:string; paper_id:string; revision:string; source_message_id:string; kind:string; body:string; state:"visible"|"hidden"; availability:"available"|"revision-stale"|"paper-missing"; created_at:string; updated_at:string }
 export interface AnnotationAnchor { annotation_id:string; page:number; rect_index:number; x:number; y:number; width:number; height:number }
 export interface PaperAnnotation { annotation:Annotation; citation:MessageCitation; anchors:AnnotationAnchor[] }
-export interface ChatMessage { id:string; conversation_id:string; role:"user"|"assistant"|"system"; content:string; turn_id:string|null; status:string; error:string|null; citations:MessageCitation[]; progress_phase?:"reading"|"reasoning"; created_at:string; updated_at:string }
+export interface ChatMessage { id:string; conversation_id:string; role:"user"|"assistant"|"system"; content:string; live_content?:string; turn_id:string|null; status:string; error:string|null; citations:MessageCitation[]; progress_phase?:"reading"|"reasoning"|"tool"|"answering"; progress_label?:string; created_at:string; updated_at:string }
 export interface ConversationDetail { conversation:Conversation; scopes:ConversationScope[]; messages:ChatMessage[] }
 export interface ConversationStreamEvent { id:number; type:string; conversation_id:string; message_id:string|null; payload:Record<string,unknown>; created_at:string }

@@ -1,5 +1,5 @@
 use crate::{
-    codex::{CodexCapabilities, CodexRunSettings, CodexRuntime, CodexTurn},
+    codex::{CodexCapabilities, CodexEvent, CodexRunSettings, CodexRuntime, CodexTurn},
     conversation_context::ConversationContextBuilder,
     conversations::{ChatMessage, Conversation, ConversationEvent, ConversationScopeInput},
     db::Database,
@@ -10,7 +10,7 @@ use crate::{
     workspace::Workspace,
 };
 use anyhow::{bail, Context, Result};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
 
@@ -29,6 +29,107 @@ fn should_generate_conversation_title(title: &str) -> bool {
         title.trim(),
         "新对话" | "论文对话" | "项目对话" | "研究对话"
     )
+}
+
+#[derive(Default)]
+struct AnswerPreview {
+    raw: String,
+    visible: String,
+}
+
+impl AnswerPreview {
+    fn push(&mut self, delta: &str) -> Option<String> {
+        self.raw.push_str(delta);
+        let next = extract_json_string_prefix(&self.raw, "answer_markdown")?;
+        let previous_len = self.visible.chars().count();
+        if next.chars().count() <= previous_len {
+            return None;
+        }
+        let visible_delta = next.chars().skip(previous_len).collect::<String>();
+        self.visible = next;
+        Some(visible_delta)
+    }
+}
+
+fn extract_json_string_prefix(raw: &str, field: &str) -> Option<String> {
+    let marker = format!("\"{field}\"");
+    let start = raw.find(&marker)? + marker.len();
+    let bytes = raw.as_bytes();
+    let mut index = start;
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+    if bytes.get(index) != Some(&b':') {
+        return None;
+    }
+    index += 1;
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+    if bytes.get(index) != Some(&b'\"') {
+        return None;
+    }
+    index += 1;
+    let mut output = String::new();
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\"' => return Some(output),
+            b'\\' => {
+                if index + 1 >= bytes.len() {
+                    break;
+                }
+                match bytes[index + 1] {
+                    b'\"' => output.push('"'),
+                    b'\\' => output.push('\\'),
+                    b'/' => output.push('/'),
+                    b'b' => output.push('\u{0008}'),
+                    b'f' => output.push('\u{000c}'),
+                    b'n' => output.push('\n'),
+                    b'r' => output.push('\r'),
+                    b't' => output.push('\t'),
+                    b'u' if index + 6 <= bytes.len() => {
+                        let digits = std::str::from_utf8(&bytes[index + 2..index + 6]).ok()?;
+                        let code = u16::from_str_radix(digits, 16).ok()?;
+                        output.push(char::from_u32(code as u32).unwrap_or('\u{fffd}'));
+                        index += 4;
+                    }
+                    _ => break,
+                }
+                index += 2;
+            }
+            _ => {
+                let character = raw[index..].chars().next()?;
+                output.push(character);
+                index += character.len_utf8();
+            }
+        }
+    }
+    Some(output)
+}
+
+fn codex_progress(event: &CodexEvent) -> Option<(&'static str, &'static str)> {
+    match event.kind.as_str() {
+        "turn/started" => Some(("reasoning", "Codex 已开始处理问题…")),
+        "agent-delta" => Some(("answering", "Codex 正在生成回答…")),
+        "item/reasoning/summaryTextDelta" | "item/reasoning/summaryPartAdded" => {
+            Some(("reasoning", "Codex 正在整理推理摘要…"))
+        }
+        "item/started" | "item/completed" => {
+            let item_type = event
+                .payload
+                .pointer("/params/item/type")
+                .and_then(Value::as_str)?;
+            match item_type {
+                "agentMessage" => Some(("answering", "Codex 正在组织回答…")),
+                "commandExecution" => Some(("tool", "Codex 正在执行辅助操作…")),
+                "mcpToolCall" => Some(("tool", "Codex 正在调用研究工具…")),
+                "fileChange" => Some(("tool", "Codex 正在处理工作区文件…")),
+                "webSearch" => Some(("tool", "Codex 正在检索资料…")),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 impl ConversationEngine {
@@ -279,6 +380,7 @@ impl ConversationEngine {
         )
         .await?;
         let (turn_event_tx, mut turn_event_rx) = mpsc::unbounded_channel();
+        let mut preview = AnswerPreview::default();
         let turn = self.codex.run_turn_with_events(
             CodexTurn {
                 thread_id: conversation.thread_id.clone(),
@@ -304,8 +406,16 @@ impl ConversationEngine {
         tokio::pin!(turn);
         let outcome = loop {
             tokio::select! {
-                result = &mut turn => break result?,
-                Some(_) = turn_event_rx.recv() => {}
+                result = &mut turn => {
+                    let outcome = result?;
+                    while let Ok(event) = turn_event_rx.try_recv() {
+                        self.handle_turn_event(&conversation.id, &assistant.id, &mut preview, event).await?;
+                    }
+                    break outcome;
+                }
+                Some(event) = turn_event_rx.recv() => {
+                    self.handle_turn_event(&conversation.id, &assistant.id, &mut preview, event).await?;
+                }
             }
         };
         if outcome.status != "completed" {
@@ -375,6 +485,36 @@ impl ConversationEngine {
         Ok(())
     }
 
+    async fn handle_turn_event(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        preview: &mut AnswerPreview,
+        event: CodexEvent,
+    ) -> Result<()> {
+        if let Some((phase, label)) = codex_progress(&event) {
+            self.emit(
+                conversation_id,
+                Some(message_id),
+                "answer-progress",
+                json!({"phase":phase,"label":label}),
+            )
+            .await?;
+        }
+        if event.kind == "agent-delta" {
+            if let Some(delta) = event.text.as_deref().and_then(|text| preview.push(text)) {
+                self.emit(
+                    conversation_id,
+                    Some(message_id),
+                    "answer-delta",
+                    json!({"text":delta,"phase":"answering"}),
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn emit(
         &self,
         conversation_id: &str,
@@ -393,12 +533,24 @@ impl ConversationEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::should_generate_conversation_title;
+    use super::{extract_json_string_prefix, should_generate_conversation_title, AnswerPreview};
 
     #[test]
     fn only_placeholder_titles_are_generated() {
         assert!(should_generate_conversation_title("新对话"));
         assert!(should_generate_conversation_title("论文对话"));
         assert!(!should_generate_conversation_title("我的消融实验问题"));
+    }
+
+    #[test]
+    fn answer_preview_extracts_only_incremental_markdown_from_json() {
+        let mut preview = AnswerPreview::default();
+        assert_eq!(
+            preview.push(r#"{"answer_markdown":"逐步"#),
+            Some("逐步".into())
+        );
+        assert_eq!(preview.push(r#"回答","#), Some("回答".into()));
+        assert_eq!(preview.visible, "逐步回答");
+        assert_eq!(extract_json_string_prefix(&preview.raw, "citations"), None);
     }
 }

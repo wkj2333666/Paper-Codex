@@ -29,12 +29,13 @@ describe("conversation store", () => {
     expect(state.activeSettings).toEqual({model:"gpt-test", reasoning_effort:"high", service_tier:"priority"})
   })
 
-  it("tracks semantic progress without rendering structured deltas", () => {
+  it("tracks safe live answer deltas without rendering structured JSON", () => {
     let state = conversationInitialState
     state = reduceConversationEvent(state, event(4, "answer-progress", { phase: "reading" }))
-    state = reduceConversationEvent(state, event(5, "answer-delta", { delta: '{"answer_markdown":' }))
+    state = reduceConversationEvent(state, event(5, "answer-delta", { text: "逐步回答" }))
     expect(state.messages.a.content).toBe("")
-    expect(state.messages.a.progress_phase).toBe("reading")
+    expect(state.messages.a.live_content).toBe("逐步回答")
+    expect(state.messages.a.progress_phase).toBe("answering")
     expect(state.lastEventId).toBe(5)
   })
 

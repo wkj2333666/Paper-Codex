@@ -21,7 +21,9 @@ export type ConversationAction=
   |{type:"drawer";open:boolean;view?:"history"|"activity"}
   |{type:"event";event:ConversationStreamEvent}
 
-function pendingMessage(id:string,conversationId:string):ChatMessage{return {id,conversation_id:conversationId,role:"assistant",content:"",turn_id:null,status:"streaming",error:null,citations:[],created_at:"",updated_at:""}}
+function pendingMessage(id:string,conversationId:string):ChatMessage{return {id,conversation_id:conversationId,role:"assistant",content:"",live_content:"",turn_id:null,status:"streaming",error:null,citations:[],created_at:"",updated_at:""}}
+
+function progressPhase(value:unknown):ChatMessage["progress_phase"]{return value==="reading"||value==="reasoning"||value==="tool"||value==="answering"?value:undefined}
 
 export function reduceConversationEvent(state:ConversationState,event:ConversationStreamEvent):ConversationState{
   if(event.id<=state.lastEventId)return state
@@ -29,10 +31,13 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
   if(!messageId)return {...state,lastEventId:event.id}
   const current=state.messages[messageId]??pendingMessage(messageId,event.conversation_id)
   let next=current
-  if(event.type==="answer-progress")next={...current,status:"streaming",progress_phase:event.payload.phase==="reading"?"reading":"reasoning"}
-  else if(event.type==="answer-completed")next={...current,status:"completed",content:String(event.payload.answer_markdown??""),citations:(event.payload.citations as MessageCitation[]|undefined)??[],progress_phase:undefined}
-  else if(event.type==="answer-failed")next={...current,status:"failed",error:String(event.payload.message??"回答失败"),progress_phase:undefined}
-  else if(event.type==="answer-cancelled")next={...current,status:"cancelled",progress_phase:undefined}
+  if(event.type==="answer-queued")next={...current,status:"queued"}
+  else if(event.type==="answer-started")next={...current,status:"running",progress_phase:"reasoning",progress_label:"Codex 已开始处理问题…"}
+  else if(event.type==="answer-progress")next={...current,status:"streaming",progress_phase:progressPhase(event.payload.phase)??"reasoning",progress_label:String(event.payload.label??"")||undefined}
+  else if(event.type==="answer-delta")next={...current,status:"streaming",live_content:`${current.live_content??""}${String(event.payload.text??"")}`,progress_phase:"answering",progress_label:"Codex 正在生成回答…"}
+  else if(event.type==="answer-completed")next={...current,status:"completed",content:String(event.payload.answer_markdown??""),live_content:undefined,citations:(event.payload.citations as MessageCitation[]|undefined)??[],progress_phase:undefined,progress_label:undefined}
+  else if(event.type==="answer-failed")next={...current,status:"failed",live_content:undefined,error:String(event.payload.message??"回答失败"),progress_phase:undefined,progress_label:undefined}
+  else if(event.type==="answer-cancelled")next={...current,status:"cancelled",live_content:undefined,progress_phase:undefined,progress_label:undefined}
   else if(event.type==="message-created")next={...current,role:(event.payload.role as ChatMessage["role"])??"user",content:String(event.payload.content??""),status:"completed"}
   const exists=state.messageOrder.includes(messageId)
   return {...state,lastEventId:event.id,messages:{...state.messages,[messageId]:next},messageOrder:exists?state.messageOrder:[...state.messageOrder,messageId]}

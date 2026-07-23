@@ -209,9 +209,21 @@ async fn publishes_semantic_progress_and_final_answer() {
     assert!(events.iter().any(|event| {
         event.event_type == "answer-progress" && event.payload["phase"] == "reasoning"
     }));
-    assert!(!events
+    let deltas = events
         .iter()
-        .any(|event| event.event_type == "answer-delta"));
+        .filter(|event| event.event_type == "answer-delta")
+        .collect::<Vec<_>>();
+    assert!(!deltas.is_empty());
+    assert!(deltas.iter().all(|event| event.payload["text"]
+        .as_str()
+        .is_some_and(|text| !text.contains('{'))));
+    assert_eq!(
+        deltas
+            .iter()
+            .filter_map(|event| event.payload["text"].as_str())
+            .collect::<String>(),
+        "结构化回答 [1]"
+    );
     let completed = events
         .iter()
         .find(|event| event.event_type == "answer-completed")
