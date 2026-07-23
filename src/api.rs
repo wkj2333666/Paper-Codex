@@ -180,6 +180,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/tasks/{id}/cancel", post(cancel_task))
         .route("/api/events", get(events))
         .route("/api/search", get(search))
+        .route("/api/codex/capabilities", get(codex_capabilities))
         .route("/api/questions", post(question))
         .route(
             "/api/conversations",
@@ -901,10 +902,19 @@ async fn list_conversations(
     )))
 }
 
+async fn codex_capabilities(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let engine = state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?;
+    Ok(Json(json!(engine.capabilities())))
+}
+
 #[derive(Deserialize)]
 struct CreateConversationRequest {
     title: String,
     scopes: Vec<ConversationScopeInput>,
+    settings: Option<crate::codex::CodexRunSettings>,
 }
 
 async fn create_conversation(
@@ -918,7 +928,7 @@ async fn create_conversation(
         .conversation_engine
         .as_ref()
         .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
-        .create_conversation(&request.title, request.scopes)
+        .create_conversation_with_settings(&request.title, request.scopes, request.settings)
         .await
         .map_err(conversation_api_error)?;
     Ok((StatusCode::CREATED, Json(json!(conversation))))
@@ -961,6 +971,7 @@ async fn get_conversation(
 struct UpdateConversationRequest {
     title: Option<String>,
     archived: Option<bool>,
+    settings: Option<crate::codex::CodexRunSettings>,
 }
 
 async fn update_conversation(
@@ -968,6 +979,33 @@ async fn update_conversation(
     Path(id): Path<String>,
     Json(request): Json<UpdateConversationRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    if request
+        .title
+        .as_deref()
+        .is_some_and(|title| title.trim().is_empty())
+    {
+        return Err(ApiError::bad_request("conversation title cannot be empty"));
+    }
+    if state.db.get_conversation(&id).await?.is_none() {
+        return Err(ApiError::not_found("对话不存在"));
+    }
+    let engine = state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?;
+    if let Some(settings) = request.settings.as_ref() {
+        if state.db.conversation_has_pending_turn(&id).await? {
+            return Err(ApiError::conflict("回答生成期间不能修改 Codex 设置"));
+        }
+        engine
+            .validate_settings(settings)
+            .map_err(conversation_api_error)?;
+        state
+            .db
+            .update_conversation_settings(&id, settings)
+            .await?
+            .ok_or_else(|| ApiError::not_found("对话不存在"))?;
+    }
     let conversation = state
         .db
         .update_conversation(&id, request.title.as_deref(), request.archived)

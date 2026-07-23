@@ -74,3 +74,16 @@ test("task cancellation and dismissal use separate encoded endpoints", async()=>
     ["DELETE","/api/tasks/task%2Fone"],
   ])
 })
+
+test("Codex capabilities and conversation settings use the conversation API", async()=>{
+  await api.codexCapabilities()
+  await api.createConversation("设置对话", [], {model:"gpt-test", reasoning_effort:"high", service_tier:"priority"})
+  await api.updateConversation("conversation-1", {settings:{model:"gpt-test", reasoning_effort:"low", service_tier:null}})
+  expect(capturedRequests.map(request=>[request.method,request.url])).toEqual([
+    ["GET","/api/codex/capabilities"],
+    ["POST","/api/conversations"],
+    ["PATCH","/api/conversations/conversation-1"],
+  ])
+  expect(JSON.parse(String(capturedRequests[1].body))).toMatchObject({settings:{model:"gpt-test", reasoning_effort:"high", service_tier:"priority"}})
+  expect(JSON.parse(String(capturedRequests[2].body))).toMatchObject({settings:{model:"gpt-test", reasoning_effort:"low", service_tier:null}})
+})

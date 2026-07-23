@@ -2,6 +2,11 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { CodexPanel, ConversationProgress } from "./CodexPanel"
 
+const capabilities = {
+  default:{model:"gpt-test", reasoning_effort:"medium", service_tier:null},
+  models:[{id:"gpt-test",display_name:"GPT Test",default_reasoning_effort:"medium",supported_reasoning_efforts:["low","medium","high"],supports_fast:true}],
+}
+
 describe("CodexPanel", () => {
   it("defaults to a conversation composer with history and activity controls", () => {
     const html = renderToStaticMarkup(
@@ -14,6 +19,7 @@ describe("CodexPanel", () => {
         onCitation={() => {}}
         onCitations={() => {}}
         onSelect={() => {}}
+        codexCapabilities={capabilities}
       />,
     )
     expect(html).toContain("新建对话")
@@ -24,6 +30,9 @@ describe("CodexPanel", () => {
     expect(html).toContain("当前作用域")
     expect(html).toContain("Attention Is All You Need")
     expect(html).toContain('aria-label="发送消息"')
+    expect(html).toContain("模型")
+    expect(html).toContain("推理强度")
+    expect(html).toContain("速度")
   })
 
   it("shows application progress without exposing model reasoning", () => {

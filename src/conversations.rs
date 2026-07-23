@@ -1,3 +1,4 @@
+use crate::codex::CodexRunSettings;
 use crate::db::Database;
 use crate::prompts::ConversationAnswer;
 use anyhow::{bail, Context, Result};
@@ -13,6 +14,9 @@ pub struct Conversation {
     pub title: String,
     pub thread_id: Option<String>,
     pub status: String,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
     pub archived_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -130,7 +134,7 @@ impl Database {
     ) -> Result<Vec<Conversation>> {
         let archived_filter = if archived { "IS NOT NULL" } else { "IS NULL" };
         let query = format!(
-            "SELECT id,title,thread_id,status,archived_at,created_at,updated_at FROM conversations WHERE archived_at {archived_filter} ORDER BY updated_at DESC,rowid DESC LIMIT ? OFFSET ?"
+            "SELECT id,title,thread_id,status,model,reasoning_effort,service_tier,archived_at,created_at,updated_at FROM conversations WHERE archived_at {archived_filter} ORDER BY updated_at DESC,rowid DESC LIMIT ? OFFSET ?"
         );
         Ok(sqlx::query_as(&query)
             .bind(limit.clamp(1, 100))
@@ -140,7 +144,7 @@ impl Database {
     }
 
     pub async fn get_conversation(&self, id: &str) -> Result<Option<Conversation>> {
-        Ok(sqlx::query_as("SELECT id,title,thread_id,status,archived_at,created_at,updated_at FROM conversations WHERE id=?")
+        Ok(sqlx::query_as("SELECT id,title,thread_id,status,model,reasoning_effort,service_tier,archived_at,created_at,updated_at FROM conversations WHERE id=?")
             .bind(id)
             .fetch_optional(self.pool())
             .await?)
@@ -170,6 +174,25 @@ impl Database {
                 "UPDATE conversations SET archived_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?"
             };
             sqlx::query(sql).bind(id).execute(self.pool()).await?;
+        }
+        self.get_conversation(id).await
+    }
+
+    pub async fn update_conversation_settings(
+        &self,
+        id: &str,
+        settings: &CodexRunSettings,
+    ) -> Result<Option<Conversation>> {
+        let changed = sqlx::query("UPDATE conversations SET model=?,reasoning_effort=?,service_tier=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+            .bind(&settings.model)
+            .bind(&settings.reasoning_effort)
+            .bind(&settings.service_tier)
+            .bind(id)
+            .execute(self.pool())
+            .await?
+            .rows_affected();
+        if changed == 0 {
+            return Ok(None);
         }
         self.get_conversation(id).await
     }

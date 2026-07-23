@@ -14,7 +14,10 @@ export interface GraphPayload { nodes:GraphNode[]; edges:GraphEdge[] }
 export interface SearchResult { entity_type:string; entity_id:string; title:string; snippet:string }
 export interface StreamEvent { id:number; type:string; task_id:string; payload:Record<string,unknown>; created_at:string }
 export interface Activity { id:number; taskId:string; type:string; label:string; createdAt:string }
-export interface Conversation { id:string; title:string; thread_id:string|null; status:string; archived_at:string|null; created_at:string; updated_at:string }
+export interface CodexRunSettings { model:string; reasoning_effort:string; service_tier:string|null }
+export interface CodexModel { id:string; display_name:string; default_reasoning_effort:string; supported_reasoning_efforts:string[]; supports_fast:boolean }
+export interface CodexCapabilities { default:CodexRunSettings; models:CodexModel[] }
+export interface Conversation { id:string; title:string; thread_id:string|null; status:string; model:string|null; reasoning_effort:string|null; service_tier:string|null; archived_at:string|null; created_at:string; updated_at:string }
 export interface ConversationScope { conversation_id?:string; scope_type:"paper"|"project"|"global"; scope_id:string|null; added_at?:string }
 export interface MessageCitation { id:string; message_id:string; paper_id:string; revision:string; page:number; section:string|null; locator:string|null; quote:string; prefix:string; suffix:string; explanation:string; match_status:string }
 export interface Annotation { id:string; citation_id:string; paper_id:string; revision:string; source_message_id:string; kind:string; body:string; state:"visible"|"hidden"; availability:"available"|"revision-stale"|"paper-missing"; created_at:string; updated_at:string }

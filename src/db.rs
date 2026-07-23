@@ -102,6 +102,7 @@ CREATE INDEX IF NOT EXISTS knowledge_edges_origin ON knowledge_edges(origin_pape
 const CONVERSATION_BASE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, thread_id TEXT, status TEXT NOT NULL DEFAULT 'idle',
+  model TEXT, reasoning_effort TEXT, service_tier TEXT,
   archived_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -201,6 +202,19 @@ impl Database {
         }
         if !has_column(pool, "chat_messages", "conversation_id").await? {
             Self::migrate_legacy_chat_messages(pool).await?;
+        }
+        for (column, definition) in [
+            ("model", "TEXT"),
+            ("reasoning_effort", "TEXT"),
+            ("service_tier", "TEXT"),
+        ] {
+            if !has_column(pool, "conversations", column).await? {
+                sqlx::query(&format!(
+                    "ALTER TABLE conversations ADD COLUMN {column} {definition}"
+                ))
+                .execute(pool)
+                .await?;
+            }
         }
         Ok(())
     }

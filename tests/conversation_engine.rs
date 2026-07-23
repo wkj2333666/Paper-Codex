@@ -1,5 +1,5 @@
 use paper_codex::{
-    codex::{CodexCommand, CodexRuntime},
+    codex::{CodexCommand, CodexRunSettings, CodexRuntime},
     conversation_engine::ConversationEngine,
     conversations::ConversationScopeInput,
     db::Database,
@@ -16,6 +16,29 @@ fn fake_command() -> CodexCommand {
         )],
         codex_home: None,
     }
+}
+
+#[tokio::test]
+async fn creates_conversation_with_selected_codex_settings() {
+    let (engine, _temp) = harness().await;
+    let conversation = engine
+        .create_conversation_with_settings(
+            "高强度分析",
+            vec![ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            }],
+            Some(CodexRunSettings {
+                model: "gpt-test".into(),
+                reasoning_effort: "high".into(),
+                service_tier: Some("priority".into()),
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conversation.model.as_deref(), Some("gpt-test"));
+    assert_eq!(conversation.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(conversation.service_tier.as_deref(), Some("priority"));
 }
 
 async fn harness() -> (Arc<ConversationEngine>, tempfile::TempDir) {

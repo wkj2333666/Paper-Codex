@@ -1,4 +1,4 @@
-import type { Annotation, AnnotationAnchor, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, Dashboard, GraphPayload, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectImpact, SearchResult, StreamEvent, Task } from "./types"
+import type { Annotation, AnnotationAnchor, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexRunSettings, Dashboard, GraphPayload, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectImpact, SearchResult, StreamEvent, Task } from "./types"
 
 export class ApiError extends Error { constructor(public status:number,message:string){super(message)} }
 const TOKEN_KEY = "paper-codex-token"
@@ -46,10 +46,11 @@ export const api = {
   },
   search:(query:string)=>request<SearchResult[]>(`/api/search?q=${encodeURIComponent(query)}`),
   question:(scope_type:string,scope_id:string|null,question:string)=>request<{task_id:string}>("/api/questions",{method:"POST",body:JSON.stringify({scope_type,scope_id,question})}),
+  codexCapabilities:()=>request<CodexCapabilities>("/api/codex/capabilities"),
   conversations:(archived=false)=>request<Conversation[]>(`/api/conversations?archived=${archived}`),
-  createConversation:(title:string,scopes:ConversationScope[])=>request<Conversation>("/api/conversations",{method:"POST",body:JSON.stringify({title,scopes})}),
+  createConversation:(title:string,scopes:ConversationScope[],settings?:CodexRunSettings)=>request<Conversation>("/api/conversations",{method:"POST",body:JSON.stringify({title,scopes,...(settings?{settings}:{})})}),
   conversation:(id:string)=>request<ConversationDetail>(`/api/conversations/${encodeURIComponent(id)}`),
-  updateConversation:(id:string,value:{title?:string;archived?:boolean})=>request<Conversation>(`/api/conversations/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(value)}),
+  updateConversation:(id:string,value:{title?:string;archived?:boolean;settings?:CodexRunSettings})=>request<Conversation>(`/api/conversations/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(value)}),
   replaceConversationScopes:(id:string,scopes:ConversationScope[])=>request<ConversationScope[]>(`/api/conversations/${encodeURIComponent(id)}/scopes`,{method:"PUT",body:JSON.stringify({scopes})}),
   sendConversationMessage:(id:string,content:string)=>request<{message_id:string;status:string}>(`/api/conversations/${encodeURIComponent(id)}/messages`,{method:"POST",body:JSON.stringify({content})}),
   cancelConversation:(id:string)=>request<void>(`/api/conversations/${encodeURIComponent(id)}/cancel`,{method:"POST"}),

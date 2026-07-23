@@ -1,5 +1,5 @@
 use crate::{
-    codex::{CodexRuntime, CodexTurn},
+    codex::{CodexCapabilities, CodexRunSettings, CodexRuntime, CodexTurn},
     conversation_context::ConversationContextBuilder,
     conversations::{ChatMessage, Conversation, ConversationEvent, ConversationScopeInput},
     db::Database,
@@ -70,11 +70,33 @@ impl ConversationEngine {
         self.events.subscribe()
     }
 
+    pub fn capabilities(&self) -> CodexCapabilities {
+        self.codex.capabilities()
+    }
+
+    pub fn validate_settings(&self, settings: &CodexRunSettings) -> Result<CodexRunSettings> {
+        self.codex.validate_settings(settings)
+    }
+
     pub async fn create_conversation(
         &self,
         title: &str,
         scopes: Vec<ConversationScopeInput>,
     ) -> Result<Conversation> {
+        self.create_conversation_with_settings(title, scopes, None)
+            .await
+    }
+
+    pub async fn create_conversation_with_settings(
+        &self,
+        title: &str,
+        scopes: Vec<ConversationScopeInput>,
+        settings: Option<CodexRunSettings>,
+    ) -> Result<Conversation> {
+        let settings = settings
+            .map(|settings| self.validate_settings(&settings))
+            .transpose()?
+            .unwrap_or_else(|| self.codex.default_settings());
         let conversation = self.db.create_conversation(title).await?;
         if let Err(error) = self
             .db
@@ -87,7 +109,10 @@ impl ConversationEngine {
                 .await?;
             return Err(error);
         }
-        Ok(conversation)
+        self.db
+            .update_conversation_settings(&conversation.id, &settings)
+            .await?
+            .context("created conversation settings are missing")
     }
 
     pub async fn enqueue_message(
@@ -260,6 +285,18 @@ impl ConversationEngine {
                 cwd: bundle.root.clone(),
                 prompt: conversation_question_prompt(&question.content),
                 output_schema: Some(conversation_answer_schema()),
+                settings: conversation
+                    .model
+                    .as_ref()
+                    .zip(conversation.reasoning_effort.as_ref())
+                    .map(|(model, reasoning_effort)| CodexRunSettings {
+                        model: model.clone(),
+                        reasoning_effort: reasoning_effort.clone(),
+                        service_tier: conversation.service_tier.clone(),
+                    })
+                    .map(|settings| self.validate_settings(&settings))
+                    .transpose()?
+                    .unwrap_or_else(|| self.codex.default_settings()),
             },
             cancel,
             turn_event_tx,

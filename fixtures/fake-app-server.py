@@ -15,6 +15,17 @@ for raw in sys.stdin:
         send({"id": msg["id"], "result": {"userAgent": "fake", "platformFamily": "unix", "platformOs": "linux"}})
     elif method == "initialized":
         continue
+    elif method == "model/list":
+        send({"id": msg["id"], "result": {"data": [{
+            "id": "gpt-test-id", "model": "gpt-test", "displayName": "GPT Test",
+            "description": "test model", "hidden": False, "isDefault": True,
+            "defaultReasoningEffort": "low",
+            "supportedReasoningEfforts": [
+                {"effort": "low", "description": "fast"},
+                {"effort": "high", "description": "deep"}
+            ],
+            "serviceTiers": [{"id": "priority", "name": "Fast", "description": "fast"}]
+        }]}})
     elif method == "thread/start":
         send({"id": msg["id"], "result": {"thread": {"id": "thread-fake"}}})
     elif method == "thread/resume":
@@ -24,6 +35,8 @@ for raw in sys.stdin:
         pending_turn = f"turn-fake-{turn_counter}"
         send({"id": msg["id"], "result": {"turn": {"id": pending_turn}}})
         text = msg["params"]["input"][0]["text"]
+        if "settings" in text:
+            send({"method": "test/turn-params", "params": msg["params"]})
         if "fail-me" in text:
             send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "failed", "error": {"message": "structured output rejected", "additionalDetails": "schema mismatch"}}}})
             pending_turn = None

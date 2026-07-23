@@ -1,8 +1,9 @@
-import type { ChatMessage, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, MessageCitation } from "./types"
+import type { ChatMessage, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexRunSettings, MessageCitation } from "./types"
 
 export interface ConversationState {
   conversations: Conversation[]
   activeConversationId: string|null
+  activeSettings: CodexRunSettings|null
   scopes: ConversationScope[]
   messages: Record<string,ChatMessage>
   messageOrder: string[]
@@ -11,7 +12,7 @@ export interface ConversationState {
   lastEventId: number
 }
 
-export const conversationInitialState:ConversationState={conversations:[],activeConversationId:null,scopes:[],messages:{},messageOrder:[],drawerOpen:false,drawerView:"history",lastEventId:0}
+export const conversationInitialState:ConversationState={conversations:[],activeConversationId:null,activeSettings:null,scopes:[],messages:{},messageOrder:[],drawerOpen:false,drawerView:"history",lastEventId:0}
 
 export type ConversationAction=
   |{type:"conversations";items:Conversation[]}
@@ -39,9 +40,11 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
 
 export function conversationReducer(state:ConversationState,action:ConversationAction):ConversationState{
   if(action.type==="conversations")return {...state,conversations:action.items}
-  if(action.type==="active")return {...state,activeConversationId:action.id,scopes:[],messages:{},messageOrder:[],lastEventId:0,drawerOpen:false}
+  if(action.type==="active")return {...state,activeConversationId:action.id,activeSettings:null,scopes:[],messages:{},messageOrder:[],lastEventId:0,drawerOpen:false}
   if(action.type==="drawer")return {...state,drawerOpen:action.open,drawerView:action.view??state.drawerView}
   if(action.type==="event")return reduceConversationEvent(state,action.event)
   const messages=Object.fromEntries(action.detail.messages.map(message=>[message.id,message]))
-  return {...state,activeConversationId:action.detail.conversation.id,scopes:action.detail.scopes,messages,messageOrder:action.detail.messages.map(message=>message.id)}
+  const {model,reasoning_effort,service_tier}=action.detail.conversation
+  const activeSettings=model&&reasoning_effort?{model,reasoning_effort,service_tier}:null
+  return {...state,activeConversationId:action.detail.conversation.id,activeSettings,scopes:action.detail.scopes,messages,messageOrder:action.detail.messages.map(message=>message.id)}
 }

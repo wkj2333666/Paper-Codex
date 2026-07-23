@@ -323,6 +323,96 @@ async fn conversation_api_supports_crud_scopes_and_messages() {
 }
 
 #[tokio::test]
+async fn conversation_api_exposes_and_persists_codex_run_settings() {
+    let (app, _db) = conversation_test_app().await;
+    let token = login_token(&app).await;
+
+    let capabilities = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/codex/capabilities")
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(capabilities.status(), StatusCode::OK);
+    let capabilities = json_response(capabilities).await;
+    assert_eq!(capabilities["default"]["model"], "gpt-test");
+    assert_eq!(capabilities["models"][0]["supports_fast"], true);
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/conversations")
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "title":"运行设置",
+                        "scopes":[{"scope_type":"paper","scope_id":"paper:one"}],
+                        "settings": {"model":"gpt-test", "reasoning_effort":"high", "service_tier":"priority"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_response(created).await;
+    assert_eq!(created["reasoning_effort"], "high");
+    assert_eq!(created["service_tier"], "priority");
+    let id = created["id"].as_str().unwrap();
+
+    let updated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/conversations/{id}"))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "settings": {"model":"gpt-test", "reasoning_effort":"low", "service_tier":null}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated = json_response(updated).await;
+    assert_eq!(updated["reasoning_effort"], "low");
+    assert!(updated["service_tier"].is_null());
+
+    let invalid = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/conversations/{id}"))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "settings": {"model":"gpt-test", "reasoning_effort":"invalid", "service_tier":null}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn annotation_api_pins_lists_updates_and_stores_anchors() {
     let (app, db) = conversation_test_app().await;
     let conversation = db.create_conversation("批注接口").await.unwrap();

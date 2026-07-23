@@ -276,6 +276,7 @@ impl TaskEngine {
                     cwd: staging.clone(),
                     prompt: first_pass_prompt(&extracted_path, &paper_id, &stored.sha256, &context),
                     output_schema: Some(proposal_schema()),
+                    settings: self.codex.default_settings(),
                 },
                 cancel.clone(),
             )
@@ -415,6 +416,7 @@ impl TaskEngine {
                     cwd: staging,
                     prompt: scoped_question_prompt(&input.scope_type, &input.question, &context),
                     output_schema: None,
+                    settings: self.codex.default_settings(),
                 },
                 cancel,
             )

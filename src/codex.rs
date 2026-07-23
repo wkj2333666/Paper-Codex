@@ -9,6 +9,123 @@ use tokio::{
     sync::{broadcast, mpsc, watch, Mutex},
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexRunSettings {
+    pub model: String,
+    pub reasoning_effort: String,
+    pub service_tier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexModel {
+    pub id: String,
+    pub display_name: String,
+    pub default_reasoning_effort: String,
+    pub supported_reasoning_efforts: Vec<String>,
+    pub supports_fast: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexCapabilities {
+    pub default: CodexRunSettings,
+    pub models: Vec<CodexModel>,
+}
+
+impl CodexCapabilities {
+    fn from_model_list(response: &Value) -> Option<Self> {
+        let entries = response.pointer("/result/data")?.as_array()?;
+        let mut models = Vec::new();
+        let mut default = None;
+        for entry in entries {
+            if entry.get("hidden").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
+            let model = entry.get("model").and_then(Value::as_str)?.to_owned();
+            if model.is_empty() {
+                continue;
+            }
+            let supported_reasoning_efforts = entry
+                .get("supportedReasoningEfforts")
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.get("effort").and_then(Value::as_str))
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if supported_reasoning_efforts.is_empty() {
+                continue;
+            }
+            let default_reasoning_effort = entry
+                .get("defaultReasoningEffort")
+                .and_then(Value::as_str)
+                .filter(|value| supported_reasoning_efforts.iter().any(|item| item == value))
+                .unwrap_or(&supported_reasoning_efforts[0])
+                .to_owned();
+            let supports_fast = entry
+                .get("serviceTiers")
+                .and_then(Value::as_array)
+                .is_some_and(|tiers| {
+                    tiers
+                        .iter()
+                        .any(|tier| tier.get("id").and_then(Value::as_str) == Some("priority"))
+                });
+            let item = CodexModel {
+                id: model.clone(),
+                display_name: entry
+                    .get("displayName")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&model)
+                    .to_owned(),
+                default_reasoning_effort: default_reasoning_effort.clone(),
+                supported_reasoning_efforts,
+                supports_fast,
+            };
+            if default.is_none() && entry.get("isDefault").and_then(Value::as_bool) == Some(true) {
+                default = Some(CodexRunSettings {
+                    model: model.clone(),
+                    reasoning_effort: default_reasoning_effort,
+                    service_tier: entry
+                        .get("defaultServiceTier")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                });
+            }
+            models.push(item);
+        }
+        let first = models.first()?;
+        let default = default.unwrap_or_else(|| CodexRunSettings {
+            model: first.id.clone(),
+            reasoning_effort: first.default_reasoning_effort.clone(),
+            service_tier: None,
+        });
+        Some(Self { default, models })
+    }
+
+    fn fallback() -> Self {
+        let model = CodexModel {
+            id: "gpt-5.6-luna".into(),
+            display_name: "GPT-5.6-Luna".into(),
+            default_reasoning_effort: "medium".into(),
+            supported_reasoning_efforts: ["low", "medium", "high", "xhigh"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            supports_fast: false,
+        };
+        Self {
+            default: CodexRunSettings {
+                model: model.id.clone(),
+                reasoning_effort: model.default_reasoning_effort.clone(),
+                service_tier: None,
+            },
+            models: vec![model],
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CodexCommand {
     pub program: PathBuf,
@@ -32,6 +149,7 @@ pub struct CodexTurn {
     pub cwd: PathBuf,
     pub prompt: String,
     pub output_schema: Option<Value>,
+    pub settings: CodexRunSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +177,7 @@ struct Session {
 }
 
 impl Session {
-    async fn spawn(spec: &CodexCommand) -> Result<Self> {
+    async fn spawn(spec: &CodexCommand) -> Result<(Self, CodexCapabilities)> {
         let mut command = Command::new(&spec.program);
         command
             .args(&spec.args)
@@ -95,7 +213,13 @@ impl Session {
             bail!("Codex initialize failed: {response}");
         }
         session.notify("initialized", json!({})).await?;
-        Ok(session)
+        let capabilities = session
+            .request("model/list", json!({"includeHidden": false, "limit": 100}))
+            .await
+            .ok()
+            .and_then(|response| CodexCapabilities::from_model_list(&response))
+            .unwrap_or_else(CodexCapabilities::fallback);
+        Ok((session, capabilities))
     }
 
     async fn write(&mut self, message: &Value) -> Result<()> {
@@ -138,17 +262,58 @@ pub struct CodexRuntime {
     command: CodexCommand,
     session: Mutex<Option<Session>>,
     events: broadcast::Sender<CodexEvent>,
+    capabilities: CodexCapabilities,
 }
 
 impl CodexRuntime {
     pub async fn spawn(command: CodexCommand) -> Result<Arc<Self>> {
-        let session = Session::spawn(&command).await?;
+        let (session, capabilities) = Session::spawn(&command).await?;
         let (events, _) = broadcast::channel(512);
         Ok(Arc::new(Self {
             command,
             session: Mutex::new(Some(session)),
             events,
+            capabilities,
         }))
+    }
+
+    pub fn capabilities(&self) -> CodexCapabilities {
+        self.capabilities.clone()
+    }
+
+    pub fn default_settings(&self) -> CodexRunSettings {
+        self.capabilities.default.clone()
+    }
+
+    pub fn validate_settings(&self, settings: &CodexRunSettings) -> Result<CodexRunSettings> {
+        let model = self
+            .capabilities
+            .models
+            .iter()
+            .find(|model| model.id == settings.model)
+            .with_context(|| format!("Codex model is unavailable: {}", settings.model))?;
+        if !model
+            .supported_reasoning_efforts
+            .iter()
+            .any(|effort| effort == &settings.reasoning_effort)
+        {
+            bail!(
+                "reasoning effort '{}' is unavailable for model '{}'",
+                settings.reasoning_effort,
+                settings.model
+            );
+        }
+        if settings.service_tier.as_deref() == Some("priority") && !model.supports_fast {
+            bail!("fast speed is unavailable for model '{}'", settings.model);
+        }
+        if settings
+            .service_tier
+            .as_deref()
+            .is_some_and(|tier| tier != "priority")
+        {
+            bail!("unknown Codex service tier");
+        }
+        Ok(settings.clone())
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<CodexEvent> {
@@ -180,7 +345,8 @@ impl CodexRuntime {
     ) -> Result<CodexOutcome> {
         let mut guard = self.session.lock().await;
         if guard.is_none() {
-            *guard = Some(Session::spawn(&self.command).await?);
+            let (session, _capabilities) = Session::spawn(&self.command).await?;
+            *guard = Some(session);
         }
         let session = guard.as_mut().unwrap();
         let thread_response = if let Some(thread_id) = &turn.thread_id {
@@ -216,6 +382,11 @@ impl CodexRuntime {
         });
         if let Some(schema) = turn.output_schema {
             params["outputSchema"] = schema;
+        }
+        params["model"] = Value::String(turn.settings.model);
+        params["effort"] = Value::String(turn.settings.reasoning_effort);
+        if let Some(service_tier) = turn.settings.service_tier {
+            params["serviceTier"] = Value::String(service_tier);
         }
         let start = session.request("turn/start", params).await?;
         if let Some(error) = start.get("error") {

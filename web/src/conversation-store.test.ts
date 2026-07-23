@@ -16,6 +16,19 @@ const event = (id: number, type: string, payload: Record<string, unknown>) => ({
 })
 
 describe("conversation store", () => {
+  it("keeps the active conversation's Codex settings when loading details", () => {
+    const detail = {
+      conversation: {
+        id:"conversation-1", title:"设置", thread_id:null, status:"idle", model:"gpt-test",
+        reasoning_effort:"high", service_tier:"priority", archived_at:null,
+        created_at:"", updated_at:"",
+      },
+      scopes: [], messages: [],
+    }
+    const state = conversationReducer(conversationInitialState, {type:"detail", detail})
+    expect(state.activeSettings).toEqual({model:"gpt-test", reasoning_effort:"high", service_tier:"priority"})
+  })
+
   it("tracks semantic progress without rendering structured deltas", () => {
     let state = conversationInitialState
     state = reduceConversationEvent(state, event(4, "answer-progress", { phase: "reading" }))
