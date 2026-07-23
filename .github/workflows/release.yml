@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ARM64 release
+    # Native ARM avoids cross-linker surprises and produces the binary used by Raspberry Pi.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Build frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm test -- --run
+          npm run typecheck
+          npm run build
+
+      - name: Verify Rust
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --all-targets --locked
+
+      - name: Build backend
+        run: cargo build --release --locked
+
+      - name: Package project-local runtime
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          package="paper-codex-${RELEASE_TAG}-aarch64-unknown-linux-gnu"
+          install -d "${package}/web"
+          install -m 0755 target/release/paper-codex "${package}/paper-codex"
+          cp -a web/dist/. "${package}/web/"
+          cp deploy/paper-codex.user.service "${package}/"
+          cp deploy/paper-codex.user.env.example "${package}/paper-codex.env.example"
+          cat > "${package}/INSTALL.txt" <<EOF
+          mkdir -p .runtime/releases/${RELEASE_TAG}
+          tar -xzf ${package}.tar.gz -C .runtime/releases/${RELEASE_TAG} --strip-components=1
+          ln -sfn releases/${RELEASE_TAG} .runtime/current
+          if [ ! -e .runtime/paper-codex.env ]; then cp .runtime/current/paper-codex.env.example .runtime/paper-codex.env; fi
+          cp .runtime/current/paper-codex.user.service ~/.config/systemd/user/paper-codex.service
+          systemctl --user daemon-reload
+          systemctl --user enable --now paper-codex
+          EOF
+          tar -czf "${package}.tar.gz" "${package}"
+          sha256sum "${package}.tar.gz" > "${package}.tar.gz.sha256"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-codex-${{ github.ref_name }}-aarch64
+          path: |
+            paper-codex-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz
+            paper-codex-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz.sha256
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "${RELEASE_TAG}" \
+            "paper-codex-${RELEASE_TAG}-aarch64-unknown-linux-gnu.tar.gz" \
+            "paper-codex-${RELEASE_TAG}-aarch64-unknown-linux-gnu.tar.gz.sha256" \
+            --verify-tag \
+            --generate-notes

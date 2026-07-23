@@ -47,6 +47,37 @@ cargo build --release --locked
 
 应用运行时直接从 `web/dist/` 提供网页，因此不需要单独启动前端服务。
 
+## GitHub Actions 与树莓派部署
+
+Pull Request 和公开 `main` 分支会在 GitHub Actions 中执行前端测试、Rust
+格式检查、Clippy 和全量测试。推送 `v*` 标签后，Actions 会在 ARM64 runner
+上构建适用于树莓派的 release，并创建 GitHub Release。构建缓存和二进制产物
+不会占用树莓派磁盘。
+
+release 包适用于项目内的 `systemd --user` 部署。首次安装时，在仓库根目录执行：
+
+```bash
+version=v0.1.0
+mkdir -p ".runtime/releases/$version"
+tar -xzf "paper-codex-$version-aarch64-unknown-linux-gnu.tar.gz" \
+  -C ".runtime/releases/$version" --strip-components=1
+ln -sfn "releases/$version" .runtime/current
+cp .runtime/current/paper-codex.env.example .runtime/paper-codex.env
+cp .runtime/current/paper-codex.user.service ~/.config/systemd/user/paper-codex.service
+```
+
+编辑 `.runtime/paper-codex.env` 中的密码哈希和 JWT 密钥后启用服务：
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now paper-codex
+loginctl enable-linger "$USER"
+```
+
+升级时只需把新版本解压到新的 `.runtime/releases/<version>`，再原子切换
+`.runtime/current` 并重启用户服务。`paper-workspace/` 和配置文件不会被 release
+覆盖。
+
 ## 配置
 
 复制公开配置模板：
