@@ -10,6 +10,9 @@ server.toml
 .worktrees/
 paper-workspace/
 
+# Local design notes and development plans
+/docs/
+
 # Frontend and Rust build output
 node_modules/
 dist/

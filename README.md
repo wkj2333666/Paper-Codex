@@ -1,216 +1,138 @@
 # Paper Codex
 
-Paper Codex 是一个单用户、本地优先的论文研究工作区。Rust/Axum 负责论文获取、PDF 抽取、SQLite/FTS、项目树和任务队列；React 提供浏览器界面；Codex App Server 通过 stdio 完成中文总结、证据化问答和论文关系发现。
+[中文文档](README.zh-CN.md)
 
-应用是一个完整的本地 HTTP 服务：默认只监听 `127.0.0.1:3000`，同时提供 API 和网页，不会再开放其他应用端口。运行数据默认保存在仓库内、已被 Git 忽略的 `paper-workspace/`。
+Paper Codex is a local-first workspace for reading papers, organizing research projects, and connecting evidence across a growing literature collection. It combines an integrated PDF reader, structured paper notes, a knowledge graph, and Codex-powered conversations in one local HTTP service.
 
-## 功能
+> Paper Codex is designed for one researcher running one private workspace. It is not a hosted multi-user service.
 
-- 接收论文名称、DOI、arXiv、网页链接或本地 PDF，生成中文结构化阅读页；
-- 用可嵌套、可拖动的项目树组织论文，同一篇论文可加入多个项目；
-- 在网页内渐进加载 PDF，不需要打开新标签页；
-- 提供可切换、可归档的 Codex 对话，并支持论文、项目和全局上下文；
-- 点击 Codex 引用可跳转并高亮 PDF 原文；页边解释卡支持拖动、缩小、隐藏和固定；
-- 固定批注和坐标会持久化，论文版本变化后仍保留历史；
-- 用论文、概念、方法、数据集和研究发现构建证据感知知识图谱；
-- 文件树、知识图谱和 Codex 面板均可收起，桌面端宽度可拖动并保存。
+## Highlights
 
-## 环境要求
+- Add papers by title, DOI, arXiv identifier, URL, or local PDF.
+- Keep related papers together in nested research projects; one paper may belong to multiple projects.
+- Read PDFs inside the workspace with synchronized Codex explanations, citations, highlights, and overlays.
+- Ask Codex questions scoped to the current paper, project, or entire library.
+- Explore connections between papers, concepts, methods, datasets, and findings in a knowledge graph.
+- Search extracted paper text with SQLite/FTS instead of maintaining a separate search service.
+- Collapse and resize the file tree, reader, graph, and Codex panels to fit a laptop or desktop screen.
+
+## How it works
+
+Paper Codex is a single local process:
+
+```text
+Browser ──HTTP──> Rust/Axum service ──> SQLite/FTS + paper workspace
+                         └────────────> Codex CLI (stdio)
+```
+
+- **Backend:** Rust, Axum, SQLite, PDF extraction, indexing, task processing, and API routes.
+- **Frontend:** React, Vite, integrated PDF rendering, Codex conversation UI, and graph visualization.
+- **Codex integration:** the service starts the Codex app server through the local Codex CLI and keeps conversation context scoped to the selected research material.
+- **Default network boundary:** `127.0.0.1:3000`; the open-source service does not include a reverse proxy or public-domain configuration.
+
+## Requirements
 
 - Rust stable
-- Node.js 20.19 或更高版本，推荐 Node.js 22 LTS
+- Node.js 20.19 or newer (Node.js 22 LTS recommended)
 - SQLite 3
-- 已安装并登录的 Codex CLI
-- OpenSSL，用于生成随机会话密钥
-- 支持 bcrypt 的 `htpasswd`，通常由 `apache2-utils` 或 `httpd-tools` 提供
+- A working Codex CLI installation, authenticated as the same operating-system user that runs Paper Codex
+- `openssl` and `htpasswd` for generating local secrets
 
-Codex CLI 必须由运行 Paper Codex 的同一个操作系统用户完成登录。
+## Quick start from source
 
-## 构建
-
-在仓库根目录执行：
+Clone the repository and install the frontend dependencies:
 
 ```bash
+git clone https://github.com/wkj2333666/Paper-Codex.git
+cd Paper-Codex
+
 cd web
 npm ci
 npm run build
 cd ..
-
-export CARGO_TARGET_DIR="$PWD/target"
-cargo build --release --locked
 ```
 
-构建完成后得到：
-
-- 后端：`target/release/paper-codex`
-- 前端：`web/dist/`
-
-应用运行时直接从 `web/dist/` 提供网页，因此不需要单独启动前端服务。
-
-## GitHub Actions 与树莓派部署
-
-Pull Request 和公开 `main` 分支会在 GitHub Actions 中执行前端测试、Rust
-格式检查、Clippy 和全量测试。推送 `v*` 标签后，Actions 会在 ARM64 runner
-上构建适用于树莓派的 release，并创建 GitHub Release。构建缓存和二进制产物
-不会占用树莓派磁盘。
-
-release 包适用于项目内的 `systemd --user` 部署。首次安装时，在仓库根目录执行：
-
-```bash
-version=v0.1.0
-mkdir -p ".runtime/releases/$version"
-tar -xzf "paper-codex-$version-aarch64-unknown-linux-gnu.tar.gz" \
-  -C ".runtime/releases/$version" --strip-components=1
-ln -sfn "releases/$version" .runtime/current
-cp .runtime/current/paper-codex.env.example .runtime/paper-codex.env
-cp .runtime/current/paper-codex.user.service ~/.config/systemd/user/paper-codex.service
-```
-
-编辑 `.runtime/paper-codex.env` 中的密码哈希和 JWT 密钥后启用服务：
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now paper-codex
-loginctl enable-linger "$USER"
-```
-
-升级时只需把新版本解压到新的 `.runtime/releases/<version>`，再原子切换
-`.runtime/current` 并重启用户服务。`paper-workspace/` 和配置文件不会被 release
-覆盖。
-
-## 配置
-
-复制公开配置模板：
+Create a local configuration file and generate its two secrets:
 
 ```bash
 cp paper-codex.env.example paper-codex.env
-```
 
-生成登录密码的 bcrypt 哈希：
+# bcrypt password hash
+htpasswd -bnBC 12 "" 'replace-with-your-password' | tr -d ':\n'
 
-```bash
-htpasswd -bnBC 12 "" '换成你的登录密码' | tr -d ':\n'
-```
-
-生成 JWT 密钥：
-
-```bash
+# JWT signing secret
 openssl rand -hex 32
 ```
 
-把两个命令的输出分别填入 `paper-codex.env` 的：
-
-```dotenv
-PAPER_CODEX_PASSWORD_HASH=...
-PAPER_CODEX_JWT_SECRET=...
-```
-
-`paper-codex.env` 已被 Git 忽略，不要提交它。其余常用配置如下：
-
-| 变量 | 默认或示例 | 说明 |
-| --- | --- | --- |
-| `PAPER_CODEX_BIND` | `127.0.0.1:3000` | 本地监听地址，只接受回环地址 |
-| `PAPER_CODEX_WORKSPACE` | `./paper-workspace` | PDF、索引、上下文和 SQLite 数据 |
-| `PAPER_CODEX_STATIC_DIR` | `./web/dist` | 编译后的网页目录 |
-| `PAPER_CODEX_CODEX_BIN` | `codex` | Codex CLI 可执行文件 |
-| `PAPER_CODEX_CODEX_HOME` | 未设置 | 可选的 Codex 配置目录 |
-| `PAPER_CODEX_DATABASE_URL` | 工作区内自动生成 | 通常不需要手动设置 |
-| `PAPER_CODEX_MAX_UPLOAD_BYTES` | `104857600` | 单个上传文件的最大字节数 |
-
-## 启动
-
-必须从仓库根目录启动，这样模板中的相对路径才能正确解析：
+Put the two command outputs into `PAPER_CODEX_PASSWORD_HASH` and `PAPER_CODEX_JWT_SECRET` in `paper-codex.env`. Then build and start the service from the repository root:
 
 ```bash
+cargo build --release --locked
+
 set -a
 . ./paper-codex.env
 set +a
 ./target/release/paper-codex
 ```
 
-看到监听日志后，访问：
+Open <http://127.0.0.1:3000>. The first run creates the Git-ignored `paper-workspace/` directory for PDFs, extracted text, indexes, notes, and the SQLite database.
 
-```text
-http://127.0.0.1:3000
-```
+## Codex setup
 
-另一个终端可以检查服务：
+Make sure the Codex CLI is installed and authenticated for the same operating-system user that starts Paper Codex. If supported by your installation, the usual login command is:
 
 ```bash
-curl http://127.0.0.1:3000/api/health
+codex login
 ```
 
-预期返回类似：
+The Codex panel exposes conversation scope, model, reasoning effort, and service speed when the connected Codex runtime supports them. Paper Codex does not store your Codex credentials in the repository.
 
-```json
-{"codex":true,"status":"ok","version":"0.1.0"}
-```
+## Data and privacy
 
-进程在前台运行，按 `Ctrl+C` 可安全停止。
+- Runtime data lives in `paper-workspace/`, which is ignored by Git.
+- Uploaded PDFs, extracted Markdown, SQLite indexes, notes, and conversation state may contain private research material.
+- `paper-codex.env` contains secrets and is ignored; never commit it.
+- The minimal service listens on localhost. If you expose it to another device, provide your own encrypted tunnel, VPN, or reverse proxy and authentication policy.
 
-## 测试与开发
+## Development
+
+Run the focused checks while working on a change:
 
 ```bash
 cd web
+npm ci
 npm test -- --run
 npm run typecheck
+npm run build
 cd ..
 
-export CARGO_TARGET_DIR="$PWD/target"
-cargo fmt --check
+cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
+cargo test --all-targets --locked
 ```
 
-也可以执行一次完整发布检查：
+For the full local release check, use:
 
 ```bash
 scripts/build-release.sh
 ```
 
-## 数据、备份与恢复
+The GitHub Actions workflow repeats these checks on pushes and pull requests. It also builds an ARM64 release archive when a `v*` tag is pushed, so Raspberry Pi users do not need to compile the full Rust release locally.
 
-默认情况下，所有运行数据都位于 `paper-workspace/`。备份前先按 `Ctrl+C` 停止 Paper Codex，然后执行：
+## Releases
 
-```bash
-tar -czf paper-workspace-backup.tar.gz paper-workspace
-```
+Release archives contain the ARM64 backend binary, compiled web assets, and generic `systemd --user` templates. The archive is intentionally deployment-neutral: it does not contain a domain name, Caddy configuration, machine path, or private environment file.
 
-恢复时确保 Paper Codex 已停止，把归档解压到仓库根目录：
+For a local deployment, unpack a release into the project directory, point `PAPER_CODEX_STATIC_DIR` at its `web/` directory, and keep `paper-workspace/` and the environment file outside the release contents. The release workflow and templates in `deploy/` are the public reference; adapt them to your operating system and network boundary.
 
-```bash
-tar -xzf paper-workspace-backup.tar.gz
-```
+## Contributing
 
-重新启动后，数据库迁移会自动执行。备份文件可能包含论文原文、笔记和研究内容，应当按私人数据保存。
+Issues, documentation improvements, bug fixes, and feature pull requests are welcome. Before opening a pull request:
 
-## 升级
+1. Keep the change focused and explain the user impact.
+2. Run the frontend and Rust checks above.
+3. Do not include `paper-workspace/`, `.runtime/`, `node_modules/`, build output, secrets, or local deployment files.
 
-1. 停止当前进程；
-2. 备份 `paper-workspace/`；
-3. 获取新版本代码；
-4. 重新执行前端构建和 `cargo build --release --locked`；
-5. 使用原来的 `paper-codex.env` 和 `paper-workspace/` 启动。
+## License
 
-## 可选的独立运行目录
-
-如果不想一直从源码目录运行，可以整理成以下结构：
-
-```text
-paper-codex-local/
-├── paper-codex
-├── paper-codex.env
-├── paper-workspace/
-└── web/
-    └── dist/
-```
-
-复制文件后进入该目录，加载 `paper-codex.env`，再运行 `./paper-codex`。环境模板中的相对路径无需修改。
-
-## 远程访问
-
-开源版本只负责本地 HTTP 服务，不规定公网部署方式。若需要从其他设备访问，请在仓库之外自行选择 SSH 隧道、VPN 或反向代理，并自行负责传输加密和访问控制。
-
-## 许可证
-
-[MIT](LICENSE)
+Paper Codex is released under the [MIT License](LICENSE).
