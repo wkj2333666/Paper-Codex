@@ -1,83 +1,185 @@
 # Paper Codex
 
-Paper Codex 是一个面向个人研究者的开源论文阅读工作区。它使用 Rust/Axum 完成论文获取、PDF 文本抽取、SQLite/FTS 检索、项目树和任务持久化；React 提供浏览器界面；Codex App Server 通过标准输入输出生成中文总结、论文比较、问答与关系发现。
+Paper Codex 是一个单用户、本地优先的论文研究工作区。Rust/Axum 负责论文获取、PDF 抽取、SQLite/FTS、项目树和任务队列；React 提供浏览器界面；Codex App Server 通过 stdio 完成中文总结、证据化问答和论文关系发现。
 
-运行数据默认放在 Git 忽略的 `paper-workspace/`。同一篇论文只保存一份规范化记录，但可以加入多个项目。
+应用是一个完整的本地 HTTP 服务：默认只监听 `127.0.0.1:3000`，同时提供 API 和网页，不会再开放其他应用端口。运行数据默认保存在仓库内、已被 Git 忽略的 `paper-workspace/`。
 
 ## 功能
 
-- 从论文名称、DOI、arXiv 地址、网页链接或本地 PDF 创建中文结构化阅读页；
-- 用可嵌套的项目树组织论文，同一论文可属于多个项目；
-- 通过“收件箱 → 项目 → 回收站”管理生命周期，永久删除前展示引用影响；
-- 构建包含论文、概念、方法、数据集和研究发现的证据感知知识图谱；
-- 在全局、项目或单篇论文范围内继续向 Codex 提问；
-- 左侧项目树、知识图谱和右侧 Codex 抽屉均可独立收起。
+- 接收论文名称、DOI、arXiv、网页链接或本地 PDF，生成中文结构化阅读页；
+- 用可嵌套、可拖动的项目树组织论文，同一篇论文可加入多个项目；
+- 在网页内渐进加载 PDF，不需要打开新标签页；
+- 提供可切换、可归档的 Codex 对话，并支持论文、项目和全局上下文；
+- 点击 Codex 引用可跳转并高亮 PDF 原文；页边解释卡支持拖动、缩小、隐藏和固定；
+- 固定批注和坐标会持久化，论文版本变化后仍保留历史；
+- 用论文、概念、方法、数据集和研究发现构建证据感知知识图谱；
+- 文件树、知识图谱和 Codex 面板均可收起，桌面端宽度可拖动并保存。
 
 ## 环境要求
 
-- Linux；
-- Rust stable；
-- Node.js 20 或更高版本；
-- 已安装并登录的 Codex CLI；
-- 可选：带 `dns.providers.cloudflare` 模块的 Caddy，用于公网 HTTPS。
+- Rust stable
+- Node.js 20.19 或更高版本，推荐 Node.js 22 LTS
+- SQLite 3
+- 已安装并登录的 Codex CLI
+- OpenSSL，用于生成随机会话密钥
+- 支持 bcrypt 的 `htpasswd`，通常由 `apache2-utils` 或 `httpd-tools` 提供
 
-## 本地开发
+Codex CLI 必须由运行 Paper Codex 的同一个操作系统用户完成登录。
+
+## 构建
+
+在仓库根目录执行：
 
 ```bash
 cd web
 npm ci
-npm test -- --run
-npm run typecheck
 npm run build
 cd ..
+
+export CARGO_TARGET_DIR="$PWD/target"
+cargo build --release --locked
+```
+
+构建完成后得到：
+
+- 后端：`target/release/paper-codex`
+- 前端：`web/dist/`
+
+应用运行时直接从 `web/dist/` 提供网页，因此不需要单独启动前端服务。
+
+## 配置
+
+复制公开配置模板：
+
+```bash
+cp paper-codex.env.example paper-codex.env
+```
+
+生成登录密码的 bcrypt 哈希：
+
+```bash
+htpasswd -bnBC 12 "" '换成你的登录密码' | tr -d ':\n'
+```
+
+生成 JWT 密钥：
+
+```bash
+openssl rand -hex 32
+```
+
+把两个命令的输出分别填入 `paper-codex.env` 的：
+
+```dotenv
+PAPER_CODEX_PASSWORD_HASH=...
+PAPER_CODEX_JWT_SECRET=...
+```
+
+`paper-codex.env` 已被 Git 忽略，不要提交它。其余常用配置如下：
+
+| 变量 | 默认或示例 | 说明 |
+| --- | --- | --- |
+| `PAPER_CODEX_BIND` | `127.0.0.1:3000` | 本地监听地址，只接受回环地址 |
+| `PAPER_CODEX_WORKSPACE` | `./paper-workspace` | PDF、索引、上下文和 SQLite 数据 |
+| `PAPER_CODEX_STATIC_DIR` | `./web/dist` | 编译后的网页目录 |
+| `PAPER_CODEX_CODEX_BIN` | `codex` | Codex CLI 可执行文件 |
+| `PAPER_CODEX_CODEX_HOME` | 未设置 | 可选的 Codex 配置目录 |
+| `PAPER_CODEX_DATABASE_URL` | 工作区内自动生成 | 通常不需要手动设置 |
+| `PAPER_CODEX_MAX_UPLOAD_BYTES` | `104857600` | 单个上传文件的最大字节数 |
+
+## 启动
+
+必须从仓库根目录启动，这样模板中的相对路径才能正确解析：
+
+```bash
+set -a
+. ./paper-codex.env
+set +a
+./target/release/paper-codex
+```
+
+看到监听日志后，访问：
+
+```text
+http://127.0.0.1:3000
+```
+
+另一个终端可以检查服务：
+
+```bash
+curl http://127.0.0.1:3000/api/health
+```
+
+预期返回类似：
+
+```json
+{"codex":true,"status":"ok","version":"0.1.0"}
+```
+
+进程在前台运行，按 `Ctrl+C` 可安全停止。
+
+## 测试与开发
+
+```bash
+cd web
+npm test -- --run
+npm run typecheck
+cd ..
+
+export CARGO_TARGET_DIR="$PWD/target"
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 ```
 
-复制 `deploy/paper-codex.env.example` 并设置密码哈希、JWT 密钥及本机路径，然后运行：
+也可以执行一次完整发布检查：
 
 ```bash
-cargo run --release
+scripts/build-release.sh
 ```
 
-服务只允许绑定回环地址，示例默认监听 `127.0.0.1:3000`。
+## 数据、备份与恢复
 
-## 部署示例
-
-仓库内的部署文件采用以下示例值，请按实际环境替换：
-
-- 公网入口：`https://paper.example.com:54321`；
-- 程序与静态文件：`/opt/paper-codex`；
-- 工作区：`/var/lib/paper-codex/workspace`；
-- 备份目录：`/var/backups/paper-codex`；
-- systemd 服务用户：`paper-codex`。
-
-建议部署步骤：
-
-1. 运行 `scripts/build-release.sh`，完成前后端测试、Rust 检查与生产构建。
-2. 将二进制安装为 `/usr/local/bin/paper-codex`，并运行 `sudo scripts/sync-static.sh "$PWD/web/dist" /opt/paper-codex/web`。
-3. 参考 `deploy/paper-codex.env.example` 创建 `/etc/paper-codex/paper-codex.env`，权限设为 `0600`。
-4. 创建 `paper-codex` 系统用户，并安装 `deploy/paper-codex.service`。
-5. 将 `deploy/Caddyfile.paper-codex` 合并到 Caddy 配置；使用 Cloudflare DNS-01 时，再安装 `deploy/caddy.service.d.conf` 并创建 `/etc/caddy/cloudflare.env`。
-
-Cloudflare API Token 只需目标 Zone 的 `Zone:Read` 与 `DNS:Edit`。示例使用高端口 `54321`；如果启用 Cloudflare 代理，请先确认该端口是否受支持，否则将 DNS 记录设为 **DNS only**。DNS-01 签发证书不要求服务器开放 80/443。
-
-Caddy 负责 TLS、安全响应头和回环反向代理，公网只显示应用登录页。不要把密码、JWT 密钥或 Cloudflare Token 提交到 Git；示例中的 `.env` 文件只包含占位符。
-
-Codex 使用 `paper-codex` 服务用户自己的登录状态，App Server 仅通过子进程标准输入输出通信，不监听额外网络端口。
-
-## 运维
+默认情况下，所有运行数据都位于 `paper-workspace/`。备份前先按 `Ctrl+C` 停止 Paper Codex，然后执行：
 
 ```bash
-systemctl status paper-codex caddy
-journalctl -u paper-codex -u caddy --since today
-curl http://127.0.0.1:3000/api/health
-sudo scripts/backup.sh /var/backups/paper-codex
+tar -czf paper-workspace-backup.tar.gz paper-workspace
 ```
 
-备份脚本会短暂停止应用，排除可重建的缓存、索引和 staging，再生成带 SHA-256 校验的 `tar.zst`。可通过 `PAPER_CODEX_WORKSPACE` 覆盖源工作区。
+恢复时确保 Paper Codex 已停止，把归档解压到仓库根目录：
 
-## License
+```bash
+tar -xzf paper-workspace-backup.tar.gz
+```
+
+重新启动后，数据库迁移会自动执行。备份文件可能包含论文原文、笔记和研究内容，应当按私人数据保存。
+
+## 升级
+
+1. 停止当前进程；
+2. 备份 `paper-workspace/`；
+3. 获取新版本代码；
+4. 重新执行前端构建和 `cargo build --release --locked`；
+5. 使用原来的 `paper-codex.env` 和 `paper-workspace/` 启动。
+
+## 可选的独立运行目录
+
+如果不想一直从源码目录运行，可以整理成以下结构：
+
+```text
+paper-codex-local/
+├── paper-codex
+├── paper-codex.env
+├── paper-workspace/
+└── web/
+    └── dist/
+```
+
+复制文件后进入该目录，加载 `paper-codex.env`，再运行 `./paper-codex`。环境模板中的相对路径无需修改。
+
+## 远程访问
+
+开源版本只负责本地 HTTP 服务，不规定公网部署方式。若需要从其他设备访问，请在仓库之外自行选择 SSH 隧道、VPN 或反向代理，并自行负责传输加密和访问控制。
+
+## 许可证
 
 [MIT](LICENSE)

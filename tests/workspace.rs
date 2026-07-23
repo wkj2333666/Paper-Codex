@@ -29,6 +29,8 @@ async fn initializes_owned_workspace_and_rejects_protected_targets() {
         .generated_target("annotations/papers/mine.md")
         .is_err());
     assert!(workspace.generated_target("/etc/passwd").is_err());
+    assert!(workspace.conversation_dir("../escape").is_err());
+    assert!(workspace.extraction_markdown_path("../../escape").is_err());
 }
 
 #[tokio::test]

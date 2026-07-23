@@ -1,13 +1,47 @@
 import Graph from "graphology"
 import type { GraphPayload, KnowledgeKind } from "./types"
+import type { ResolvedTheme } from "./theme"
 
-const COLORS:Record<KnowledgeKind,string>={
-  paper:"#2f5d4a",
-  concept:"#6d5b9c",
-  method:"#a66a2c",
-  dataset:"#2f6f83",
-  finding:"#9a4f52",
+export interface GraphPalette {
+  nodeColors:Record<KnowledgeKind,string>
+  edgeColor:string
+  hypothesisEdgeColor:string
+  dimNodeColor:string
+  canvasBackground:string
+  labelColor:string
 }
+
+const LIGHT_PALETTE:GraphPalette={
+  nodeColors:{
+    paper:"#2f5d4a",
+    concept:"#6d5b9c",
+    method:"#a66a2c",
+    dataset:"#2f6f83",
+    finding:"#9a4f52",
+  },
+  edgeColor:"rgba(70,78,69,0.62)",
+  hypothesisEdgeColor:"rgba(166,106,44,0.35)",
+  dimNodeColor:"#d8d8d0",
+  canvasBackground:"#f4f6f2",
+  labelColor:"#20382d",
+}
+
+const DARK_PALETTE:GraphPalette={
+  nodeColors:{
+    paper:"#78c7a0",
+    concept:"#b7a7f0",
+    method:"#f2b56f",
+    dataset:"#71c6df",
+    finding:"#f08f9b",
+  },
+  edgeColor:"rgba(190,218,201,0.72)",
+  hypothesisEdgeColor:"rgba(246,201,113,0.86)",
+  dimNodeColor:"#53645a",
+  canvasBackground:"#202a25",
+  labelColor:"#eef7f0",
+}
+
+const COLORS:Record<KnowledgeKind,string>=LIGHT_PALETTE.nodeColors
 
 const LABELS:Record<KnowledgeKind,string>={
   paper:"论文",
@@ -18,7 +52,8 @@ const LABELS:Record<KnowledgeKind,string>={
 }
 
 export const kindLabel=(kind:KnowledgeKind)=>LABELS[kind]
-export const kindColor=(kind:KnowledgeKind)=>COLORS[kind]
+export const graphPalette=(theme:ResolvedTheme):GraphPalette=>theme==="dark"?DARK_PALETTE:LIGHT_PALETTE
+export const kindColor=(kind:KnowledgeKind,palette:GraphPalette=LIGHT_PALETTE)=>palette.nodeColors[kind]??COLORS[kind]
 
 export function initialPosition(id:string):{x:number;y:number}{
   let first=2166136261,second=5381
@@ -30,7 +65,7 @@ export function initialPosition(id:string):{x:number;y:number}{
   return {x:(first>>>0)/0xffffffff*100,y:(second>>>0)/0xffffffff*100}
 }
 
-export function buildGraph(payload:GraphPayload):Graph{
+export function buildGraph(payload:GraphPayload,palette:GraphPalette=LIGHT_PALETTE):Graph{
   const graph=new Graph({multi:true,type:"directed"})
   const degree=new Map<string,number>()
   for(const edge of payload.edges){
@@ -45,7 +80,7 @@ export function buildGraph(payload:GraphPayload):Graph{
       description:node.description,
       kind:node.kind,
       paperId:node.paper_id,
-      color:kindColor(node.kind),
+      color:kindColor(node.kind,palette),
       size:7+Math.sqrt(degree.get(node.id)??0)*3,
     })
   }
@@ -57,7 +92,7 @@ export function buildGraph(payload:GraphPayload):Graph{
       dashed:edge.hypothesis,
       confidence:edge.confidence,
       evidence:edge.evidence,
-      color:edge.hypothesis?"rgba(166,106,44,0.35)":"rgba(70,78,69,0.62)",
+      color:edge.hypothesis?palette.hypothesisEdgeColor:palette.edgeColor,
       size:edge.hypothesis?1:1.6,
     })
   }

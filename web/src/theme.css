@@ -1,0 +1,250 @@
+[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #edf2ed;
+  --muted: #aab5ad;
+  --line: #37433c;
+  --paper: #171b19;
+  --paper-raised: #202722;
+  --paper-soft: #252f29;
+  --green: #8fd0ae;
+  --green-soft: #243d32;
+  --ochre: #e6b86e;
+}
+
+[data-theme="dark"] body,
+[data-theme="dark"] .app-shell,
+[data-theme="dark"] .main-pane {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+[data-theme="dark"] .sidebar,
+[data-theme="dark"] .activity-pane,
+[data-theme="dark"] .panel-rail,
+[data-theme="dark"] .workspace-panel,
+[data-theme="dark"] .conversation-drawer {
+  background: #1b211e;
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+[data-theme="dark"] .nav-row,
+[data-theme="dark"] .project-row,
+[data-theme="dark"] .tree-toggle,
+[data-theme="dark"] .tree-main,
+[data-theme="dark"] .tree-actions button {
+  color: #d2ddd5;
+}
+
+[data-theme="dark"] .nav-row.active,
+[data-theme="dark"] .project-row.active,
+[data-theme="dark"] .conversation-list button.active {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+[data-theme="dark"] .nav-row em,
+[data-theme="dark"] .project-row em,
+[data-theme="dark"] .tree-main em {
+  background: #2c3931;
+  color: #c9d8ce;
+}
+
+[data-theme="dark"] .brand-icon,
+[data-theme="dark"] .mark {
+  background: #2b644d;
+  color: #f3fff7;
+}
+
+[data-theme="dark"] .sidebar-foot,
+[data-theme="dark"] .section-title,
+[data-theme="dark"] .activity-title,
+[data-theme="dark"] .activity-item,
+[data-theme="dark"] .codex-header,
+[data-theme="dark"] .codex-subnav,
+[data-theme="dark"] .conversation-drawer > header {
+  border-color: var(--line);
+}
+
+[data-theme="dark"] .theme-toggle,
+[data-theme="dark"] .sidebar-foot > button {
+  color: var(--muted);
+}
+
+[data-theme="dark"] .theme-toggle:hover,
+[data-theme="dark"] .sidebar-foot > button:hover,
+[data-theme="dark"] .theme-toggle:focus-visible,
+[data-theme="dark"] .sidebar-foot > button:focus-visible {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+[data-theme="dark"] .paper-card,
+[data-theme="dark"] .paper-card-main,
+[data-theme="dark"] .brief-card,
+[data-theme="dark"] .intake-card,
+[data-theme="dark"] .search-results button,
+[data-theme="dark"] .trash-list article,
+[data-theme="dark"] .new-project,
+[data-theme="dark"] .graph-fallback {
+  background: var(--paper-raised);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+[data-theme="dark"] .paper-card:hover,
+[data-theme="dark"] .search-results button:hover {
+  border-color: #58816b;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .25);
+}
+
+[data-theme="dark"] .folder-large,
+[data-theme="dark"] .takeaway,
+[data-theme="dark"] .intake-task-card,
+[data-theme="dark"] .project-meta span,
+[data-theme="dark"] .membership-chips span,
+[data-theme="dark"] .node-kind {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] textarea,
+[data-theme="dark"] select,
+[data-theme="dark"] .intake-line,
+[data-theme="dark"] .conversation-composer,
+[data-theme="dark"] .search-box,
+[data-theme="dark"] .graph-search,
+[data-theme="dark"] .graph-search-results,
+[data-theme="dark"] .chat-box,
+[data-theme="dark"] .graph-filters select {
+  background: #202722;
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+[data-theme="dark"] .chat-box textarea {
+  background: transparent;
+  color: var(--ink);
+}
+
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] textarea::placeholder {
+  color: #84948a;
+}
+
+[data-theme="dark"] .intake-options,
+[data-theme="dark"] .paper-toolbar,
+[data-theme="dark"] .reading-tabs,
+[data-theme="dark"] .analysis-panel section,
+[data-theme="dark"] .relations {
+  border-color: var(--line);
+}
+
+[data-theme="dark"] .codex-pane,
+[data-theme="dark"] .conversation-feed,
+[data-theme="dark"] .conversation-list,
+[data-theme="dark"] .answer-card {
+  background: #1b211e;
+  color: var(--ink);
+}
+
+[data-theme="dark"] .codex-scope-banner,
+[data-theme="dark"] .citation-list button {
+  background: var(--green-soft);
+  border-color: #456752;
+  color: var(--ink);
+}
+
+[data-theme="dark"] .citation-list button {
+  background: #202b24;
+}
+
+[data-theme="dark"] .conversation-composer textarea,
+[data-theme="dark"] .intake-line input,
+[data-theme="dark"] .graph-search input,
+[data-theme="dark"] .project-search input {
+  background: transparent;
+  color: var(--ink);
+}
+
+[data-theme="dark"] .chat-message.user,
+[data-theme="dark"] .primary,
+[data-theme="dark"] .paper-toolbar button,
+[data-theme="dark"] .search-box button,
+[data-theme="dark"] .conversation-composer button,
+[data-theme="dark"] .intake-line > button,
+[data-theme="dark"] .small-primary {
+  background: #34765a;
+  color: #f5fff8;
+}
+
+[data-theme="dark"] .project-actions button,
+[data-theme="dark"] .paper-head-actions button,
+[data-theme="dark"] .trash-list button {
+  background: #202722;
+  color: var(--green);
+  border-color: var(--line);
+}
+
+[data-theme="dark"] .danger,
+[data-theme="dark"] .danger-outline,
+[data-theme="dark"] .intake-task-failed,
+[data-theme="dark"] .intake-task-cancelled {
+  background: #332222 !important;
+  border-color: #704544 !important;
+  color: #f1aaa4 !important;
+}
+
+[data-theme="dark"] .paper-page,
+[data-theme="dark"] .paper-reading,
+[data-theme="dark"] .graph-workspace {
+  color: var(--ink);
+}
+
+[data-theme="dark"] .graph-workspace,
+[data-theme="dark"] .graph-filters,
+[data-theme="dark"] .graph-insights {
+  background: #181d1a;
+  border-color: var(--line);
+}
+
+[data-theme="dark"] .semantic-graph,
+[data-theme="dark"] .graph-stage {
+  background: #202722;
+  border-color: var(--line);
+}
+
+[data-theme="dark"] .graph-controls,
+[data-theme="dark"] .graph-open,
+[data-theme="dark"] .graph-legend,
+[data-theme="dark"] .graph-node-card {
+  background: rgba(28, 36, 31, .94);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+[data-theme="dark"] .graph-controls button,
+[data-theme="dark"] .graph-open,
+[data-theme="dark"] .graph-search-results button,
+[data-theme="dark"] .graph-insights button {
+  color: var(--green);
+}
+
+[data-theme="dark"] .login-page {
+  background: radial-gradient(circle at 35% 20%, #2b3830 0, #1a211d 48%, #101411 100%);
+}
+
+[data-theme="dark"] .login-card {
+  background: rgba(27, 33, 30, .96);
+  border-color: var(--line);
+  box-shadow: 0 25px 80px rgba(0, 0, 0, .35);
+}
+
+[data-theme="dark"] .pdf-viewer {
+  scrollbar-color: #53665a #202722;
+}
+
+[data-theme="dark"] ::selection {
+  background: rgba(143, 208, 174, .32);
+}

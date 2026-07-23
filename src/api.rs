@@ -1,5 +1,7 @@
 use crate::{
     auth::{require_auth, Auth},
+    conversation_engine::ConversationEngine,
+    conversations::{AnnotationAnchor, ConversationEvent, ConversationScopeInput},
     db::Database,
     domain::TaskEvent,
     login_limiter::LoginLimiter,
@@ -10,7 +12,6 @@ use crate::{
 use anyhow::Context;
 use async_stream::stream;
 use axum::{
-    body::Body,
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware,
@@ -18,7 +19,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use futures::Stream;
@@ -32,7 +33,6 @@ use std::{
     time::Instant,
 };
 use tokio::sync::broadcast;
-use tokio_util::io::ReaderStream;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -41,6 +41,7 @@ pub struct AppState {
     pub auth: Auth,
     pub login_limiter: LoginLimiter,
     pub engine: Option<Arc<TaskEngine>>,
+    pub conversation_engine: Option<Arc<ConversationEngine>>,
     pub search: SearchIndex,
     pub static_dir: PathBuf,
     pub max_upload_bytes: usize,
@@ -52,6 +53,7 @@ impl AppState {
         workspace: Workspace,
         auth: Auth,
         engine: Arc<TaskEngine>,
+        conversation_engine: Arc<ConversationEngine>,
         static_dir: PathBuf,
         max_upload_bytes: usize,
     ) -> Self {
@@ -62,6 +64,7 @@ impl AppState {
             auth,
             login_limiter: LoginLimiter::default(),
             engine: Some(engine),
+            conversation_engine: Some(conversation_engine),
             static_dir,
             max_upload_bytes,
         }
@@ -74,9 +77,15 @@ impl AppState {
             auth,
             login_limiter: LoginLimiter::default(),
             engine: None,
+            conversation_engine: None,
             static_dir: PathBuf::new(),
             max_upload_bytes: 10 * 1024 * 1024,
         }
+    }
+
+    pub fn with_conversation_engine(mut self, engine: Arc<ConversationEngine>) -> Self {
+        self.conversation_engine = Some(engine);
+        self
     }
 }
 
@@ -96,6 +105,18 @@ impl ApiError {
     fn unavailable(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
+            message: message.into(),
+        }
+    }
+    fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
             message: message.into(),
         }
     }
@@ -149,16 +170,44 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::delete(permanently_delete_paper),
         )
         .route("/api/paper/pdf", get(get_pdf))
+        .route("/api/paper/annotations", get(list_paper_annotations))
         .route("/api/relations", get(get_relations))
         .route("/api/graph", get(get_graph))
         .route("/api/intake", post(create_intake))
         .route("/api/intake/upload", post(upload_pdf))
         .route("/api/tasks", get(list_tasks))
-        .route("/api/tasks/{id}", get(get_task))
+        .route("/api/tasks/{id}", get(get_task).delete(dismiss_task))
         .route("/api/tasks/{id}/cancel", post(cancel_task))
         .route("/api/events", get(events))
         .route("/api/search", get(search))
         .route("/api/questions", post(question))
+        .route(
+            "/api/conversations",
+            get(list_conversations).post(create_conversation),
+        )
+        .route(
+            "/api/conversations/{id}",
+            get(get_conversation).patch(update_conversation),
+        )
+        .route(
+            "/api/conversations/{id}/scopes",
+            put(replace_conversation_scopes),
+        )
+        .route(
+            "/api/conversations/{id}/messages",
+            post(create_conversation_message),
+        )
+        .route("/api/conversations/{id}/cancel", post(cancel_conversation))
+        .route("/api/conversations/{id}/events", get(conversation_events))
+        .route("/api/citations/{id}/pin", post(pin_citation))
+        .route(
+            "/api/annotations/{id}",
+            axum::routing::patch(update_annotation),
+        )
+        .route(
+            "/api/annotations/{id}/anchors",
+            put(replace_annotation_anchors),
+        )
         .route_layer(middleware::from_fn_with_state(auth, require_auth));
     Router::new()
         .route("/api/health", get(health))
@@ -169,7 +218,9 @@ pub fn build_router(state: AppState) -> Router {
 }
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
-    Json(json!({"status":"ok","codex":state.engine.is_some(),"version":env!("CARGO_PKG_VERSION")}))
+    Json(
+        json!({"status":"ok","codex":state.engine.is_some() || state.conversation_engine.is_some(),"version":env!("CARGO_PKG_VERSION")}),
+    )
 }
 
 #[derive(Deserialize)]
@@ -522,6 +573,7 @@ async fn remove_if_present(path: &std::path::Path, directory: bool) -> Result<()
 
 async fn get_pdf(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<PaperQuery>,
 ) -> Result<Response, ApiError> {
     let paper = state
@@ -539,19 +591,88 @@ async fn get_pdf(
         .join("library/raw/papers")
         .join(safe_key(&paper.id))
         .join("revisions")
-        .join(sha)
+        .join(&sha)
         .join("paper.pdf");
-    let file = tokio::fs::File::open(path).await?;
-    let mut response = Body::from_stream(ReaderStream::new(file)).into_response();
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/pdf"),
-    );
-    response.headers_mut().insert(
-        header::CONTENT_DISPOSITION,
-        HeaderValue::from_static("inline"),
-    );
-    Ok(response)
+    Ok(crate::pdf_range::pdf_response(&path, &sha, &headers).await?)
+}
+
+async fn list_paper_annotations(
+    State(state): State<AppState>,
+    Query(query): Query<PaperQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!(state.db.paper_annotations(&query.id).await?)))
+}
+
+async fn pin_citation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let annotation = state
+        .db
+        .pin_citation(&id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("引用不存在"))?;
+    Ok(Json(json!(annotation)))
+}
+
+#[derive(Deserialize)]
+struct UpdateAnnotationRequest {
+    state: String,
+}
+
+async fn update_annotation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateAnnotationRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let annotation = state
+        .db
+        .set_annotation_state(&id, &request.state)
+        .await
+        .map_err(|error| ApiError::bad_request(error.to_string()))?
+        .ok_or_else(|| ApiError::not_found("批注不存在"))?;
+    Ok(Json(json!(annotation)))
+}
+
+#[derive(Deserialize)]
+struct AnnotationAnchorInput {
+    page: i64,
+    rect_index: i64,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[derive(Deserialize)]
+struct ReplaceAnnotationAnchorsRequest {
+    anchors: Vec<AnnotationAnchorInput>,
+}
+
+async fn replace_annotation_anchors(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<ReplaceAnnotationAnchorsRequest>,
+) -> Result<StatusCode, ApiError> {
+    let anchors = request
+        .anchors
+        .into_iter()
+        .map(|anchor| AnnotationAnchor {
+            annotation_id: id.clone(),
+            page: anchor.page,
+            rect_index: anchor.rect_index,
+            x: anchor.x,
+            y: anchor.y,
+            width: anchor.width,
+            height: anchor.height,
+        })
+        .collect::<Vec<_>>();
+    state
+        .db
+        .replace_annotation_anchors(&id, &anchors)
+        .await
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_relations(
@@ -725,6 +846,25 @@ async fn get_task(
             message: "task not found".into(),
         })
 }
+async fn dismiss_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let task = state
+        .db
+        .get_task(&id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("task not found"))?;
+    if !matches!(task.state.as_str(), "done" | "failed" | "cancelled") {
+        return Err(ApiError::conflict(
+            "running tasks must be cancelled before dismissal",
+        ));
+    }
+    if !state.db.dismiss_task(&id).await? {
+        return Err(ApiError::not_found("task not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
 async fn cancel_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -736,6 +876,226 @@ async fn cancel_task(
         .cancel(&id)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct ConversationListQuery {
+    archived: Option<bool>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+async fn list_conversations(
+    State(state): State<AppState>,
+    Query(query): Query<ConversationListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!(
+        state
+            .db
+            .list_conversations(
+                query.archived.unwrap_or(false),
+                query.limit.unwrap_or(50),
+                query.offset.unwrap_or(0),
+            )
+            .await?
+    )))
+}
+
+#[derive(Deserialize)]
+struct CreateConversationRequest {
+    title: String,
+    scopes: Vec<ConversationScopeInput>,
+}
+
+async fn create_conversation(
+    State(state): State<AppState>,
+    Json(request): Json<CreateConversationRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if request.title.trim().is_empty() || request.scopes.is_empty() {
+        return Err(ApiError::bad_request("标题和上下文范围不能为空"));
+    }
+    let conversation = state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
+        .create_conversation(&request.title, request.scopes)
+        .await
+        .map_err(conversation_api_error)?;
+    Ok((StatusCode::CREATED, Json(json!(conversation))))
+}
+
+#[derive(Deserialize)]
+struct MessagePageQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+async fn get_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<MessagePageQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let conversation = state
+        .db
+        .get_conversation(&id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("对话不存在"))?;
+    let scopes = state.db.conversation_scopes(&id).await?;
+    let messages = state
+        .db
+        .conversation_messages(&id, query.limit.unwrap_or(100), query.offset.unwrap_or(0))
+        .await?;
+    let mut messages_with_citations = Vec::with_capacity(messages.len());
+    for message in messages {
+        let citations = state.db.message_citations(&message.id).await?;
+        messages_with_citations.push(json!({"id":message.id,"conversation_id":message.conversation_id,"role":message.role,"content":message.content,"turn_id":message.turn_id,"status":message.status,"error":message.error,"created_at":message.created_at,"updated_at":message.updated_at,"citations":citations}));
+    }
+    Ok(Json(json!({
+        "conversation": conversation,
+        "scopes": scopes,
+        "messages": messages_with_citations,
+    })))
+}
+
+#[derive(Deserialize)]
+struct UpdateConversationRequest {
+    title: Option<String>,
+    archived: Option<bool>,
+}
+
+async fn update_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateConversationRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let conversation = state
+        .db
+        .update_conversation(&id, request.title.as_deref(), request.archived)
+        .await
+        .map_err(conversation_api_error)?
+        .ok_or_else(|| ApiError::not_found("对话不存在"))?;
+    Ok(Json(json!(conversation)))
+}
+
+#[derive(Deserialize)]
+struct ReplaceScopesRequest {
+    scopes: Vec<ConversationScopeInput>,
+}
+
+async fn replace_conversation_scopes(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<ReplaceScopesRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if request.scopes.is_empty() {
+        return Err(ApiError::bad_request("上下文范围不能为空"));
+    }
+    if state.db.conversation_has_pending_turn(&id).await? {
+        return Err(ApiError::conflict("回答生成期间不能修改上下文范围"));
+    }
+    state
+        .db
+        .replace_conversation_scopes(&id, &request.scopes)
+        .await
+        .map_err(conversation_api_error)?;
+    Ok(Json(json!(state.db.conversation_scopes(&id).await?)))
+}
+
+#[derive(Deserialize)]
+struct CreateMessageRequest {
+    content: String,
+}
+
+async fn create_conversation_message(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<CreateMessageRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let message = state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
+        .enqueue_message(&id, &request.content)
+        .await
+        .map_err(conversation_api_error)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"message_id":message.id,"status":message.status})),
+    ))
+}
+
+async fn cancel_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if state.db.get_conversation(&id).await?.is_none() {
+        return Err(ApiError::not_found("对话不存在"));
+    }
+    state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
+        .cancel(&id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn conversation_events(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<EventsQuery>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    if state.db.get_conversation(&id).await?.is_none() {
+        return Err(ApiError::not_found("对话不存在"));
+    }
+    let replay = state
+        .db
+        .conversation_events_after(&id, query.after.unwrap_or(0))
+        .await?;
+    let mut live = state
+        .conversation_engine
+        .as_ref()
+        .map(|engine| engine.subscribe());
+    let stream = stream! {
+        for item in replay { yield Ok(to_conversation_sse(item)); }
+        if let Some(receiver) = &mut live {
+            loop {
+                match receiver.recv().await {
+                    Ok(item) if item.conversation_id == id => yield Ok(to_conversation_sse(item)),
+                    Ok(_) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        }
+    };
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+fn to_conversation_sse(event: ConversationEvent) -> Event {
+    Event::default()
+        .id(event.id.to_string())
+        .event(event.event_type)
+        .data(
+            json!({
+                "conversation_id":event.conversation_id,
+                "message_id":event.message_id,
+                "payload":event.payload,
+                "created_at":event.created_at,
+            })
+            .to_string(),
+        )
+}
+
+fn conversation_api_error(error: anyhow::Error) -> ApiError {
+    let message = error.to_string();
+    if message.contains("does not exist") || message.contains("不存在") {
+        ApiError::not_found("对话或上下文不存在")
+    } else if message.contains("busy") {
+        ApiError::conflict("当前对话正在生成回答")
+    } else {
+        ApiError::bad_request(message)
+    }
 }
 
 #[derive(Deserialize)]
@@ -784,6 +1144,27 @@ async fn question(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     if request.question.trim().is_empty() {
         return Err(ApiError::bad_request("question is required"));
+    }
+    if let Some(engine) = &state.conversation_engine {
+        let scope = ConversationScopeInput {
+            scope_type: request.scope_type.clone(),
+            scope_id: request.scope_id.clone(),
+        };
+        let title = request.question.chars().take(32).collect::<String>();
+        let conversation = engine
+            .create_conversation(&title, vec![scope])
+            .await
+            .map_err(conversation_api_error)?;
+        let message = engine
+            .enqueue_message(&conversation.id, &request.question)
+            .await
+            .map_err(conversation_api_error)?;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(
+                json!({"task_id":message.id,"conversation_id":conversation.id,"message_id":message.id}),
+            ),
+        ));
     }
     let id = state
         .engine

@@ -4,4 +4,8 @@ import App from "./App"
 import "./styles.css"
 import "./redesign.css"
 import "./panel-layout.css"
+import "./codex-panel.css"
+import "./pdf-reader.css"
+import "./annotation-overlay.css"
+import "./theme.css"
 createRoot(document.getElementById("root")!).render(<StrictMode><App/></StrictMode>)

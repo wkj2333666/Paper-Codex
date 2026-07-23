@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 import type { GraphPayload } from "./types"
-import { buildGraph, initialPosition, kindLabel, neighborhood } from "./graph-model"
+import { buildGraph, graphPalette, initialPosition, kindColor, kindLabel, neighborhood } from "./graph-model"
 
 const payload:GraphPayload={
   nodes:[
@@ -44,5 +44,17 @@ describe("semantic graph model",()=>{
       id:"second-formal",source:"paper:one",target:"method:attention",relation_type:"introduces",hypothesis:false,confidence:.9,evidence:[],
     }]})
     expect(graph.edges("paper:one","method:attention").sort()).toEqual(["formal","second-formal"])
+  })
+
+  test("uses a high-contrast palette for dark graph surfaces",()=>{
+    const palette=graphPalette("dark")
+    expect(palette.canvasBackground).toBe("#202a25")
+    expect(kindColor("paper",palette)).toBe("#78c7a0")
+    expect(kindColor("method",palette)).toBe("#f2b56f")
+    expect(palette.dimNodeColor).not.toMatch(/^#([0-9a-f]{2})\1\1$/i)
+    const graph=buildGraph(payload,palette)
+    expect(graph.getNodeAttribute("method:attention","color")).toBe("#f2b56f")
+    expect(graph.getEdgeAttribute("formal","color")).toBe(palette.edgeColor)
+    expect(graph.getEdgeAttribute("guess","color")).toBe(palette.hypothesisEdgeColor)
   })
 })

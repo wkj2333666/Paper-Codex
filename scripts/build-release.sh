@@ -2,6 +2,7 @@
 set -euo pipefail
 
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+export CARGO_TARGET_DIR="$project_dir/target"
 
 cd "$project_dir/web"
 npm ci

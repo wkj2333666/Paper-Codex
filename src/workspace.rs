@@ -56,6 +56,7 @@ impl Workspace {
             ".paper-wiki/staging",
             ".paper-wiki/commit-journal",
             ".paper-wiki/cache/extraction",
+            ".paper-wiki/conversations",
             ".paper-wiki/indexes",
         ] {
             tokio::fs::create_dir_all(root.join(relative))
@@ -94,6 +95,26 @@ impl Workspace {
     }
     pub fn staging_dir(&self, task_id: &str) -> PathBuf {
         self.state_dir().join("staging").join(task_id)
+    }
+
+    pub fn conversation_dir(&self, conversation_id: &str) -> Result<PathBuf> {
+        let safe = safe_key(conversation_id);
+        if safe.is_empty() || safe != conversation_id {
+            bail!("conversation id is not a safe path component");
+        }
+        Ok(self.state_dir().join("conversations").join(safe))
+    }
+
+    pub fn extraction_markdown_path(&self, revision: &str) -> Result<PathBuf> {
+        let safe = safe_key(revision);
+        if safe.is_empty() || safe != revision {
+            bail!("revision is not a safe path component");
+        }
+        Ok(self
+            .state_dir()
+            .join("cache/extraction")
+            .join(safe)
+            .join("pages.md"))
     }
 
     pub fn generated_target(&self, relative: impl AsRef<Path>) -> Result<PathBuf> {

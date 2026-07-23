@@ -1,6 +1,6 @@
 use paper_codex::{
     acquisition::{classify_input, validate_pdf_bytes, Acquirer, IntakeKind},
-    extraction::pages_as_markdown,
+    extraction::{extract_pdf, pages_as_markdown},
 };
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -118,4 +118,34 @@ fn extracted_pages_keep_one_based_evidence_markers() {
     let markdown = pages_as_markdown(&["Abstract".into(), "Method".into()]);
     assert!(markdown.contains("<!-- page:1 -->\nAbstract"));
     assert!(markdown.contains("<!-- page:2 -->\nMethod"));
+}
+
+#[tokio::test]
+async fn cached_extraction_backfills_revision_markdown() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache = temp.path().join("cache");
+    let cache_dir = cache.join("extraction/revision-one");
+    tokio::fs::create_dir_all(&cache_dir).await.unwrap();
+    tokio::fs::write(
+        cache_dir.join("pages.json"),
+        serde_json::to_vec(&vec!["Abstract", "Method"]).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let extracted = extract_pdf(
+        &temp.path().join("paper-does-not-need-to-exist.pdf"),
+        &cache,
+        "revision-one",
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(extracted.markdown_path, cache_dir.join("pages.md"));
+    assert_eq!(
+        tokio::fs::read_to_string(&extracted.markdown_path)
+            .await
+            .unwrap(),
+        extracted.markdown
+    );
 }

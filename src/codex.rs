@@ -1,3 +1,4 @@
+use crate::prompts::ConversationAnswer;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -5,7 +6,7 @@ use std::{path::PathBuf, process::Stdio, sync::Arc};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, Lines},
     process::{Child, ChildStdin, ChildStdout, Command},
-    sync::{broadcast, watch, Mutex},
+    sync::{broadcast, mpsc, watch, Mutex},
 };
 
 #[derive(Debug, Clone)]
@@ -39,6 +40,7 @@ pub struct CodexOutcome {
     pub turn_id: String,
     pub status: String,
     pub final_text: String,
+    pub answer: Option<ConversationAnswer>,
     pub error: Option<String>,
 }
 
@@ -156,7 +158,25 @@ impl CodexRuntime {
     pub async fn run_turn(
         &self,
         turn: CodexTurn,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<CodexOutcome> {
+        self.run_turn_inner(turn, cancel, None).await
+    }
+
+    pub async fn run_turn_with_events(
+        &self,
+        turn: CodexTurn,
+        cancel: watch::Receiver<bool>,
+        events: mpsc::UnboundedSender<CodexEvent>,
+    ) -> Result<CodexOutcome> {
+        self.run_turn_inner(turn, cancel, Some(&events)).await
+    }
+
+    async fn run_turn_inner(
+        &self,
+        turn: CodexTurn,
         mut cancel: watch::Receiver<bool>,
+        turn_events: Option<&mpsc::UnboundedSender<CodexEvent>>,
     ) -> Result<CodexOutcome> {
         let mut guard = self.session.lock().await;
         if guard.is_none() {
@@ -182,6 +202,12 @@ impl CodexRuntime {
             .or(turn.thread_id.as_deref())
             .context("Codex response lacks thread id")?
             .to_owned();
+        let expects_conversation_answer = turn
+            .output_schema
+            .as_ref()
+            .and_then(|schema| schema.get("title"))
+            .and_then(Value::as_str)
+            == Some("ConversationAnswer");
         let mut params = json!({
             "threadId":thread_id,
             "cwd":turn.cwd,
@@ -228,24 +254,36 @@ impl CodexRuntime {
                     let method = message.get("method").and_then(Value::as_str).unwrap_or("response");
                     if method == "item/agentMessage/delta" {
                         let text = message.pointer("/params/delta").and_then(Value::as_str).map(str::to_owned);
-                        let _ = self.events.send(CodexEvent { kind:"agent-delta".into(), text, payload:message.clone() });
+                        self.publish(CodexEvent { kind:"agent-delta".into(), text, payload:message.clone() }, turn_events);
                     } else if method == "item/completed" {
                         if message.pointer("/params/item/type").and_then(Value::as_str) == Some("agentMessage") {
                             if let Some(text) = message.pointer("/params/item/text").and_then(Value::as_str) { final_text = text.to_owned(); }
                         }
-                        let _ = self.events.send(CodexEvent { kind:"item-completed".into(), text:None, payload:message.clone() });
+                        self.publish(CodexEvent { kind:"item-completed".into(), text:None, payload:message.clone() }, turn_events);
                     } else if method == "turn/completed" {
                         let status = message.pointer("/params/turn/status").and_then(Value::as_str).unwrap_or("failed").to_owned();
                         let error = message.pointer("/params/turn/error/message").and_then(Value::as_str).map(|message_text| {
                             let details = message.pointer("/params/turn/error/additionalDetails").and_then(Value::as_str).filter(|value| !value.is_empty());
                             details.map(|value| format!("{message_text}: {value}")).unwrap_or_else(|| message_text.to_owned())
                         });
-                        return Ok(CodexOutcome { thread_id, turn_id, status, final_text, error });
+                        let answer = if status == "completed" && expects_conversation_answer {
+                            Some(serde_json::from_str(&final_text).context("decode structured conversation answer")?)
+                        } else {
+                            None
+                        };
+                        return Ok(CodexOutcome { thread_id, turn_id, status, final_text, answer, error });
                     } else if message.get("method").is_some() {
-                        let _ = self.events.send(CodexEvent { kind:method.to_owned(), text:None, payload:message });
+                        self.publish(CodexEvent { kind:method.to_owned(), text:None, payload:message }, turn_events);
                     }
                 }
             }
+        }
+    }
+
+    fn publish(&self, event: CodexEvent, turn_events: Option<&mpsc::UnboundedSender<CodexEvent>>) {
+        let _ = self.events.send(event.clone());
+        if let Some(sender) = turn_events {
+            let _ = sender.send(event);
         }
     }
 }

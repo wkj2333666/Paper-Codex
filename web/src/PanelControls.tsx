@@ -15,7 +15,7 @@ export function PanelRail({ panel, label, side, onExpand, className = "" }: {
   className?: string
 }) {
   const Icon = icons[panel]
-  return <div className={`panel-rail panel-rail-${side} ${className}`.trim()}>
+  return <div className={`panel-rail panel-rail-${side} ${className}`.trim()} data-panel={panel}>
     <button
       type="button"
       aria-label={`展开${label}`}

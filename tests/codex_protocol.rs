@@ -1,4 +1,5 @@
 use paper_codex::codex::{CodexCommand, CodexRuntime, CodexTurn};
+use paper_codex::prompts::conversation_answer_schema;
 use std::path::PathBuf;
 use tokio::sync::watch;
 
@@ -77,4 +78,60 @@ async fn preserves_turn_failure_details() {
         outcome.error.as_deref(),
         Some("structured output rejected: schema mismatch")
     );
+}
+
+#[tokio::test]
+async fn resumes_thread_and_parses_two_structured_answers() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let first = runtime
+        .run_turn(
+            CodexTurn {
+                thread_id: None,
+                cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
+                prompt: "structured-turn-one".into(),
+                output_schema: Some(conversation_answer_schema()),
+            },
+            cancel_rx.clone(),
+        )
+        .await
+        .unwrap();
+    let second = runtime
+        .run_turn(
+            CodexTurn {
+                thread_id: Some(first.thread_id.clone()),
+                cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
+                prompt: "structured-turn-two".into(),
+                output_schema: Some(conversation_answer_schema()),
+            },
+            cancel_rx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.thread_id, "thread-fake");
+    assert_ne!(first.turn_id, second.turn_id);
+    assert_eq!(
+        first.answer.as_ref().unwrap().answer_markdown,
+        "结构化回答 [1]"
+    );
+    assert_eq!(second.answer.as_ref().unwrap().citations[0].page, 1);
+}
+
+#[tokio::test]
+async fn rejects_invalid_structured_answer_json() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let result = runtime
+        .run_turn(
+            CodexTurn {
+                thread_id: None,
+                cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
+                prompt: "invalid-structured".into(),
+                output_schema: Some(conversation_answer_schema()),
+            },
+            cancel_rx,
+        )
+        .await;
+    assert!(result.is_err());
 }

@@ -2,7 +2,7 @@ use crate::{
     domain::{Paper, Project, Task, TaskEvent, TaskState},
     graph::{GraphEdge, GraphNode, GraphPayload, KnowledgeKind},
 };
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sqlx::Row;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use std::collections::{HashMap, HashSet};
@@ -99,6 +99,64 @@ CREATE INDEX IF NOT EXISTS knowledge_edges_target ON knowledge_edges(target_id);
 CREATE INDEX IF NOT EXISTS knowledge_edges_origin ON knowledge_edges(origin_paper_id);
 "#;
 
+const CONVERSATION_BASE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY, title TEXT NOT NULL, thread_id TEXT, status TEXT NOT NULL DEFAULT 'idle',
+  archived_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS conversation_scopes (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  scope_type TEXT NOT NULL CHECK(scope_type IN ('global','paper','project')),
+  scope_id TEXT,
+  added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK((scope_type='global' AND scope_id IS NULL) OR (scope_type IN ('paper','project') AND scope_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS conversation_scopes_specific
+  ON conversation_scopes(conversation_id,scope_type,scope_id)
+  WHERE scope_type IN ('paper','project');
+CREATE UNIQUE INDEX IF NOT EXISTS conversation_scopes_global
+  ON conversation_scopes(conversation_id)
+  WHERE scope_type='global';
+"#;
+
+const CONVERSATION_EXTENDED_SCHEMA: &str = r#"
+CREATE INDEX IF NOT EXISTS chat_messages_conversation
+  ON chat_messages(conversation_id,created_at);
+CREATE TABLE IF NOT EXISTS message_citations (
+  id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  paper_id TEXT NOT NULL, revision TEXT NOT NULL, page INTEGER NOT NULL CHECK(page>0),
+  section TEXT, locator TEXT, quote TEXT NOT NULL, prefix TEXT NOT NULL DEFAULT '',
+  suffix TEXT NOT NULL DEFAULT '', explanation TEXT NOT NULL DEFAULT '',
+  match_status TEXT NOT NULL DEFAULT 'unmatched', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS message_citations_message ON message_citations(message_id);
+CREATE INDEX IF NOT EXISTS message_citations_paper ON message_citations(paper_id,revision,page);
+CREATE TABLE IF NOT EXISTS annotations (
+  id TEXT PRIMARY KEY, citation_id TEXT NOT NULL REFERENCES message_citations(id) ON DELETE CASCADE,
+  paper_id TEXT NOT NULL, revision TEXT NOT NULL, source_message_id TEXT NOT NULL,
+  kind TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'visible',
+  availability TEXT NOT NULL DEFAULT 'available', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(citation_id)
+);
+CREATE INDEX IF NOT EXISTS annotations_paper ON annotations(paper_id,revision,state);
+CREATE TABLE IF NOT EXISTS annotation_anchors (
+  annotation_id TEXT NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+  page INTEGER NOT NULL CHECK(page>0), rect_index INTEGER NOT NULL CHECK(rect_index>=0),
+  x REAL NOT NULL, y REAL NOT NULL, width REAL NOT NULL, height REAL NOT NULL,
+  PRIMARY KEY(annotation_id,rect_index)
+);
+CREATE TABLE IF NOT EXISTS conversation_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL, payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS conversation_events_replay ON conversation_events(conversation_id,id);
+"#;
+
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
@@ -116,7 +174,15 @@ impl Database {
             .execute(&pool)
             .await
             .context("migrate database")?;
+        sqlx::raw_sql(CONVERSATION_BASE_SCHEMA)
+            .execute(&pool)
+            .await
+            .context("create conversation base schema")?;
         Self::migrate_legacy_schema(&pool).await?;
+        sqlx::raw_sql(CONVERSATION_EXTENDED_SCHEMA)
+            .execute(&pool)
+            .await
+            .context("create conversation extended schema")?;
         Ok(Self { pool })
     }
 
@@ -133,6 +199,102 @@ impl Database {
                 .execute(pool)
                 .await?;
         }
+        if !has_column(pool, "chat_messages", "conversation_id").await? {
+            Self::migrate_legacy_chat_messages(pool).await?;
+        }
+        Ok(())
+    }
+
+    async fn migrate_legacy_chat_messages(pool: &SqlitePool) -> Result<()> {
+        let rows = sqlx::query(
+            "SELECT id,scope_type,scope_id,role,content,thread_id,created_at FROM chat_messages ORDER BY created_at,rowid",
+        )
+        .fetch_all(pool)
+        .await?;
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            r#"CREATE TABLE chat_messages_v2 (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                role TEXT NOT NULL, content TEXT NOT NULL, turn_id TEXT,
+                status TEXT NOT NULL DEFAULT 'completed', error TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )"#,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        let mut conversations = HashMap::<String, String>::new();
+        for row in rows {
+            let id: String = row.try_get("id")?;
+            let scope_type: String = row.try_get("scope_type")?;
+            let scope_id: Option<String> = row.try_get("scope_id")?;
+            let role: String = row.try_get("role")?;
+            let content: String = row.try_get("content")?;
+            let thread_id: Option<String> = row.try_get("thread_id")?;
+            let created_at: String = row.try_get("created_at")?;
+            let key = thread_id
+                .as_ref()
+                .map(|value| format!("thread:{value}"))
+                .unwrap_or_else(|| {
+                    format!("scope:{scope_type}:{}", scope_id.as_deref().unwrap_or(""))
+                });
+            let conversation_id = if let Some(existing) = conversations.get(&key) {
+                existing.clone()
+            } else {
+                let conversation_id = Uuid::new_v4().to_string();
+                let title = match scope_type.as_str() {
+                    "paper" => "历史论文对话",
+                    "project" => "历史项目对话",
+                    _ => "历史全局对话",
+                };
+                sqlx::query("INSERT INTO conversations(id,title,thread_id,status,created_at,updated_at) VALUES(?,?,?,'idle',?,?)")
+                    .bind(&conversation_id)
+                    .bind(title)
+                    .bind(&thread_id)
+                    .bind(&created_at)
+                    .bind(&created_at)
+                    .execute(&mut *tx)
+                    .await?;
+                match (scope_type.as_str(), scope_id.as_deref()) {
+                    ("paper" | "project", Some(scope_id)) if !scope_id.trim().is_empty() => {
+                        sqlx::query("INSERT OR IGNORE INTO conversation_scopes(conversation_id,scope_type,scope_id,added_at) VALUES(?,?,?,?)")
+                            .bind(&conversation_id)
+                            .bind(&scope_type)
+                            .bind(scope_id)
+                            .bind(&created_at)
+                            .execute(&mut *tx)
+                            .await?;
+                    }
+                    _ => {
+                        sqlx::query("INSERT OR IGNORE INTO conversation_scopes(conversation_id,scope_type,scope_id,added_at) VALUES(?,'global',NULL,?)")
+                            .bind(&conversation_id)
+                            .bind(&created_at)
+                            .execute(&mut *tx)
+                            .await?;
+                    }
+                }
+                conversations.insert(key, conversation_id.clone());
+                conversation_id
+            };
+            sqlx::query("INSERT INTO chat_messages_v2(id,conversation_id,role,content,status,created_at,updated_at) VALUES(?,?,?,?,'completed',?,?)")
+                .bind(id)
+                .bind(conversation_id)
+                .bind(role)
+                .bind(content)
+                .bind(&created_at)
+                .bind(&created_at)
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query("DROP TABLE chat_messages")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("ALTER TABLE chat_messages_v2 RENAME TO chat_messages")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -424,6 +586,10 @@ impl Database {
             Some((Some(_),)) => {}
         }
         let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE annotations SET availability='paper-missing',updated_at=CURRENT_TIMESTAMP WHERE paper_id=?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("DELETE FROM knowledge_fts WHERE entity_type='paper' AND entity_id=?")
             .bind(id)
             .execute(&mut *tx)
@@ -760,6 +926,28 @@ impl Database {
                 .fetch_all(&self.pool)
                 .await?,
         )
+    }
+
+    pub async fn dismiss_task(&self, id: &str) -> Result<bool> {
+        let mut transaction = self.pool.begin().await?;
+        let state = sqlx::query_scalar::<_, String>("SELECT state FROM tasks WHERE id=?")
+            .bind(id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+        let Some(state) = state else {
+            transaction.rollback().await?;
+            return Ok(false);
+        };
+        if !matches!(state.as_str(), "done" | "failed" | "cancelled") {
+            bail!("only terminal tasks can be dismissed");
+        }
+        let deleted = sqlx::query("DELETE FROM tasks WHERE id=?")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+        transaction.commit().await?;
+        Ok(deleted == 1)
     }
 
     pub async fn resumable_task_ids(&self) -> Result<Vec<String>> {

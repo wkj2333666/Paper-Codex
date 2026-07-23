@@ -1,0 +1,5 @@
+#!/bin/sh
+if [ "${1:-}" = "app-server" ]; then
+  shift
+fi
+exec python3 "$(dirname "$0")/fake-app-server.py" "$@"

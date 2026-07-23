@@ -22,7 +22,13 @@ target/
 .vscode/
 target/
 web/node_modules/
+.cache/
 web/dist/
 *.env.local
 deploy/*.env
 *.log
+
+# Maintainer-local deployment
+/deploy/
+/scripts/backup.sh
+/paper-codex.env

@@ -5,6 +5,7 @@ use paper_codex::{
     auth::Auth,
     codex::{CodexCommand, CodexRuntime},
     config::Config,
+    conversation_engine::ConversationEngine,
     db::Database,
     tasks::TaskEngine,
     workspace::Workspace,
@@ -33,12 +34,15 @@ async fn main() -> Result<()> {
         config.codex_home.clone(),
     ))
     .await?;
-    let engine = TaskEngine::start(db.clone(), workspace.clone(), acquirer, codex).await?;
+    let engine = TaskEngine::start(db.clone(), workspace.clone(), acquirer, codex.clone()).await?;
+    let conversation_engine =
+        ConversationEngine::start(db.clone(), workspace.clone(), codex).await?;
     let state = AppState::new(
         db,
         workspace,
         auth,
         engine,
+        conversation_engine,
         config.static_dir.clone(),
         config.max_upload_bytes,
     );

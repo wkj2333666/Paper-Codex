@@ -1,15 +1,55 @@
 /* Collapsible workspace panels. Loaded after the existing theme styles. */
 .app-shell {
   --sidebar-width: 248px;
-  --codex-width: 330px;
-  grid-template-columns: var(--sidebar-width) minmax(480px, 1fr) var(--codex-width);
+  --paper-graph-width: 340px;
+  --codex-width: 380px;
+  --sidebar-track-width: var(--sidebar-width);
+  --codex-track-width: var(--codex-width);
+  --sidebar-divider-width: 6px;
+  --codex-divider-width: 6px;
+  grid-template-columns: var(--sidebar-track-width) var(--sidebar-divider-width) minmax(520px, 1fr) var(--codex-divider-width) var(--codex-track-width);
 }
 
-.app-shell.sidebar-collapsed { --sidebar-width: 42px; }
-.app-shell.codex-collapsed { --codex-width: 42px; }
+.app-shell.sidebar-collapsed { --sidebar-track-width: 42px; }
+.app-shell.codex-collapsed { --codex-track-width: 42px; }
 .app-shell.graph-mode {
-  --codex-width: 0;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 0;
+  --codex-track-width: 0;
+  --codex-divider-width: 0;
+  grid-template-columns: var(--sidebar-track-width) var(--sidebar-divider-width) minmax(0, 1fr) 0 0;
+}
+
+.app-shell > [data-panel="sidebar"] { grid-column: 1; grid-row: 1; }
+.app-shell > .resizable-divider-sidebar { grid-column: 2; grid-row: 1; }
+.app-shell > .main-pane { grid-column: 3; grid-row: 1; min-width: 0; }
+.app-shell > .resizable-divider-codex { grid-column: 4; grid-row: 1; }
+.app-shell > [data-panel="codex"] { grid-column: 5; grid-row: 1; }
+
+.resizable-divider {
+  position: relative;
+  z-index: 8;
+  width: 6px;
+  min-width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  outline: none;
+}
+
+.resizable-divider::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.resizable-divider:hover::after,
+.resizable-divider:focus-visible::after {
+  background: var(--green);
+  box-shadow: 0 0 0 2px var(--green-soft);
 }
 
 .workspace-panel {
@@ -87,6 +127,20 @@
   grid-template-columns: minmax(0, 1fr) 42px;
 }
 
+.paper-page:not(.paper-graph-collapsed) {
+  grid-template-columns: minmax(520px, 1fr) 6px var(--paper-graph-width);
+  gap: 0;
+}
+
+.paper-page:not(.paper-graph-collapsed) > .resizable-divider {
+  margin: 0;
+}
+
+.paper-page:not(.paper-graph-collapsed) > .paper-graph {
+  margin-left: 0;
+  padding-left: 24px;
+}
+
 .paper-graph-rail {
   width: 42px;
   border: 1px solid var(--line);
@@ -114,6 +168,8 @@
     height: 100vh;
     overflow: hidden;
   }
+
+  .resizable-divider { display: none; }
 
   .main-pane {
     height: 100vh;

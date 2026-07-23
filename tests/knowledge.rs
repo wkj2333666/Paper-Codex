@@ -4,6 +4,10 @@ use paper_codex::{
         PaperNote, ProposedKnowledge, Relation, SemanticRelation,
     },
     prompts::first_pass_prompt,
+    prompts::{
+        conversation_answer_schema, explicit_annotation_intent, validate_conversation_answer,
+        AnnotationIntent, ConversationAnswer, ConversationCitation, ConversationSource,
+    },
     workspace::Workspace,
 };
 use serde_json::Value;
@@ -72,6 +76,92 @@ fn proposal(page: u32) -> ProposedKnowledge {
         }],
         recommended_projects: vec![],
     }
+}
+
+#[test]
+fn only_explicit_annotation_language_allows_automatic_persistence() {
+    assert!(explicit_annotation_intent("请把这里保存为批注"));
+    assert!(explicit_annotation_intent("remember this as a note"));
+    assert!(explicit_annotation_intent("固定这条解释"));
+    assert!(!explicit_annotation_intent("为什么作者这样设计？"));
+    assert!(!explicit_annotation_intent(
+        "Does the author annotate the dataset?"
+    ));
+
+    let schema = conversation_answer_schema();
+    assert_eq!(schema["additionalProperties"], false);
+    assert!(schema["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|field| field == "citations"));
+}
+
+#[test]
+fn conversation_answer_requires_a_locatable_quote() {
+    let answer = ConversationAnswer {
+        title: None,
+        answer_markdown: "回答 [1]".into(),
+        citations: vec![ConversationCitation {
+            id: "1".into(),
+            paper_id: "paper:one".into(),
+            revision: "revision-one".into(),
+            page: 1,
+            section: None,
+            locator: None,
+            quote: String::new(),
+            prefix: String::new(),
+            suffix: String::new(),
+            explanation: "证据说明".into(),
+        }],
+        annotation_intents: vec![AnnotationIntent {
+            citation_id: "1".into(),
+            kind: "motivation".into(),
+            body: "动机说明".into(),
+            persist: true,
+        }],
+    };
+    let sources = [ConversationSource {
+        paper_id: "paper:one".into(),
+        revision: "revision-one".into(),
+        page_count: 2,
+    }];
+
+    assert!(validate_conversation_answer(answer, "为什么这样设计？", &sources).is_err());
+}
+
+#[test]
+fn ordinary_questions_cannot_persist_model_generated_annotations() {
+    let answer = ConversationAnswer {
+        title: None,
+        answer_markdown: "回答 [1]".into(),
+        citations: vec![ConversationCitation {
+            id: "1".into(),
+            paper_id: "paper:one".into(),
+            revision: "revision-one".into(),
+            page: 1,
+            section: None,
+            locator: None,
+            quote: "原文证据".into(),
+            prefix: String::new(),
+            suffix: String::new(),
+            explanation: "证据说明".into(),
+        }],
+        annotation_intents: vec![AnnotationIntent {
+            citation_id: "1".into(),
+            kind: "motivation".into(),
+            body: "动机说明".into(),
+            persist: true,
+        }],
+    };
+    let sources = [ConversationSource {
+        paper_id: "paper:one".into(),
+        revision: "revision-one".into(),
+        page_count: 2,
+    }];
+
+    let validated = validate_conversation_answer(answer, "为什么这样设计？", &sources).unwrap();
+    assert!(!validated.annotation_intents[0].persist);
 }
 
 #[test]

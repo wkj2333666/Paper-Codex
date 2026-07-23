@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest"
 import {
   DEFAULT_PANEL_VISIBILITY,
+  DEFAULT_PANEL_LAYOUT,
+  PANEL_LAYOUT_KEY,
   PANEL_VISIBILITY_KEY,
+  loadPanelLayout,
   loadPanelVisibility,
+  parsePanelLayout,
   parsePanelVisibility,
+  savePanelLayout,
   savePanelVisibility,
   setPanelOpen,
 } from "./panel-preferences"
@@ -43,5 +48,31 @@ describe("panel preferences", () => {
 
     expect(next).toEqual({ sidebarOpen: true, codexOpen: false, paperGraphOpen: true })
     expect(DEFAULT_PANEL_VISIBILITY.codexOpen).toBe(true)
+  })
+
+  it("loads v2 layout before falling back to the v1 visibility key", () => {
+    const writes: Array<[string, string]> = []
+    const storage = {
+      getItem: (key: string) => {
+        if (key === PANEL_LAYOUT_KEY) return '{"sidebarOpen":true,"codexOpen":false,"paperGraphOpen":true,"widths":{"sidebar":300,"paperGraph":360,"codex":410},"conversationDrawerWidth":260}'
+        if (key === PANEL_VISIBILITY_KEY) return '{"sidebarOpen":false}'
+        return null
+      },
+      setItem: (key: string, value: string) => { writes.push([key, value]) },
+    }
+
+    const layout = loadPanelLayout(storage)
+    expect(layout.codexOpen).toBe(false)
+    expect(layout.widths).toEqual({ sidebar: 300, paperGraph: 360, codex: 410 })
+
+    savePanelLayout(layout, storage)
+    expect(writes).toEqual([[PANEL_LAYOUT_KEY, JSON.stringify(layout)]])
+  })
+
+  it("defaults malformed v2 fields independently", () => {
+    expect(parsePanelLayout('{"sidebarOpen":"bad","widths":{"sidebar":999,"paperGraph":300}}')).toEqual({
+      ...DEFAULT_PANEL_LAYOUT,
+      widths: { ...DEFAULT_PANEL_LAYOUT.widths, paperGraph: 300 },
+    })
   })
 })

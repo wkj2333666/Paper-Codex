@@ -65,3 +65,12 @@ test("project lifecycle, trash, and graph methods use encoded scoped endpoints",
     ["GET","/api/graph?project_id=child-1&kinds=paper%2Cmethod&include_hypotheses=false"],
   ])
 })
+
+test("task cancellation and dismissal use separate encoded endpoints", async()=>{
+  await api.cancelTask("task/one")
+  await api.dismissTask("task/one")
+  expect(capturedRequests.map(request=>[request.method,request.url])).toEqual([
+    ["POST","/api/tasks/task%2Fone/cancel"],
+    ["DELETE","/api/tasks/task%2Fone"],
+  ])
+})

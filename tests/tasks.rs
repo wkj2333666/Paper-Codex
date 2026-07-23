@@ -23,6 +23,39 @@ async fn persists_task_events_and_replays_them_in_order() {
 }
 
 #[tokio::test]
+async fn dismisses_only_terminal_tasks() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let failed = db
+        .create_task("ingest", r#"{"source":"failed"}"#)
+        .await
+        .unwrap();
+    db.append_event(&failed, "failed", r#"{"message":"download failed"}"#)
+        .await
+        .unwrap();
+    db.force_task_state(&failed, TaskState::Failed, Some("download failed"))
+        .await
+        .unwrap();
+    let running = db
+        .create_task("ingest", r#"{"source":"running"}"#)
+        .await
+        .unwrap();
+
+    assert!(db.dismiss_task(&failed).await.unwrap());
+    assert!(db.get_task(&failed).await.unwrap().is_none());
+    assert!(db
+        .events_after(0)
+        .await
+        .unwrap()
+        .iter()
+        .all(|event| event.task_id != failed));
+
+    let error = db.dismiss_task(&running).await.unwrap_err();
+    assert!(error.to_string().contains("terminal"));
+    assert!(db.get_task(&running).await.unwrap().is_some());
+    assert!(!db.dismiss_task("missing-task").await.unwrap());
+}
+
+#[tokio::test]
 async fn fts_search_is_incremental_and_scopeable() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     let search = SearchIndex::new(db.clone());
