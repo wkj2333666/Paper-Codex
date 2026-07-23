@@ -117,11 +117,11 @@ For the full local release check, use:
 scripts/build-release.sh
 ```
 
-The GitHub Actions workflow repeats these checks on pushes and pull requests. It also builds an ARM64 release archive when a `v*` tag is pushed, so Raspberry Pi users do not need to compile the full Rust release locally.
+The GitHub Actions workflow repeats these checks on pushes and pull requests. When a `v*` tag is pushed, it builds release archives for x86_64, aarch64, and armv7 Linux targets, so users do not need to compile the full Rust release locally.
 
 ## Releases
 
-Release archives contain the ARM64 backend binary, compiled web assets, and generic `systemd --user` templates. The archive is intentionally deployment-neutral: it does not contain a domain name, Caddy configuration, machine path, or private environment file.
+Release archives contain one target-specific backend binary, compiled web assets, and generic `systemd --user` templates. Each release provides x86_64, aarch64, and armv7 Linux archives. The archives are intentionally deployment-neutral: they do not contain a domain name, Caddy configuration, machine path, or private environment file.
 
 For a local deployment, unpack a release into the project directory, point `PAPER_CODEX_STATIC_DIR` at its `web/` directory, and keep `paper-workspace/` and the environment file outside the release contents. The release workflow and templates in `deploy/` are the public reference; adapt them to your operating system and network boundary.
 

@@ -13,10 +13,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build ARM64 release
-    # Native ARM avoids cross-linker surprises and produces the binary used by Raspberry Pi.
-    runs-on: ubuntu-24.04-arm
+  frontend:
+    name: Frontend checks and assets
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -28,36 +30,101 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Set up Rust
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test -- --run
+
+      - name: Type-check frontend
+        run: npm run typecheck
 
       - name: Build frontend
-        working-directory: web
-        run: |
-          npm ci
-          npm test -- --run
-          npm run typecheck
-          npm run build
+        run: npm run build
 
-      - name: Verify Rust
+      - name: Upload frontend assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
+          if-no-files-found: error
+
+  verify:
+    name: Rust verification
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
         run: |
-          cargo fmt --all -- --check
-          cargo clippy --all-targets --locked -- -D warnings
-          cargo test --all-targets --locked
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Run all Rust tests
+        run: cargo test --all-targets --locked
+
+  build:
+    name: Build ${{ matrix.arch }} release
+    needs: [frontend, verify]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            cross: false
+          - arch: aarch64
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            cross: false
+          - arch: armv7
+            target: armv7-unknown-linux-gnueabihf
+            runner: ubuntu-24.04
+            cross: true
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target "${{ matrix.target }}"
+          rustup default stable
+
+      - name: Install ARMv7 cross compiler
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc-arm-linux-gnueabihf
+          echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc" >> "$GITHUB_ENV"
+
+      - name: Download frontend assets
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
 
       - name: Build backend
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target "${{ matrix.target }}"
 
       - name: Package project-local runtime
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_ARCH: ${{ matrix.arch }}
+          RELEASE_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          package="paper-codex-${RELEASE_TAG}-aarch64-unknown-linux-gnu"
+          package="paper-codex-${RELEASE_TAG}-${RELEASE_ARCH}-${RELEASE_TARGET}"
           install -d "${package}/web"
-          install -m 0755 target/release/paper-codex "${package}/paper-codex"
+          install -m 0755 "target/${RELEASE_TARGET}/release/paper-codex" "${package}/paper-codex"
           cp -a web/dist/. "${package}/web/"
           cp deploy/paper-codex.user.service "${package}/"
           cp deploy/paper-codex.user.env.example "${package}/paper-codex.env.example"
@@ -73,22 +140,38 @@ jobs:
           tar -czf "${package}.tar.gz" "${package}"
           sha256sum "${package}.tar.gz" > "${package}.tar.gz.sha256"
 
-      - name: Upload workflow artifacts
+      - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
-          name: paper-codex-${{ github.ref_name }}-aarch64
+          name: release-${{ matrix.arch }}
           path: |
-            paper-codex-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz
-            paper-codex-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz.sha256
+            paper-codex-*.tar.gz
+            paper-codex-*.tar.gz.sha256
           if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release create "${RELEASE_TAG}" \
-            "paper-codex-${RELEASE_TAG}-aarch64-unknown-linux-gnu.tar.gz" \
-            "paper-codex-${RELEASE_TAG}-aarch64-unknown-linux-gnu.tar.gz.sha256" \
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(dist/*.tar.gz dist/*.tar.gz.sha256)
+          test "${#assets[@]}" -eq 6
+          gh release create "${RELEASE_TAG}" "${assets[@]}" \
+            --repo "${GH_REPO}" \
             --verify-tag \
             --generate-notes

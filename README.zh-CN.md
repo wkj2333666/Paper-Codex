@@ -117,11 +117,11 @@ cargo test --all-targets --locked
 scripts/build-release.sh
 ```
 
-GitHub Actions 会在 push 和 pull request 时重复这些检查。推送 `v*` 标签后，Actions 还会构建 ARM64 release 压缩包，因此树莓派用户不需要在本地编译完整的 Rust release。
+GitHub Actions 会在 push 和 pull request 时重复这些检查。推送 `v*` 标签后，Actions 还会为 x86_64、aarch64 和 armv7 Linux 构建 release 压缩包，因此用户不需要在本地编译完整的 Rust release。
 
 ## Release
 
-Release 压缩包包含 ARM64 后端二进制、编译后的网页资源和通用的 `systemd --user` 模板。压缩包与具体部署环境解耦，不包含域名、Caddy 配置、机器路径或私有环境文件。
+Release 压缩包包含对应架构的后端二进制、编译后的网页资源和通用的 `systemd --user` 模板。每个 Release 都提供 x86_64、aarch64 和 armv7 Linux 压缩包。压缩包与具体部署环境解耦，不包含域名、Caddy 配置、机器路径或私有环境文件。
 
 本地部署时，把 release 解压到项目目录，将 `PAPER_CODEX_STATIC_DIR` 指向其中的 `web/`，并把 `paper-workspace/` 与环境文件保留在 release 内容之外。`deploy/` 中的公开模板和 release workflow 是参考实现，请根据自己的操作系统和网络边界调整。
 
