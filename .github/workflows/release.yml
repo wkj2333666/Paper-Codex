@@ -66,6 +66,17 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
 
+      - name: Cache Rust verification state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -99,9 +110,24 @@ jobs:
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
 
+      - name: Cache cross compiler and target build state
+        id: cross-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cross
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/${{ matrix.target }}
+          key: ${{ runner.os }}-cross-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ env.CROSS_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cross-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ env.CROSS_VERSION }}-
+
       - name: Install pinned cross compiler
         run: |
-          cargo +"$RUST_TOOLCHAIN" install cross --version "$CROSS_VERSION" --locked
+          if [ ! -x "$HOME/.cargo/bin/cross" ]; then
+            cargo +"$RUST_TOOLCHAIN" install cross --version "$CROSS_VERSION" --locked
+          fi
 
       - name: Download frontend assets
         uses: actions/download-artifact@v4
