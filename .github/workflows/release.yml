@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -18,18 +19,61 @@ env:
   CROSS_VERSION: "0.2.5"
 
 jobs:
+  cache-gate:
+    name: Check main cross caches
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Verify main cache entries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          LOCK_HASH: ${{ hashFiles('Cargo.lock') }}
+        run: |
+          set -euo pipefail
+          cache_keys="$(gh api "/repos/${REPOSITORY}/actions/caches?ref=refs/heads/main&per_page=100" --jq '.actions_caches[].key')"
+          expected=(
+            "Linux-cross-common-${RUST_TOOLCHAIN}-${CROSS_VERSION}-${LOCK_HASH}"
+          )
+          targets=(
+            x86_64-unknown-linux-gnu
+            aarch64-unknown-linux-gnu
+            armv7-unknown-linux-gnueabihf
+            x86_64-unknown-linux-musl
+            aarch64-unknown-linux-musl
+            riscv64gc-unknown-linux-gnu
+            powerpc64le-unknown-linux-gnu
+            s390x-unknown-linux-gnu
+          )
+          for target in "${targets[@]}"; do
+            expected+=("Linux-cross-target-${target}-${RUST_TOOLCHAIN}-${CROSS_VERSION}-${LOCK_HASH}")
+          done
+          missing=0
+          for key in "${expected[@]}"; do
+            if grep -Fxq "$key" <<<"$cache_keys"; then
+              echo "cache found: $key"
+            else
+              echo "cache missing: $key" >&2
+              missing=1
+            fi
+          done
+          test "$missing" -eq 0
+
   frontend:
     name: Frontend checks and assets
+    needs: [cache-gate]
     runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -48,7 +92,7 @@ jobs:
         run: npm run build
 
       - name: Upload frontend assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: frontend-dist
           path: web/dist
@@ -56,10 +100,11 @@ jobs:
 
   verify:
     name: Rust verification
+    needs: [cache-gate]
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Rust
         run: |
@@ -67,7 +112,7 @@ jobs:
           rustup default "$RUST_TOOLCHAIN"
 
       - name: Cache Rust verification state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry
@@ -104,24 +149,30 @@ jobs:
           - s390x-unknown-linux-gnu
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Rust
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
 
-      - name: Cache cross compiler and target build state
-        id: cross-cache
-        uses: actions/cache/restore@v4
+      - name: Restore common cross compiler and dependency cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/bin/cross
             ~/.cargo/registry
             ~/.cargo/git
-            target/${{ matrix.target }}
-          key: ${{ runner.os }}-cross-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ env.CROSS_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-cross-common-${{ env.RUST_TOOLCHAIN }}-${{ env.CROSS_VERSION }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cross-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ env.CROSS_VERSION }}-
+            ${{ runner.os }}-cross-common-${{ env.RUST_TOOLCHAIN }}-${{ env.CROSS_VERSION }}-
+
+      - name: Restore target build cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: target/${{ matrix.target }}
+          key: ${{ runner.os }}-cross-target-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ env.CROSS_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cross-target-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ env.CROSS_VERSION }}-
 
       - name: Install pinned cross compiler
         run: |
@@ -130,7 +181,7 @@ jobs:
           fi
 
       - name: Download frontend assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: frontend-dist
           path: web/dist
@@ -165,7 +216,7 @@ jobs:
           sha256sum "${package}.tar.gz" > "${package}.tar.gz.sha256"
 
       - name: Upload release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ matrix.target }}
           path: |
@@ -179,7 +230,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-*
           path: dist
