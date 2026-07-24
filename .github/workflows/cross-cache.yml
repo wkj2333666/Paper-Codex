@@ -8,6 +8,7 @@ on:
       - Cargo.lock
       - .github/workflows/cross-cache.yml
       - .github/workflows/release.yml
+      - .github/workflows/ci.yml
   workflow_dispatch:
 
 permissions:
@@ -19,7 +20,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_TOOLCHAIN: stable
+  RUST_TOOLCHAIN: "1.91.1"
   CROSS_VERSION: "0.2.5"
 
 jobs:
