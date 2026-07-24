@@ -1,0 +1,70 @@
+name: Prime cross build cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/cross-cache.yml
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-cache-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: stable
+  CROSS_VERSION: "0.2.5"
+
+jobs:
+  prime:
+    name: Prime ${{ matrix.target }} cross cache
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - armv7-unknown-linux-gnueabihf
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - riscv64gc-unknown-linux-gnu
+          - powerpc64le-unknown-linux-gnu
+          - s390x-unknown-linux-gnu
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+
+      - name: Cache cross compiler and target build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cross
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/${{ matrix.target }}
+          key: ${{ runner.os }}-cross-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ env.CROSS_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cross-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ env.CROSS_VERSION }}-
+
+      - name: Install pinned cross compiler
+        run: |
+          if [ ! -x "$HOME/.cargo/bin/cross" ]; then
+            cargo +"$RUST_TOOLCHAIN" install cross --version "$CROSS_VERSION" --locked
+          fi
+
+      - name: Build backend to prime cache
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cross +"$RUST_TOOLCHAIN" build --release --locked --target "$TARGET"

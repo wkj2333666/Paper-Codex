@@ -112,7 +112,7 @@ jobs:
 
       - name: Cache cross compiler and target build state
         id: cross-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/bin/cross
