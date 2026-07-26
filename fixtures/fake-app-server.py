@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 
 pending_turn = None
@@ -35,6 +36,8 @@ for raw in sys.stdin:
         pending_turn = f"turn-fake-{turn_counter}"
         send({"id": msg["id"], "result": {"turn": {"id": pending_turn}}})
         text = msg["params"]["input"][0]["text"]
+        if "runtime-tmp" in text:
+            send({"method": "test/runtime-tmp", "params": {"path": os.environ.get("TMPDIR")}})
         if "settings" in text:
             send({"method": "test/turn-params", "params": msg["params"]})
         if "fail-me" in text:

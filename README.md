@@ -75,7 +75,7 @@ set +a
 ./target/release/paper-codex
 ```
 
-Open <http://127.0.0.1:3000>. The first run creates the Git-ignored `paper-workspace/` directory for PDFs, extracted text, indexes, notes, and the SQLite database.
+Open <http://127.0.0.1:3000>. The first run creates the Git-ignored `paper-workspace/` directory for PDFs, extracted text, indexes, notes, and the SQLite database. Codex sandbox temporary state uses the Git-ignored `.runtime/tmp/` directory by default.
 
 ## Codex setup
 
@@ -90,6 +90,7 @@ The Codex panel exposes conversation scope, model, reasoning effort, and service
 ## Data and privacy
 
 - Runtime data lives in `paper-workspace/`, which is ignored by Git.
+- Re-creatable Codex sandbox state lives in `.runtime/tmp/`, which is also ignored by Git.
 - Uploaded PDFs, extracted Markdown, SQLite indexes, notes, and conversation state may contain private research material.
 - `paper-codex.env` contains secrets and is ignored; never commit it.
 - The minimal service listens on localhost. If you expose it to another device, provide your own encrypted tunnel, VPN, or reverse proxy and authentication policy.

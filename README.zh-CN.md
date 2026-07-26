@@ -75,7 +75,7 @@ set +a
 ./target/release/paper-codex
 ```
 
-打开 <http://127.0.0.1:3000>。首次运行会创建 Git 忽略的 `paper-workspace/`，用于保存 PDF、抽取文本、索引、笔记和 SQLite 数据库。
+打开 <http://127.0.0.1:3000>。首次运行会创建 Git 忽略的 `paper-workspace/`，用于保存 PDF、抽取文本、索引、笔记和 SQLite 数据库。Codex 沙箱的临时状态默认保存在同样被 Git 忽略的 `.runtime/tmp/`。
 
 ## Codex 配置
 
@@ -90,6 +90,7 @@ codex login
 ## 数据与隐私
 
 - 运行数据保存在 Git 忽略的 `paper-workspace/` 中。
+- 可重新生成的 Codex 沙箱状态保存在同样被 Git 忽略的 `.runtime/tmp/` 中。
 - 上传的 PDF、抽取后的 Markdown、SQLite 索引、笔记和对话状态可能包含私密研究资料。
 - `paper-codex.env` 包含密钥并且已被 Git 忽略，不要提交它。
 - 最小服务只监听本机回环地址。如果需要从其他设备访问，请自行提供加密隧道、VPN 或反向代理，并制定访问控制策略。

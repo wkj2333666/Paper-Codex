@@ -12,6 +12,7 @@ fn fake_command() -> CodexCommand {
             env!("CARGO_MANIFEST_DIR")
         )],
         codex_home: None,
+        runtime_tmp: None,
     }
 }
 
@@ -30,6 +31,17 @@ async fn next_test_turn_params(
         let event = events.recv().await.unwrap();
         if event.kind == "test/turn-params" {
             return event.payload["params"].clone();
+        }
+    }
+}
+
+async fn next_test_runtime_tmp(
+    mut events: tokio::sync::broadcast::Receiver<paper_codex::codex::CodexEvent>,
+) -> PathBuf {
+    loop {
+        let event = events.recv().await.unwrap();
+        if event.kind == "test/runtime-tmp" {
+            return PathBuf::from(event.payload["params"]["path"].as_str().unwrap());
         }
     }
 }
@@ -246,4 +258,47 @@ async fn omits_service_tier_for_standard_speed() {
         .await
         .unwrap();
     assert!(!payload.as_object().unwrap().contains_key("serviceTier"));
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn rebuilds_project_local_runtime_tmp_before_each_turn() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime_tmp = root.path().join(".runtime/tmp");
+    let mut command = fake_command();
+    command.runtime_tmp = Some(runtime_tmp.clone());
+    let runtime = CodexRuntime::spawn(command).await.unwrap();
+
+    tokio::fs::remove_dir_all(&runtime_tmp).await.unwrap();
+    assert!(!runtime_tmp.exists());
+
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let reported_tmp = next_test_runtime_tmp(runtime.subscribe());
+    runtime
+        .run_turn(
+            CodexTurn {
+                thread_id: None,
+                cwd: root.path().to_path_buf(),
+                prompt: "runtime-tmp".into(),
+                output_schema: None,
+                settings: standard_settings(),
+            },
+            cancel_rx,
+        )
+        .await
+        .unwrap();
+
+    let reported_tmp = tokio::time::timeout(std::time::Duration::from_secs(1), reported_tmp)
+        .await
+        .unwrap();
+    assert_eq!(reported_tmp, runtime_tmp);
+    assert!(runtime_tmp.exists());
+    assert!(
+        runtime_tmp
+            .join(format!(
+                "codex-bwrap-synthetic-mount-targets-{}",
+                unsafe { libc::geteuid() }
+            ))
+            .is_dir()
+    );
 }

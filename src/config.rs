@@ -9,6 +9,7 @@ pub struct Config {
     pub database_url: String,
     pub codex_bin: PathBuf,
     pub codex_home: Option<PathBuf>,
+    pub runtime_tmp: PathBuf,
     pub password_hash: String,
     pub jwt_secret: String,
     pub max_upload_bytes: usize,
@@ -44,6 +45,10 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("codex")),
             codex_home: env::var_os("PAPER_CODEX_CODEX_HOME").map(PathBuf::from),
+            runtime_tmp: env::var_os("PAPER_CODEX_RUNTIME_TMP")
+                .map(PathBuf::from)
+                .map(|path| if path.is_absolute() { path } else { root.join(path) })
+                .unwrap_or_else(|| root.join(".runtime/tmp")),
             password_hash: env::var("PAPER_CODEX_PASSWORD_HASH")
                 .context("PAPER_CODEX_PASSWORD_HASH is required")?,
             jwt_secret: env::var("PAPER_CODEX_JWT_SECRET")

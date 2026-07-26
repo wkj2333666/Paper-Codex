@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
     let codex = CodexRuntime::spawn(CodexCommand::app_server(
         config.codex_bin.clone(),
         config.codex_home.clone(),
+        Some(config.runtime_tmp.clone()),
     ))
     .await?;
     let engine = TaskEngine::start(db.clone(), workspace.clone(), acquirer, codex.clone()).await?;

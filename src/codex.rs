@@ -131,16 +131,50 @@ pub struct CodexCommand {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub codex_home: Option<PathBuf>,
+    pub runtime_tmp: Option<PathBuf>,
 }
 
 impl CodexCommand {
-    pub fn app_server(program: PathBuf, codex_home: Option<PathBuf>) -> Self {
+    pub fn app_server(
+        program: PathBuf,
+        codex_home: Option<PathBuf>,
+        runtime_tmp: Option<PathBuf>,
+    ) -> Self {
         Self {
             program,
             args: vec!["app-server".into(), "--listen".into(), "stdio://".into()],
             codex_home,
+            runtime_tmp,
         }
     }
+
+    async fn prepare_runtime_tmp(&self) -> Result<()> {
+        let Some(runtime_tmp) = &self.runtime_tmp else {
+            return Ok(());
+        };
+        create_private_dir(runtime_tmp).await?;
+        #[cfg(target_os = "linux")]
+        create_private_dir(&runtime_tmp.join(format!(
+            "codex-bwrap-synthetic-mount-targets-{}",
+            unsafe { libc::geteuid() }
+        )))
+        .await?;
+        Ok(())
+    }
+}
+
+async fn create_private_dir(path: &std::path::Path) -> Result<()> {
+    tokio::fs::create_dir_all(path)
+        .await
+        .with_context(|| format!("create runtime temp directory {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .await
+            .with_context(|| format!("protect runtime temp directory {}", path.display()))?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +212,7 @@ struct Session {
 
 impl Session {
     async fn spawn(spec: &CodexCommand) -> Result<(Self, CodexCapabilities)> {
+        spec.prepare_runtime_tmp().await?;
         let mut command = Command::new(&spec.program);
         command
             .args(&spec.args)
@@ -187,6 +222,9 @@ impl Session {
             .kill_on_drop(true);
         if let Some(home) = &spec.codex_home {
             command.env("CODEX_HOME", home);
+        }
+        if let Some(runtime_tmp) = &spec.runtime_tmp {
+            command.env("TMPDIR", runtime_tmp);
         }
         let mut child = command
             .spawn()
@@ -343,6 +381,7 @@ impl CodexRuntime {
         mut cancel: watch::Receiver<bool>,
         turn_events: Option<&mpsc::UnboundedSender<CodexEvent>>,
     ) -> Result<CodexOutcome> {
+        self.command.prepare_runtime_tmp().await?;
         let mut guard = self.session.lock().await;
         if guard.is_none() {
             let (session, _capabilities) = Session::spawn(&self.command).await?;

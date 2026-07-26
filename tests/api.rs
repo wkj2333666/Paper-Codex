@@ -23,6 +23,7 @@ fn fake_command() -> CodexCommand {
             env!("CARGO_MANIFEST_DIR")
         )],
         codex_home: None,
+        runtime_tmp: None,
     }
 }
 
