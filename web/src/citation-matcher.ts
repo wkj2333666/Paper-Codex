@@ -1,4 +1,4 @@
-export type CitationMatchStatus = "exact" | "fuzzy" | "page-only" | "stale"
+export type CitationMatchStatus = "exact" | "fuzzy" | "equation" | "page-only" | "stale"
 
 export interface CitationLocator {
   quote: string

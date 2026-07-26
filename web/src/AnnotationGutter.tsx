@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { ChevronDown, ChevronUp, Eye, EyeOff, GripVertical, Pin, PinOff } from "lucide-react"
 import { placeAnnotationCards } from "./annotation-layout"
 import type { CitationMatchStatus } from "./citation-matcher"
+import { equationNumber } from "./equation-locator"
 import type { MessageCitation } from "./types"
 
 export interface CardPreference { collapsed: boolean; hidden: boolean; offset: number }
@@ -35,8 +36,14 @@ function loadPreference(id: string): CardPreference {
 const statusLabel: Record<CitationMatchStatus, string> = {
   exact: "已定位原文",
   fuzzy: "近似定位",
+  equation: "已定位公式",
   "page-only": "已定位页码",
   stale: "论文版本已变化",
+}
+
+export function annotationCardTitle(citation: MessageCitation): string {
+  const number = equationNumber(citation.locator)
+  return number ? `式 (${number}) · Codex 说明` : `第 ${citation.page} 页 · Codex 说明`
 }
 
 export function AnnotationGutter({ items, focusedCitationId, onFocus }: {
@@ -116,7 +123,7 @@ export function AnnotationGutter({ items, focusedCitationId, onFocus }: {
         updatePreference(id, { collapsed: !preference.collapsed })
       }
       return <div className={`annotation-card${preference.collapsed ? " collapsed" : ""}${item.focused ? " focused" : ""}`} ref={card => { cardRefs.current[id] = card }} style={{ top }} key={id}>
-        <header onPointerDown={startDrag} onClick={toggle}><GripVertical/><span>第 {item.citation.page} 页 · Codex 说明</span><em>{statusLabel[item.status]}</em>
+        <header onPointerDown={startDrag} onClick={toggle}><GripVertical/><span>{annotationCardTitle(item.citation)}</span><em>{statusLabel[item.status]}</em>
           <button className="annotation-pin" aria-label={item.pinned ? "取消固定" : "固定说明"} title={item.pinned ? "取消固定" : "固定说明"} onPointerDown={event => event.stopPropagation()} onClick={item.pinned ? item.onUnpin : item.onPin}>{item.pinned ? <PinOff/> : <Pin/>}</button>
           <button className="annotation-toggle" aria-label={preference.collapsed ? "展开说明" : "缩小说明"} onPointerDown={event => event.stopPropagation()} onClick={() => updatePreference(id, { collapsed: !preference.collapsed })}>{preference.collapsed ? <ChevronDown/> : <ChevronUp/>}</button>
           <button className="annotation-hide" aria-label="隐藏说明" onPointerDown={event => event.stopPropagation()} onClick={() => updatePreference(id, { hidden: true })}><EyeOff/></button>

@@ -3,6 +3,7 @@ import { getDocument, GlobalWorkerOptions, TextLayer, type PDFDocumentProxy } fr
 import { AnnotationGutter } from "./AnnotationGutter"
 import { api } from "./api"
 import { matchCitationText, type CitationMatchStatus } from "./citation-matcher"
+import { equationNumber, formulaOutlineRegion, locateEquationRegion } from "./equation-locator"
 import { mergeHighlightRects, pdfTextRangeToPageRect, textLayerScaleStyle, textLayerViewportScale } from "./pdf-highlight-geometry"
 import { visiblePageWindow } from "./pdf-window"
 import type { ResolvedTheme } from "./theme"
@@ -156,7 +157,7 @@ function PdfPage({ document: pdfDocument, pageNumber, citations, matches, focuse
       const measureCanvas = globalThis.document.createElement("canvas").getContext("2d")
       citations.forEach(citation => {
         const located = matchCitationText(citation, textItems.map(item => item.str), currentRevision)
-        const rects = mergeHighlightRects(located.ranges.flatMap(range => {
+        const textRects = mergeHighlightRects(located.ranges.flatMap(range => {
           const item = textItems[range.spanIndex]
           if (!item) return []
           const span = spans[range.spanIndex]
@@ -168,7 +169,16 @@ function PdfPage({ document: pdfDocument, pageNumber, citations, matches, focuse
           const rect = pdfTextRangeToPageRect(item, pageWidth, pageHeight, range.start, range.end, measure)
           return rect ? [rect] : []
         }))
-        onMatch(citation.id, { status: located.status, rects, anchorRatio: rects[0]?.top ?? 0.08 })
+        if (equationNumber(citation.locator)) {
+          const formulaRegion = textRects.length
+            ? formulaOutlineRegion(textRects)
+            : locateEquationRegion(citation, textItems, pageWidth, pageHeight, currentRevision)
+          const rects = formulaRegion ? [formulaRegion] : []
+          const status = located.status === "stale" ? "stale" : formulaRegion ? "equation" : "page-only"
+          onMatch(citation.id, { status, rects, anchorRatio: rects[0]?.top ?? 0.08 })
+          return
+        }
+        onMatch(citation.id, { status: located.status, rects: textRects, anchorRatio: textRects[0]?.top ?? 0.08 })
       })
     }).catch(() => {})
     return () => { active = false; renderTask?.cancel(); textLayer?.cancel() }
@@ -178,7 +188,7 @@ function PdfPage({ document: pdfDocument, pageNumber, citations, matches, focuse
 }
 
 function CitationHighlights({ matches, focusedCitationId }: { matches: Array<{ citation: MessageCitation; match: VisualMatch }>; focusedCitationId: string | null }) {
-  return <>{matches.flatMap(({ citation, match }) => match.rects.length
-    ? match.rects.map((rect, index) => <span className={`citation-highlight${citation.id === focusedCitationId ? " focused" : ""}`} data-citation-id={citation.id} key={`${citation.id}:${index}`} style={{ left: `${rect.left * 100}%`, top: `${rect.top * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` }}/>)
-    : <span className="citation-location-note" data-citation-id={citation.id} key={`${citation.id}:note`} style={{ top: `${Math.min(88, 8 + matches.findIndex(item => item.citation.id === citation.id) * 8)}%` }}>{match.status === "stale" ? `第 ${citation.page} 页 · 版本已变化` : `第 ${citation.page} 页 · 未找到精确文本`}</span>)} </>
+  return <>{matches.flatMap(({ citation, match }) => match.rects.map((rect, index) =>
+    <span className={`${match.status === "equation" ? "citation-formula-outline" : "citation-highlight"}${citation.id === focusedCitationId ? " focused" : ""}`} data-citation-id={citation.id} key={`${citation.id}:${index}`} style={{ left: `${rect.left * 100}%`, top: `${rect.top * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` }}/>,
+  ))}</>
 }

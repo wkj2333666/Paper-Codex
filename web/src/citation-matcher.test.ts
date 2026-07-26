@@ -34,10 +34,16 @@ describe("matchCitationText", () => {
     expect(matchCitationText({ quote: "unrelated", revision: "old" }, ["unrelated"], "new").ranges).toEqual([])
   })
 
-  it("does not pretend a spatial fraction is contiguous PDF text", () => {
+  it("does not pretend an annotated spatial equation is contiguous PDF text", () => {
     expect(matchCitationText({
-      quote: "H(zt) = 1/|Mt| ∑ℓ∈Mt H(ℓ)(zt)",
+      quote: "JIG(at | zt) = IG(at; zt) − C(at | zt)",
       revision: "r1",
-    }, ["H(zt) = 1", "|Mt|", "∑", "ℓ∈Mt H(ℓ)(zt)", "(3)"], "r1").status).toBe("page-only")
+    }, [
+      "JIG(at | zt) = IG(at; zt)",
+      "Information Gain",
+      "− C(at | zt)",
+      "Immediate Cost",
+      "(5)",
+    ], "r1").status).toBe("page-only")
   })
 })
