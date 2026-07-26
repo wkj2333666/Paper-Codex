@@ -1,10 +1,11 @@
-import { matchCitationText, type CitationLocator } from "./citation-matcher"
+import { matchCitationText } from "./citation-matcher"
 import { pdfTextRangeToPageRect, type PageHighlightRect, type PdfTextItemLike } from "./pdf-highlight-geometry"
 
-export interface EquationCitationLocator extends CitationLocator {
+export interface EquationCitationLocator {
   locator: string | null
   prefix: string
   suffix: string
+  revision: string
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
