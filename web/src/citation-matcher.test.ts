@@ -33,4 +33,11 @@ describe("matchCitationText", () => {
     expect(matchCitationText({ quote: "missing sentence", revision: "r1" }, ["unrelated"], "r1").ranges).toEqual([])
     expect(matchCitationText({ quote: "unrelated", revision: "old" }, ["unrelated"], "new").ranges).toEqual([])
   })
+
+  it("does not pretend a spatial fraction is contiguous PDF text", () => {
+    expect(matchCitationText({
+      quote: "H(zt) = 1/|Mt| ∑ℓ∈Mt H(ℓ)(zt)",
+      revision: "r1",
+    }, ["H(zt) = 1", "|Mt|", "∑", "ℓ∈Mt H(ℓ)(zt)", "(3)"], "r1").status).toBe("page-only")
+  })
 })

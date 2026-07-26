@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { citationsForPaper, latestAnswerCitations } from "./citation-overlay"
-import { defaultCardPreference, isCompactAnnotationGutter } from "./AnnotationGutter"
+import { annotationCardTitle, defaultCardPreference, isCompactAnnotationGutter } from "./AnnotationGutter"
 import type { ChatMessage, MessageCitation } from "./types"
 
 const citation = (id: string, paper_id = "p1", page = 1): MessageCitation => ({
@@ -41,5 +41,10 @@ describe("citation overlay selectors", () => {
     expect(isCompactAnnotationGutter(items, {})).toBe(true)
     expect(isCompactAnnotationGutter(items, { a: { ...defaultCardPreference, collapsed: false } })).toBe(false)
     expect(isCompactAnnotationGutter(items, { a: { ...defaultCardPreference, hidden: true } })).toBe(true)
+  })
+
+  it("distinguishes formula cards on the same page by equation number", () => {
+    expect(annotationCardTitle({ ...citation("formula", "p1", 4), locator: "第 4 页，式(4)" })).toBe("式 (4) · Codex 说明")
+    expect(annotationCardTitle(citation("prose", "p1", 4))).toBe("第 4 页 · Codex 说明")
   })
 })
