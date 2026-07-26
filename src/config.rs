@@ -47,7 +47,13 @@ impl Config {
             codex_home: env::var_os("PAPER_CODEX_CODEX_HOME").map(PathBuf::from),
             runtime_tmp: env::var_os("PAPER_CODEX_RUNTIME_TMP")
                 .map(PathBuf::from)
-                .map(|path| if path.is_absolute() { path } else { root.join(path) })
+                .map(|path| {
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        root.join(path)
+                    }
+                })
                 .unwrap_or_else(|| root.join(".runtime/tmp")),
             password_hash: env::var("PAPER_CODEX_PASSWORD_HASH")
                 .context("PAPER_CODEX_PASSWORD_HASH is required")?,

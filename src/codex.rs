@@ -154,10 +154,11 @@ impl CodexCommand {
         };
         create_private_dir(runtime_tmp).await?;
         #[cfg(target_os = "linux")]
-        create_private_dir(&runtime_tmp.join(format!(
-            "codex-bwrap-synthetic-mount-targets-{}",
-            unsafe { libc::geteuid() }
-        )))
+        create_private_dir(
+            &runtime_tmp.join(format!("codex-bwrap-synthetic-mount-targets-{}", unsafe {
+                libc::geteuid()
+            })),
+        )
         .await?;
         Ok(())
     }

@@ -293,12 +293,9 @@ async fn rebuilds_project_local_runtime_tmp_before_each_turn() {
         .unwrap();
     assert_eq!(reported_tmp, runtime_tmp);
     assert!(runtime_tmp.exists());
-    assert!(
-        runtime_tmp
-            .join(format!(
-                "codex-bwrap-synthetic-mount-targets-{}",
-                unsafe { libc::geteuid() }
-            ))
-            .is_dir()
-    );
+    assert!(runtime_tmp
+        .join(format!("codex-bwrap-synthetic-mount-targets-{}", unsafe {
+            libc::geteuid()
+        }))
+        .is_dir());
 }
