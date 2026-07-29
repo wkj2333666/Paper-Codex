@@ -1,6 +1,8 @@
 use crate::{
     conversations::ConversationScope,
     db::Database,
+    research::{CandidateStatus, EvidenceLevel},
+    research_store::ResearchStore,
     workspace::{atomic_write, safe_key, Workspace},
 };
 use anyhow::{bail, Context, Result};
@@ -34,11 +36,21 @@ pub struct ContextBundle {
 pub struct ConversationContextBuilder {
     db: Database,
     workspace: Workspace,
+    research: Option<ResearchStore>,
 }
 
 impl ConversationContextBuilder {
     pub fn new(db: Database, workspace: Workspace) -> Self {
-        Self { db, workspace }
+        Self {
+            db,
+            workspace,
+            research: None,
+        }
+    }
+
+    pub fn with_research_store(mut self, research: ResearchStore) -> Self {
+        self.research = Some(research);
+        self
     }
 
     pub async fn refresh(
@@ -177,6 +189,22 @@ impl ConversationContextBuilder {
             summary.push_str(&scope_summary.join("\n"));
             summary.push('\n');
         }
+        if let (Some(research), Some(project_id)) = (&self.research, exact_project_scope(scopes)) {
+            let candidates = research.list_project_candidates(project_id, false).await?;
+            if !candidates.is_empty() {
+                summary.push_str("\n## 项目候选论文（最多 20 条，仅摘要索引）\n\n");
+                for candidate in candidates.into_iter().take(20) {
+                    summary.push_str(&format!(
+                        "- 候选：{}（work_id `{}`；状态：{}；证据：{}）\n  - 推荐原因：{}\n",
+                        candidate.work.metadata.title,
+                        candidate.work.id,
+                        candidate_status_name(candidate.status),
+                        evidence_level_name(candidate.evidence_level),
+                        candidate.relevance_reason.trim(),
+                    ));
+                }
+            }
+        }
         summary.push_str("\n## 论文\n");
         for paper in &papers {
             summary.push_str(&format!(
@@ -218,6 +246,30 @@ impl ConversationContextBuilder {
             }
         }
         Ok(paper_ids)
+    }
+}
+
+fn exact_project_scope(scopes: &[ConversationScope]) -> Option<&str> {
+    if scopes.len() != 1 || scopes[0].scope_type != "project" {
+        return None;
+    }
+    scopes[0].scope_id.as_deref()
+}
+
+fn candidate_status_name(status: CandidateStatus) -> &'static str {
+    match status {
+        CandidateStatus::Candidate => "candidate",
+        CandidateStatus::Importing => "importing",
+        CandidateStatus::Imported => "imported",
+        CandidateStatus::Dismissed => "dismissed",
+    }
+}
+
+fn evidence_level_name(level: EvidenceLevel) -> &'static str {
+    match level {
+        EvidenceLevel::Metadata => "metadata",
+        EvidenceLevel::Abstract => "abstract",
+        EvidenceLevel::Fulltext => "fulltext",
     }
 }
 

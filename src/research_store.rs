@@ -3,7 +3,7 @@ use crate::{
     research::{
         canonical_arxiv_id, canonical_doi, canonical_key, canonical_openalex_id, CandidateSource,
         CandidateStatus, DiscoveredWork, LiteratureSearchResult, LiteratureSearchRun,
-        ProjectCandidate, ResearchTrigger, SearchRunState, WorkMetadata,
+        MessageCandidateCitation, ProjectCandidate, ResearchTrigger, SearchRunState, WorkMetadata,
     },
 };
 use anyhow::{bail, Context, Result};
@@ -476,6 +476,88 @@ impl ResearchStore {
                 abstract_text: candidate.work.metadata.abstract_text,
                 pdf_url: candidate.work.metadata.pdf_url,
             }))
+    }
+
+    pub async fn work_available_to_message(
+        &self,
+        project_id: &str,
+        message_id: &str,
+        work_id: &str,
+    ) -> Result<bool> {
+        self.require_project(project_id).await?;
+        let available: i64 = sqlx::query_scalar(
+            r#"SELECT CASE WHEN
+                 EXISTS (
+                   SELECT 1 FROM project_candidates
+                   WHERE project_id=?1 AND work_id=?3
+                 )
+                 OR EXISTS (
+                   SELECT 1
+                   FROM literature_search_runs runs
+                   JOIN literature_search_results results
+                     ON results.search_run_id=runs.id
+                   WHERE runs.project_id=?1
+                     AND runs.message_id=?2
+                     AND results.work_id=?3
+                 )
+               THEN 1 ELSE 0 END"#,
+        )
+        .bind(project_id)
+        .bind(message_id)
+        .bind(work_id)
+        .fetch_one(self.db.pool())
+        .await?;
+        Ok(available != 0)
+    }
+
+    pub async fn persist_message_candidate_citations(
+        &self,
+        message_id: &str,
+        project_id: &str,
+        citations: &[crate::prompts::ConversationCandidateCitation],
+    ) -> Result<Vec<MessageCandidateCitation>> {
+        self.require_project(project_id).await?;
+        let mut transaction = self.db.pool().begin().await?;
+        sqlx::query("DELETE FROM message_candidate_citations WHERE message_id=?")
+            .bind(message_id)
+            .execute(&mut *transaction)
+            .await?;
+        for citation in citations {
+            sqlx::query(
+                r#"INSERT INTO message_candidate_citations(
+                   id,message_id,project_id,work_id,source_url,evidence_level,quote,explanation
+                   ) VALUES(?,?,?,?,?,?,?,?)"#,
+            )
+            .bind(format!("{message_id}:candidate:{}", citation.id))
+            .bind(message_id)
+            .bind(project_id)
+            .bind(&citation.work_id)
+            .bind(&citation.source_url)
+            .bind(citation.evidence_level)
+            .bind(&citation.quote)
+            .bind(&citation.explanation)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        self.message_candidate_citations(message_id).await
+    }
+
+    pub async fn message_candidate_citations(
+        &self,
+        message_id: &str,
+    ) -> Result<Vec<MessageCandidateCitation>> {
+        Ok(sqlx::query_as(
+            r#"SELECT c.id,c.message_id,c.project_id,c.work_id,w.title,
+               c.source_url,c.evidence_level,c.quote,c.explanation,c.created_at
+               FROM message_candidate_citations c
+               JOIN discovered_works w ON w.id=c.work_id
+               WHERE c.message_id=?
+               ORDER BY c.rowid"#,
+        )
+        .bind(message_id)
+        .fetch_all(self.db.pool())
+        .await?)
     }
 
     pub async fn set_work_evidence(

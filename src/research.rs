@@ -143,12 +143,13 @@ pub struct CandidateSource {
     pub pdf_url: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MessageCandidateCitation {
     pub id: String,
     pub message_id: String,
     pub project_id: String,
     pub work_id: String,
+    pub title: String,
     pub source_url: String,
     pub evidence_level: EvidenceLevel,
     pub quote: String,

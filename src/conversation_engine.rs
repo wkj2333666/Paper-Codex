@@ -1,12 +1,16 @@
 use crate::{
     codex::{CodexCapabilities, CodexEvent, CodexRunSettings, CodexRuntime, CodexTurn},
     conversation_context::ConversationContextBuilder,
-    conversations::{ChatMessage, Conversation, ConversationEvent, ConversationScopeInput},
+    conversations::{
+        ChatMessage, Conversation, ConversationEvent, ConversationScope, ConversationScopeInput,
+    },
     db::Database,
     prompts::{
-        conversation_answer_schema, conversation_question_prompt, validate_conversation_answer,
-        ConversationSource,
+        conversation_answer_schema, conversation_question_prompt_with_research,
+        validate_conversation_answer_with_candidates, ConversationSource,
     },
+    research::{ResearchMode, ResearchTrigger},
+    research_service::{ProjectResearchToolHandler, ResearchService},
     workspace::Workspace,
 };
 use anyhow::{bail, Context, Result};
@@ -18,6 +22,7 @@ pub struct ConversationEngine {
     pub db: Database,
     contexts: ConversationContextBuilder,
     codex: Arc<CodexRuntime>,
+    research: Option<Arc<ResearchService>>,
     queue: mpsc::Sender<String>,
     events: broadcast::Sender<ConversationEvent>,
     cancellations: Mutex<HashMap<String, watch::Sender<bool>>>,
@@ -138,14 +143,29 @@ impl ConversationEngine {
         workspace: Workspace,
         codex: Arc<CodexRuntime>,
     ) -> Result<Arc<Self>> {
+        Self::start_with_research(db, workspace, codex, None).await
+    }
+
+    pub async fn start_with_research(
+        db: Database,
+        workspace: Workspace,
+        codex: Arc<CodexRuntime>,
+        research: Option<Arc<ResearchService>>,
+    ) -> Result<Arc<Self>> {
         Self::recover_states(&db).await?;
         let queued = db.queued_assistant_messages().await?;
         let (queue, mut receiver) = mpsc::channel::<String>(128);
         let (events, _) = broadcast::channel(1024);
+        let contexts = match research.as_ref() {
+            Some(research) => ConversationContextBuilder::new(db.clone(), workspace)
+                .with_research_store(research.store().clone()),
+            None => ConversationContextBuilder::new(db.clone(), workspace),
+        };
         let engine = Arc::new(Self {
-            contexts: ConversationContextBuilder::new(db.clone(), workspace),
+            contexts,
             db,
             codex,
+            research,
             queue,
             events,
             cancellations: Mutex::new(HashMap::new()),
@@ -221,6 +241,16 @@ impl ConversationEngine {
         conversation_id: &str,
         question: &str,
     ) -> Result<ChatMessage> {
+        self.enqueue_message_with_research_mode(conversation_id, question, ResearchMode::Auto)
+            .await
+    }
+
+    pub async fn enqueue_message_with_research_mode(
+        &self,
+        conversation_id: &str,
+        question: &str,
+        research_mode: ResearchMode,
+    ) -> Result<ChatMessage> {
         let question = question.trim();
         if question.is_empty() {
             bail!("question cannot be empty");
@@ -241,17 +271,30 @@ impl ConversationEngine {
         {
             bail!("conversation is busy");
         }
-        if self
-            .db
-            .conversation_scopes(conversation_id)
-            .await?
-            .is_empty()
-        {
+        let scopes = self.db.conversation_scopes(conversation_id).await?;
+        if scopes.is_empty() {
             bail!("conversation has no context scope");
+        }
+        if research_mode == ResearchMode::Explicit {
+            if exact_project_id(&scopes).is_none() {
+                bail!("显式文献检索需要唯一的项目作用域");
+            }
+            if self.research.is_none() {
+                bail!("项目文献检索服务不可用");
+            }
+            if !self.codex.capabilities().supports_dynamic_tools {
+                bail!("当前 Codex 不支持项目文献检索工具");
+            }
         }
         let user = self
             .db
-            .append_chat_message(conversation_id, "user", question, "completed")
+            .append_chat_message_with_research_mode(
+                conversation_id,
+                "user",
+                question,
+                "completed",
+                research_mode,
+            )
             .await?;
         let assistant = self
             .db
@@ -380,12 +423,49 @@ impl ConversationEngine {
         )
         .await?;
         let (turn_event_tx, mut turn_event_rx) = mpsc::unbounded_channel();
+        let project_id = exact_project_id(&scopes);
+        let research_handler = match (project_id.as_deref(), self.research.as_ref()) {
+            (Some(project_id), Some(research))
+                if self.codex.capabilities().supports_dynamic_tools =>
+            {
+                Some(Arc::new(ProjectResearchToolHandler::new(
+                    research.clone(),
+                    project_id.to_owned(),
+                    conversation.id.clone(),
+                    question.id.clone(),
+                    if question.research_mode == ResearchMode::Explicit {
+                        ResearchTrigger::Explicit
+                    } else {
+                        ResearchTrigger::Automatic
+                    },
+                    cancel.clone(),
+                    turn_event_tx.clone(),
+                )))
+            }
+            _ => None,
+        };
+        if research_handler.is_some() {
+            self.emit(
+                &conversation.id,
+                Some(&assistant.id),
+                "answer-progress",
+                json!({
+                    "phase":"research-planning",
+                    "label":"Codex 正在判断是否需要检索外部论文…"
+                }),
+            )
+            .await?;
+        }
         let mut preview = AnswerPreview::default();
-        let turn = self.codex.run_turn_with_events(
+        let turn = self.codex.run_turn_with_events_and_tools(
             CodexTurn {
                 thread_id: conversation.thread_id.clone(),
                 cwd: bundle.root.clone(),
-                prompt: conversation_question_prompt(&question.content),
+                prompt: conversation_question_prompt_with_research(
+                    &question.content,
+                    question.research_mode,
+                    research_handler.is_some(),
+                ),
                 output_schema: Some(conversation_answer_schema()),
                 settings: conversation
                     .model
@@ -402,6 +482,7 @@ impl ConversationEngine {
             },
             cancel,
             turn_event_tx,
+            research_handler.as_ref().map(|handler| handler.session()),
         );
         tokio::pin!(turn);
         let outcome = loop {
@@ -435,6 +516,13 @@ impl ConversationEngine {
                 .await?;
             bail!("Codex turn ended with {}", outcome.status);
         }
+        if question.research_mode == ResearchMode::Explicit
+            && !research_handler
+                .as_ref()
+                .is_some_and(|handler| handler.search_attempted())
+        {
+            bail!("显式文献检索未执行检索工具");
+        }
         let sources = bundle
             .papers
             .iter()
@@ -444,12 +532,17 @@ impl ConversationEngine {
                 page_count: paper.page_count,
             })
             .collect::<Vec<_>>();
-        let answer = validate_conversation_answer(
+        let candidate_evidence = match research_handler.as_ref() {
+            Some(handler) => handler.evidence().await,
+            None => HashMap::new(),
+        };
+        let answer = validate_conversation_answer_with_candidates(
             outcome
                 .answer
                 .context("Codex returned no structured answer")?,
             &question.content,
             &sources,
+            &candidate_evidence,
         )?;
         let generated_title = should_generate_conversation_title(&conversation.title)
             .then(|| answer.title.clone())
@@ -458,6 +551,21 @@ impl ConversationEngine {
             .db
             .persist_conversation_answer(&assistant.id, &answer)
             .await?;
+        let candidate_citations = if answer.candidate_citations.is_empty() {
+            Vec::new()
+        } else {
+            let project_id = project_id.context("候选论文引用只能写入唯一的项目作用域")?;
+            self.research
+                .as_ref()
+                .context("项目文献检索服务不可用")?
+                .store()
+                .persist_message_candidate_citations(
+                    &assistant.id,
+                    &project_id,
+                    &answer.candidate_citations,
+                )
+                .await?
+        };
         if let Some(title) = generated_title.as_deref() {
             self.db
                 .update_conversation(&conversation.id, Some(title), None)
@@ -479,7 +587,12 @@ impl ConversationEngine {
             &conversation.id,
             Some(&assistant.id),
             "answer-completed",
-            json!({"answer_markdown":answer.answer_markdown,"citations":citations,"title":generated_title}),
+            json!({
+                "answer_markdown":answer.answer_markdown,
+                "citations":citations,
+                "candidate_citations":candidate_citations,
+                "title":generated_title
+            }),
         )
         .await?;
         Ok(())
@@ -492,6 +605,15 @@ impl ConversationEngine {
         preview: &mut AnswerPreview,
         event: CodexEvent,
     ) -> Result<()> {
+        if let Some(label) = research_progress_label(&event.kind) {
+            self.emit(
+                conversation_id,
+                Some(message_id),
+                "answer-progress",
+                json!({"phase":&event.kind,"label":label,"detail":&event.payload}),
+            )
+            .await?;
+        }
         if let Some((phase, label)) = codex_progress(&event) {
             self.emit(
                 conversation_id,
@@ -528,6 +650,25 @@ impl ConversationEngine {
             .await?;
         let _ = self.events.send(event.clone());
         Ok(event)
+    }
+}
+
+fn exact_project_id(scopes: &[ConversationScope]) -> Option<String> {
+    (scopes.len() == 1 && scopes[0].scope_type == "project")
+        .then(|| scopes[0].scope_id.clone())
+        .flatten()
+}
+
+fn research_progress_label(kind: &str) -> Option<&'static str> {
+    match kind {
+        "research-planning" => Some("Codex 正在规划论文检索…"),
+        "research-searching" => Some("Codex 正在检索外部论文…"),
+        "research-deduplicating" => Some("Codex 正在合并与去重候选论文…"),
+        "research-inspecting-abstract" => Some("Codex 正在查证候选论文摘要…"),
+        "research-fetching-fulltext" => Some("Codex 正在获取并查证论文全文…"),
+        "research-saving-candidates" => Some("Codex 正在保存相关候选论文…"),
+        "research-partial" => Some("部分检索来源暂不可用，Codex 将继续使用已有结果…"),
+        _ => None,
     }
 }
 

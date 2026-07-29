@@ -444,6 +444,7 @@ async fn annotation_api_pins_lists_updates_and_stores_anchors() {
                     suffix: String::new(),
                     explanation: "说明".into(),
                 }],
+                candidate_citations: vec![],
                 annotation_intents: vec![],
             },
         )

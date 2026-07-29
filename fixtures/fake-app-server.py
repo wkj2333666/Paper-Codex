@@ -109,6 +109,7 @@ for raw in sys.stdin:
                             "section": None, "locator": None, "quote": "evidence", "prefix": "", "suffix": "",
                             "explanation": "supports the answer"
                         }],
+                        "candidate_citations": [],
                         "annotation_intents": []
                     }, ensure_ascii=False, separators=(",", ":"))
             else:

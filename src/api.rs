@@ -5,8 +5,9 @@ use crate::{
     db::Database,
     domain::TaskEvent,
     login_limiter::LoginLimiter,
-    research::CandidateStatus,
+    research::{CandidateStatus, ResearchMode},
     research_service::ResearchService,
+    research_store::ResearchStore,
     search::SearchIndex,
     tasks::{IngestInput, QuestionInput, TaskEngine},
     workspace::{safe_key, Workspace},
@@ -1110,9 +1111,26 @@ async fn get_conversation(
         .conversation_messages(&id, query.limit.unwrap_or(100), query.offset.unwrap_or(0))
         .await?;
     let mut messages_with_citations = Vec::with_capacity(messages.len());
+    let research_store = ResearchStore::new(state.db.clone());
     for message in messages {
         let citations = state.db.message_citations(&message.id).await?;
-        messages_with_citations.push(json!({"id":message.id,"conversation_id":message.conversation_id,"role":message.role,"content":message.content,"turn_id":message.turn_id,"status":message.status,"error":message.error,"created_at":message.created_at,"updated_at":message.updated_at,"citations":citations}));
+        let candidate_citations = research_store
+            .message_candidate_citations(&message.id)
+            .await?;
+        messages_with_citations.push(json!({
+            "id":message.id,
+            "conversation_id":message.conversation_id,
+            "role":message.role,
+            "content":message.content,
+            "turn_id":message.turn_id,
+            "status":message.status,
+            "error":message.error,
+            "research_mode":message.research_mode,
+            "created_at":message.created_at,
+            "updated_at":message.updated_at,
+            "citations":citations,
+            "candidate_citations":candidate_citations
+        }));
     }
     Ok(Json(json!({
         "conversation": conversation,
@@ -1196,6 +1214,7 @@ async fn replace_conversation_scopes(
 #[derive(Deserialize)]
 struct CreateMessageRequest {
     content: String,
+    research_mode: Option<ResearchMode>,
 }
 
 async fn create_conversation_message(
@@ -1207,7 +1226,11 @@ async fn create_conversation_message(
         .conversation_engine
         .as_ref()
         .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
-        .enqueue_message(&id, &request.content)
+        .enqueue_message_with_research_mode(
+            &id,
+            &request.content,
+            request.research_mode.unwrap_or(ResearchMode::Auto),
+        )
         .await
         .map_err(conversation_api_error)?;
     Ok((

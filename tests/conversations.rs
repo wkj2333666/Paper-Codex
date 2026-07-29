@@ -250,6 +250,7 @@ async fn citation_fixture(db: &Database, paper_id: &str, revision: &str) -> Stri
                 suffix: String::new(),
                 explanation: "why this matters".into(),
             }],
+            candidate_citations: vec![],
             annotation_intents: vec![],
         },
     )

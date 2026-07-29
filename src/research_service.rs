@@ -1,5 +1,7 @@
 use crate::{
     acquisition::Acquirer,
+    codex::CodexEvent,
+    codex_tools::{DynamicToolCall, DynamicToolDefinition, DynamicToolHandler, DynamicToolSession},
     extraction::extract_pdf,
     research::{
         CandidateStatus, DiscoveredWork, EvidenceLevel, ProjectCandidate, ResearchProvider,
@@ -10,16 +12,18 @@ use crate::{
     workspace::atomic_write,
 };
 use anyhow::{bail, Context, Result};
+use async_trait::async_trait;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
     time::{Duration, SystemTime},
 };
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::{mpsc, watch, Mutex, Semaphore};
 
 #[derive(Debug, Clone)]
 pub struct ResearchServiceConfig {
@@ -103,6 +107,293 @@ pub struct PruneOutcome {
     pub removed_files: usize,
     pub removed_bytes: u64,
     pub remaining_bytes: u64,
+}
+
+pub struct ProjectResearchToolHandler {
+    research: Arc<ResearchService>,
+    project_id: String,
+    conversation_id: String,
+    message_id: String,
+    trigger: ResearchTrigger,
+    evidence: Arc<Mutex<HashMap<String, crate::research::CandidateSource>>>,
+    last_run_id: Mutex<Option<String>>,
+    search_attempted: AtomicBool,
+    cancel: watch::Receiver<bool>,
+    events: mpsc::UnboundedSender<CodexEvent>,
+}
+
+impl ProjectResearchToolHandler {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        research: Arc<ResearchService>,
+        project_id: String,
+        conversation_id: String,
+        message_id: String,
+        trigger: ResearchTrigger,
+        cancel: watch::Receiver<bool>,
+        events: mpsc::UnboundedSender<CodexEvent>,
+    ) -> Self {
+        Self {
+            research,
+            project_id,
+            conversation_id,
+            message_id,
+            trigger,
+            evidence: Arc::new(Mutex::new(HashMap::new())),
+            last_run_id: Mutex::new(None),
+            search_attempted: AtomicBool::new(false),
+            cancel,
+            events,
+        }
+    }
+
+    pub fn definitions() -> Vec<DynamicToolDefinition> {
+        vec![
+            DynamicToolDefinition {
+                name: "research_search".into(),
+                description: "检索与当前项目问题相关的外部学术论文；返回候选 work_id。".into(),
+                input_schema: serde_json::json!({
+                    "type":"object",
+                    "additionalProperties":false,
+                    "required":["query","reason"],
+                    "properties":{
+                        "query":{"type":"string"},
+                        "reason":{"type":"string"},
+                        "title_terms":{"type":"array","items":{"type":"string"},"default":[]},
+                        "author":{"type":["string","null"],"default":null},
+                        "year_from":{"type":["integer","null"],"default":null},
+                        "year_to":{"type":["integer","null"],"default":null},
+                        "limit":{"type":"integer","minimum":1,"maximum":50,"default":10}
+                    }
+                }),
+            },
+            DynamicToolDefinition {
+                name: "research_inspect".into(),
+                description: "查证本轮检索命中或当前项目候选论文的摘要/全文证据。".into(),
+                input_schema: serde_json::json!({
+                    "type":"object",
+                    "additionalProperties":false,
+                    "required":["work_id"],
+                    "properties":{
+                        "work_id":{"type":"string"},
+                        "prefer_fulltext":{"type":"boolean","default":false}
+                    }
+                }),
+            },
+            DynamicToolDefinition {
+                name: "research_save".into(),
+                description: "把经判断确实相关的检索结果保存为当前项目候选论文。".into(),
+                input_schema: serde_json::json!({
+                    "type":"object",
+                    "additionalProperties":false,
+                    "required":["work_id","reason"],
+                    "properties":{
+                        "work_id":{"type":"string"},
+                        "reason":{"type":"string"},
+                        "tags":{"type":"array","items":{"type":"string"},"default":[]}
+                    }
+                }),
+            },
+        ]
+    }
+
+    pub fn session(self: &Arc<Self>) -> DynamicToolSession {
+        DynamicToolSession {
+            definitions: Self::definitions(),
+            handler: self.clone(),
+        }
+    }
+
+    pub fn search_attempted(&self) -> bool {
+        self.search_attempted.load(Ordering::Relaxed)
+    }
+
+    pub async fn evidence(&self) -> HashMap<String, crate::research::CandidateSource> {
+        self.evidence.lock().await.clone()
+    }
+
+    async fn require_exact_project_scope(&self) -> Result<()> {
+        let scopes = self
+            .research
+            .store()
+            .database()
+            .conversation_scopes(&self.conversation_id)
+            .await?;
+        if scopes.len() != 1
+            || scopes[0].scope_type != "project"
+            || scopes[0].scope_id.as_deref() != Some(self.project_id.as_str())
+        {
+            bail!("研究工具只允许用于唯一且匹配的项目作用域");
+        }
+        Ok(())
+    }
+
+    async fn require_available_work(&self, work_id: &str) -> Result<()> {
+        if !self
+            .research
+            .store()
+            .work_available_to_message(&self.project_id, &self.message_id, work_id)
+            .await?
+        {
+            bail!("当前项目和本轮检索中不存在该候选论文");
+        }
+        Ok(())
+    }
+
+    fn progress(&self, kind: &str, payload: Value) {
+        let _ = self.events.send(CodexEvent {
+            kind: kind.into(),
+            text: None,
+            payload,
+        });
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResearchSearchArguments {
+    query: String,
+    reason: String,
+    #[serde(default)]
+    title_terms: Vec<String>,
+    author: Option<String>,
+    year_from: Option<i64>,
+    year_to: Option<i64>,
+    #[serde(default = "default_research_limit")]
+    limit: usize,
+}
+
+fn default_research_limit() -> usize {
+    10
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResearchInspectArguments {
+    work_id: String,
+    #[serde(default)]
+    prefer_fulltext: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResearchSaveArguments {
+    work_id: String,
+    reason: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+#[async_trait]
+impl DynamicToolHandler for ProjectResearchToolHandler {
+    async fn call(&self, call: DynamicToolCall) -> Result<Vec<Value>> {
+        self.require_exact_project_scope().await?;
+        match call.tool.as_str() {
+            "research_search" => {
+                let arguments: ResearchSearchArguments =
+                    serde_json::from_value(call.arguments).context("研究检索参数无效")?;
+                self.search_attempted.store(true, Ordering::Relaxed);
+                self.progress(
+                    "research-searching",
+                    serde_json::json!({"query":arguments.query}),
+                );
+                let outcome = self
+                    .research
+                    .search_with_cancel(
+                        SearchRequest {
+                            project_id: self.project_id.clone(),
+                            conversation_id: self.conversation_id.clone(),
+                            message_id: self.message_id.clone(),
+                            trigger: self.trigger,
+                            question: arguments.reason,
+                            query: ResearchQuery {
+                                text: arguments.query,
+                                title_terms: arguments.title_terms,
+                                author: arguments.author,
+                                year_from: arguments.year_from,
+                                year_to: arguments.year_to,
+                                limit: arguments.limit,
+                            },
+                        },
+                        self.cancel.clone(),
+                    )
+                    .await?;
+                *self.last_run_id.lock().await = Some(outcome.run_id.clone());
+                self.progress(
+                    "research-deduplicating",
+                    serde_json::json!({"run_id":outcome.run_id,"works":outcome.works.len()}),
+                );
+                if outcome.state == SearchRunState::Partial {
+                    self.progress(
+                        "research-partial",
+                        serde_json::json!({"run_id":outcome.run_id,"providers":outcome.providers}),
+                    );
+                }
+                Ok(vec![serde_json::json!({
+                    "run_id":outcome.run_id,
+                    "state":outcome.state,
+                    "providers":outcome.providers,
+                    "works":outcome.works,
+                })])
+            }
+            "research_inspect" => {
+                let arguments: ResearchInspectArguments =
+                    serde_json::from_value(call.arguments).context("候选查证参数无效")?;
+                self.require_available_work(&arguments.work_id).await?;
+                self.progress(
+                    if arguments.prefer_fulltext {
+                        "research-fetching-fulltext"
+                    } else {
+                        "research-inspecting-abstract"
+                    },
+                    serde_json::json!({"work_id":arguments.work_id}),
+                );
+                let inspection = self
+                    .research
+                    .inspect(&arguments.work_id, arguments.prefer_fulltext)
+                    .await?;
+                let source = crate::research::CandidateSource {
+                    work_id: inspection.work.id.clone(),
+                    title: inspection.work.metadata.title.clone(),
+                    source_url: inspection.source_url.clone(),
+                    evidence_level: inspection.evidence_level,
+                    abstract_text: inspection.work.metadata.abstract_text.clone(),
+                    pdf_url: inspection.work.metadata.pdf_url.clone(),
+                };
+                self.evidence
+                    .lock()
+                    .await
+                    .insert(source.work_id.clone(), source.clone());
+                Ok(vec![serde_json::json!({
+                    "source":source,
+                    "text":inspection.text,
+                })])
+            }
+            "research_save" => {
+                let arguments: ResearchSaveArguments =
+                    serde_json::from_value(call.arguments).context("候选保存参数无效")?;
+                self.require_available_work(&arguments.work_id).await?;
+                self.progress(
+                    "research-saving-candidates",
+                    serde_json::json!({"work_id":arguments.work_id}),
+                );
+                let run_id = self.last_run_id.lock().await.clone();
+                let candidate = self
+                    .research
+                    .save_candidate(
+                        &self.project_id,
+                        &arguments.work_id,
+                        &arguments.reason,
+                        &arguments.tags,
+                        run_id.as_deref(),
+                        Some(&self.conversation_id),
+                    )
+                    .await?;
+                Ok(vec![serde_json::to_value(candidate)?])
+            }
+            _ => bail!("未注册的项目研究工具"),
+        }
+    }
 }
 
 impl ResearchService {
