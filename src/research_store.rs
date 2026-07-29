@@ -233,6 +233,7 @@ impl ResearchStore {
             };
             if !providers.iter().any(|value| value == provider) {
                 providers.push(provider.to_owned());
+                providers.sort();
             }
             raw_results.push(work.metadata.metadata.clone());
             let rank = i64::try_from(rank + 1).context("provider result rank exceeds i64")?;
@@ -421,6 +422,65 @@ impl ResearchStore {
                 abstract_text: candidate.work.metadata.abstract_text,
                 pdf_url: candidate.work.metadata.pdf_url,
             }))
+    }
+
+    pub async fn set_work_evidence(
+        &self,
+        work_id: &str,
+        evidence_level: crate::research::EvidenceLevel,
+    ) -> Result<DiscoveredWork> {
+        let current = self
+            .get_work(work_id)
+            .await?
+            .context("discovered work does not exist")?;
+        let evidence_level = current.metadata.evidence_level.strongest(evidence_level);
+        sqlx::query(
+            r#"UPDATE discovered_works
+               SET evidence_level=?,refreshed_at=CURRENT_TIMESTAMP
+               WHERE id=?"#,
+        )
+        .bind(evidence_level)
+        .bind(work_id)
+        .execute(self.db.pool())
+        .await?;
+        sqlx::query(
+            r#"UPDATE project_candidates
+               SET evidence_level=?,updated_at=CURRENT_TIMESTAMP
+               WHERE work_id=?"#,
+        )
+        .bind(evidence_level)
+        .bind(work_id)
+        .execute(self.db.pool())
+        .await?;
+        self.get_work(work_id)
+            .await?
+            .context("updated discovered work is missing")
+    }
+
+    pub async fn recover_interrupted_research(&self) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE literature_search_runs
+               SET state='failed',error='service restarted',updated_at=CURRENT_TIMESTAMP
+               WHERE state='running'"#,
+        )
+        .execute(self.db.pool())
+        .await?;
+        sqlx::query(
+            r#"UPDATE project_candidates
+               SET status='candidate',import_task_id=NULL,updated_at=CURRENT_TIMESTAMP
+               WHERE status='importing'
+                 AND (
+                   import_task_id IS NULL
+                   OR NOT EXISTS (
+                     SELECT 1 FROM tasks
+                     WHERE tasks.id=project_candidates.import_task_id
+                       AND tasks.state NOT IN ('done','failed','cancelled')
+                   )
+                 )"#,
+        )
+        .execute(self.db.pool())
+        .await?;
+        Ok(())
     }
 
     async fn require_project(&self, project_id: &str) -> Result<()> {

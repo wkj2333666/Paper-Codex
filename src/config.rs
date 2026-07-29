@@ -13,6 +13,11 @@ pub struct Config {
     pub password_hash: String,
     pub jwt_secret: String,
     pub max_upload_bytes: usize,
+    pub research_cache_dir: PathBuf,
+    pub research_cache_max_bytes: u64,
+    pub research_pdf_max_bytes: usize,
+    pub research_max_concurrency: usize,
+    pub research_cache_ttl_days: u64,
 }
 
 impl Config {
@@ -34,6 +39,24 @@ impl Config {
                 workspace.join(".paper-wiki/state.sqlite").display()
             )
         });
+        let max_upload_bytes = env::var("PAPER_CODEX_MAX_UPLOAD_BYTES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(100 * 1024 * 1024);
+        let research_pdf_max_bytes = env::var("PAPER_CODEX_RESEARCH_PDF_MAX_BYTES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(100 * 1024 * 1024);
+        if research_pdf_max_bytes > max_upload_bytes {
+            bail!("PAPER_CODEX_RESEARCH_PDF_MAX_BYTES cannot exceed PAPER_CODEX_MAX_UPLOAD_BYTES");
+        }
+        let research_max_concurrency = env::var("PAPER_CODEX_RESEARCH_MAX_CONCURRENCY")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(3);
+        if research_max_concurrency == 0 {
+            bail!("PAPER_CODEX_RESEARCH_MAX_CONCURRENCY must be greater than zero");
+        }
         Ok(Self {
             bind,
             workspace,
@@ -59,10 +82,27 @@ impl Config {
                 .context("PAPER_CODEX_PASSWORD_HASH is required")?,
             jwt_secret: env::var("PAPER_CODEX_JWT_SECRET")
                 .context("PAPER_CODEX_JWT_SECRET is required")?,
-            max_upload_bytes: env::var("PAPER_CODEX_MAX_UPLOAD_BYTES")
+            max_upload_bytes,
+            research_cache_dir: env::var_os("PAPER_CODEX_RESEARCH_CACHE_DIR")
+                .map(PathBuf::from)
+                .map(|path| {
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        root.join(path)
+                    }
+                })
+                .unwrap_or_else(|| root.join(".runtime/research-cache")),
+            research_cache_max_bytes: env::var("PAPER_CODEX_RESEARCH_CACHE_MAX_BYTES")
                 .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(100 * 1024 * 1024),
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(1024 * 1024 * 1024),
+            research_pdf_max_bytes,
+            research_max_concurrency,
+            research_cache_ttl_days: env::var("PAPER_CODEX_RESEARCH_CACHE_TTL_DAYS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(30),
         })
     }
 }
