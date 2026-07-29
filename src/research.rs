@@ -1,3 +1,5 @@
+use anyhow::{bail, Result};
+use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -159,6 +161,63 @@ pub struct PossibleDuplicate {
     pub left_key: String,
     pub right_key: String,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchQuery {
+    pub text: String,
+    pub title_terms: Vec<String>,
+    pub author: Option<String>,
+    pub year_from: Option<i64>,
+    pub year_to: Option<i64>,
+    pub limit: usize,
+}
+
+impl ResearchQuery {
+    pub fn normalized(&self) -> Result<Self> {
+        let text = self.text.trim();
+        if text.is_empty() {
+            bail!("research query cannot be empty");
+        }
+        if self
+            .year_from
+            .zip(self.year_to)
+            .is_some_and(|(from, to)| from > to)
+        {
+            bail!("research query start year cannot exceed end year");
+        }
+        Ok(Self {
+            text: text.to_owned(),
+            title_terms: self
+                .title_terms
+                .iter()
+                .map(|term| term.trim())
+                .filter(|term| !term.is_empty())
+                .map(ToOwned::to_owned)
+                .collect(),
+            author: self
+                .author
+                .as_deref()
+                .map(str::trim)
+                .filter(|author| !author.is_empty())
+                .map(ToOwned::to_owned),
+            year_from: self.year_from,
+            year_to: self.year_to,
+            limit: self.limit.clamp(1, 50),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderSearchResult {
+    pub provider: &'static str,
+    pub works: Vec<WorkMetadata>,
+}
+
+#[async_trait]
+pub trait ResearchProvider: Send + Sync {
+    fn name(&self) -> &'static str;
+    async fn search(&self, query: &ResearchQuery) -> Result<Vec<WorkMetadata>>;
 }
 
 pub fn canonical_doi(value: &str) -> Option<String> {
