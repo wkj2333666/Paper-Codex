@@ -7,6 +7,7 @@ use crate::{
     graph::materialize_proposal,
     knowledge::{proposal_schema, KnowledgeRepository, ProposedKnowledge},
     prompts::{first_pass_prompt, scoped_question_prompt},
+    research_store::ResearchStore,
     search::SearchIndex,
     workspace::{atomic_write, safe_key, Workspace},
 };
@@ -45,6 +46,7 @@ pub struct TaskEngine {
     events: broadcast::Sender<TaskEvent>,
     cancellations: Mutex<HashMap<String, watch::Sender<bool>>>,
     active: Mutex<HashSet<String>>,
+    research: Option<ResearchStore>,
 }
 
 impl TaskEngine {
@@ -53,6 +55,16 @@ impl TaskEngine {
         workspace: Workspace,
         acquirer: Acquirer,
         codex: Arc<CodexRuntime>,
+    ) -> Result<Arc<Self>> {
+        Self::start_with_research(db, workspace, acquirer, codex, None).await
+    }
+
+    pub async fn start_with_research(
+        db: Database,
+        workspace: Workspace,
+        acquirer: Acquirer,
+        codex: Arc<CodexRuntime>,
+        research: Option<ResearchStore>,
     ) -> Result<Arc<Self>> {
         let (queue, mut receiver) = mpsc::channel::<String>(128);
         let (events, _) = broadcast::channel(1024);
@@ -67,6 +79,7 @@ impl TaskEngine {
             events,
             cancellations: Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
+            research,
         });
         engine.knowledge.recover().await?;
         for id in engine.db.resumable_task_ids().await? {
@@ -130,6 +143,9 @@ impl TaskEngine {
                 .await?;
             self.emit(id, "cancelled", serde_json::json!({})).await?;
         }
+        if let Some(research) = &self.research {
+            research.fail_candidate_import(id).await?;
+        }
         Ok(())
     }
 
@@ -147,6 +163,9 @@ impl TaskEngine {
             .insert(id.clone(), cancel_tx);
         let result = self.execute_inner(&id, cancel_rx).await;
         if let Err(error) = result {
+            if let Some(research) = &self.research {
+                let _ = research.fail_candidate_import(&id).await;
+            }
             let task = self.db.get_task(&id).await.ok().flatten();
             if task.as_ref().is_some_and(|task| task.state != "cancelled") {
                 let message = redact_error(&error.to_string());
@@ -387,6 +406,9 @@ impl TaskEngine {
         self.search
             .upsert("paper", &paper_id, &paper.title, &body)
             .await?;
+        if let Some(research) = &self.research {
+            research.complete_candidate_import(id, &paper_id).await?;
+        }
         self.stage(id, TaskState::Done).await?;
         self.emit(id, "result", serde_json::json!({"paper_id":paper_id,"title":paper.title,"note_path":paper.note_path})).await?;
         Ok(())

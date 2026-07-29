@@ -370,6 +370,60 @@ impl ResearchStore {
             .context("updated project candidate is missing")
     }
 
+    pub async fn mark_candidate_importing(
+        &self,
+        project_id: &str,
+        work_id: &str,
+        task_id: &str,
+    ) -> Result<ProjectCandidate> {
+        self.require_project(project_id).await?;
+        let changed = sqlx::query(
+            r#"UPDATE project_candidates
+               SET status='importing',import_task_id=?,paper_id=NULL,
+                   updated_at=CURRENT_TIMESTAMP
+               WHERE project_id=? AND work_id=?
+                 AND status IN ('candidate','dismissed')"#,
+        )
+        .bind(task_id)
+        .bind(project_id)
+        .bind(work_id)
+        .execute(self.db.pool())
+        .await?
+        .rows_affected();
+        if changed == 0 {
+            bail!("project candidate cannot begin importing");
+        }
+        self.get_candidate(project_id, work_id)
+            .await?
+            .context("importing project candidate is missing")
+    }
+
+    pub async fn complete_candidate_import(&self, task_id: &str, paper_id: &str) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE project_candidates
+               SET status='imported',paper_id=?,updated_at=CURRENT_TIMESTAMP
+               WHERE import_task_id=?"#,
+        )
+        .bind(paper_id)
+        .bind(task_id)
+        .execute(self.db.pool())
+        .await?;
+        Ok(())
+    }
+
+    pub async fn fail_candidate_import(&self, task_id: &str) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE project_candidates
+               SET status='candidate',import_task_id=NULL,paper_id=NULL,
+                   updated_at=CURRENT_TIMESTAMP
+               WHERE import_task_id=? AND status='importing'"#,
+        )
+        .bind(task_id)
+        .execute(self.db.pool())
+        .await?;
+        Ok(())
+    }
+
     pub async fn remove_candidate(&self, project_id: &str, work_id: &str) -> Result<()> {
         self.require_project(project_id).await?;
         let candidate = self

@@ -6,6 +6,7 @@ use crate::{
         ResearchQuery, ResearchTrigger, SearchRunState,
     },
     research_store::ResearchStore,
+    tasks::{IngestInput, TaskEngine},
     workspace::atomic_write,
 };
 use anyhow::{bail, Context, Result};
@@ -87,6 +88,14 @@ pub struct InspectionOutcome {
     pub source_url: String,
     pub pdf_path: Option<PathBuf>,
     pub markdown_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ImportCandidateOutcome {
+    AlreadyInProject { paper_id: String },
+    LinkedExisting { paper_id: String },
+    Enqueued { task_id: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -362,6 +371,87 @@ impl ResearchService {
 
     pub async fn remove_candidate(&self, project_id: &str, work_id: &str) -> Result<()> {
         self.store.remove_candidate(project_id, work_id).await
+    }
+
+    pub async fn import_candidate(
+        &self,
+        project_id: &str,
+        work_id: &str,
+        engine: Option<&TaskEngine>,
+    ) -> Result<ImportCandidateOutcome> {
+        let candidate = self
+            .store
+            .get_candidate(project_id, work_id)
+            .await?
+            .context("project candidate does not exist")?;
+        if candidate.status == CandidateStatus::Importing {
+            bail!("project candidate is already importing");
+        }
+        if let Some(paper) = self
+            .store
+            .database()
+            .find_paper_by_identity(
+                candidate.work.metadata.doi.as_deref(),
+                candidate.work.metadata.arxiv_id.as_deref(),
+            )
+            .await?
+        {
+            let project_ids = self.store.database().paper_project_ids(&paper.id).await?;
+            self.store
+                .database()
+                .add_paper_to_project(&paper.id, project_id)
+                .await?;
+            sqlx::query(
+                r#"UPDATE project_candidates
+                   SET status='imported',paper_id=?,import_task_id=NULL,
+                       updated_at=CURRENT_TIMESTAMP
+                   WHERE project_id=? AND work_id=?"#,
+            )
+            .bind(&paper.id)
+            .bind(project_id)
+            .bind(work_id)
+            .execute(self.store.database().pool())
+            .await?;
+            return if project_ids.iter().any(|id| id == project_id) {
+                Ok(ImportCandidateOutcome::AlreadyInProject { paper_id: paper.id })
+            } else {
+                Ok(ImportCandidateOutcome::LinkedExisting { paper_id: paper.id })
+            };
+        }
+
+        let source = candidate
+            .work
+            .metadata
+            .arxiv_id
+            .as_deref()
+            .map(|id| format!("arxiv:{id}"))
+            .or_else(|| {
+                candidate
+                    .work
+                    .metadata
+                    .doi
+                    .as_deref()
+                    .map(|doi| format!("doi:{doi}"))
+            })
+            .or_else(|| candidate.work.metadata.pdf_url.clone())
+            .context("candidate has no importable source")?;
+        let engine = engine.context("paper import service is unavailable")?;
+        let task_id = engine
+            .create_ingest(IngestInput {
+                source,
+                project_id: Some(project_id.to_owned()),
+                upload_path: None,
+            })
+            .await?;
+        if let Err(error) = self
+            .store
+            .mark_candidate_importing(project_id, work_id, &task_id)
+            .await
+        {
+            let _ = engine.cancel(&task_id).await;
+            return Err(error);
+        }
+        Ok(ImportCandidateOutcome::Enqueued { task_id })
     }
 
     pub async fn recover_interrupted_runs(&self) -> Result<()> {

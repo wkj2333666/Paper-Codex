@@ -612,6 +612,29 @@ impl Database {
             .await?)
     }
 
+    pub async fn find_paper_by_identity(
+        &self,
+        doi: Option<&str>,
+        arxiv_id: Option<&str>,
+    ) -> Result<Option<Paper>> {
+        Ok(sqlx::query_as(
+            r#"SELECT * FROM papers
+               WHERE deleted_at IS NULL
+                 AND (
+                   (? IS NOT NULL AND lower(doi)=lower(?))
+                   OR (? IS NOT NULL AND lower(arxiv_id)=lower(?))
+                 )
+               ORDER BY updated_at DESC
+               LIMIT 1"#,
+        )
+        .bind(doi)
+        .bind(doi)
+        .bind(arxiv_id)
+        .bind(arxiv_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
     pub async fn list_projects(&self) -> Result<Vec<Project>> {
         Ok(sqlx::query_as("SELECT * FROM projects ORDER BY name")
             .fetch_all(&self.pool)
