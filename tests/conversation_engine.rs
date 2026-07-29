@@ -389,7 +389,7 @@ async fn exact_project_tools_search_inspect_save_and_bind_candidate_evidence() {
             citations: vec![],
             candidate_citations: vec![ConversationCandidateCitation {
                 id: "candidate-1".into(),
-                work_id,
+                work_id: work_id.clone(),
                 title: "Kolmogorov Complexity of Game Rules".into(),
                 source_url: "https://doi.org/10.1000/rules".into(),
                 evidence_level: EvidenceLevel::Abstract,
