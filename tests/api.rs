@@ -1235,3 +1235,44 @@ async fn project_literature_history_returns_run_results_without_creating_candida
         .unwrap()
         .is_empty());
 }
+
+#[tokio::test]
+async fn explicit_research_rejects_paper_scope_before_creating_messages() {
+    let (app, db) = conversation_test_app().await;
+    let token = login_token(&app).await;
+    let conversation = db.create_conversation("论文问题").await.unwrap();
+    db.replace_conversation_scopes(
+        &conversation.id,
+        &[paper_codex::conversations::ConversationScopeInput {
+            scope_type: "paper".into(),
+            scope_id: Some("paper:one".into()),
+        }],
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/conversations/{}/messages", conversation.id))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "content":"检索更多相关论文",
+                        "research_mode":"explicit"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(db
+        .conversation_messages(&conversation.id, 100, 0)
+        .await
+        .unwrap()
+        .is_empty());
+}

@@ -2,6 +2,8 @@ use paper_codex::{
     conversation_context::ConversationContextBuilder,
     conversations::ConversationScope,
     db::Database,
+    research::{EvidenceLevel, WorkMetadata},
+    research_store::ResearchStore,
     workspace::{atomic_write, Workspace},
 };
 
@@ -124,4 +126,64 @@ async fn project_scope_records_the_research_goal() {
         .unwrap();
     assert!(summary.contains("消融研究"));
     assert!(summary.contains("比较各个模块对最终结果的贡献"));
+}
+
+#[tokio::test]
+async fn project_context_contains_only_twenty_bounded_candidate_summaries() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = Workspace::initialize(temp.path()).await.unwrap();
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let project_id = db
+        .create_project("bounded", "候选摘要", "测试候选上下文")
+        .await
+        .unwrap();
+    let store = ResearchStore::new(db.clone());
+    for index in 0..25 {
+        let work = store
+            .upsert_work(WorkMetadata {
+                canonical_key: format!("doi:10.1000/bounded-{index}"),
+                doi: Some(format!("10.1000/bounded-{index}")),
+                arxiv_id: None,
+                openalex_id: None,
+                title: format!("候选论文 {index:02}"),
+                authors: vec![],
+                year: Some(2025),
+                abstract_text: Some(format!("不应进入上下文的摘要秘密 {index:02}")),
+                source_url: format!("https://doi.org/10.1000/bounded-{index}"),
+                pdf_url: None,
+                evidence_level: EvidenceLevel::Abstract,
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        store
+            .save_candidate(
+                &project_id,
+                &work.id,
+                &format!("相关原因 {index:02}"),
+                &[],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    let scope = ConversationScope {
+        conversation_id: "conversation-bounded".into(),
+        scope_type: "project".into(),
+        scope_id: Some(project_id),
+        added_at: "2026-01-01 00:00:00".into(),
+    };
+    let bundle = ConversationContextBuilder::new(db, workspace)
+        .with_research_store(store)
+        .refresh("conversation-bounded", &[scope])
+        .await
+        .unwrap();
+    let summary = tokio::fs::read_to_string(bundle.summary_path)
+        .await
+        .unwrap();
+    assert_eq!(summary.matches("- 候选：").count(), 20);
+    assert!(!summary.contains("不应进入上下文的摘要秘密"));
+    assert!(summary.contains("相关原因"));
+    assert!(summary.contains("证据：abstract"));
 }
