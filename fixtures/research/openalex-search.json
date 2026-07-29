@@ -1,0 +1,57 @@
+{
+  "meta": {
+    "count": 2
+  },
+  "results": [
+    {
+      "id": "https://openalex.org/W100",
+      "doi": "https://doi.org/10.1000/rule",
+      "title": "Rule Complexity for Games",
+      "publication_year": 2024,
+      "authorships": [
+        {
+          "author": {
+            "display_name": "Ada Lovelace"
+          }
+        }
+      ],
+      "abstract_inverted_index": {
+        "Rule": [0],
+        "complexity": [1],
+        "for": [2],
+        "games": [3]
+      },
+      "primary_location": {
+        "landing_page_url": "https://doi.org/10.1000/rule"
+      },
+      "best_oa_location": {
+        "pdf_url": "https://example.test/rule.pdf"
+      },
+      "ids": {
+        "openalex": "https://openalex.org/W100",
+        "doi": "https://doi.org/10.1000/rule"
+      }
+    },
+    {
+      "id": "https://openalex.org/W200",
+      "doi": null,
+      "title": "A Provider-only Discovery",
+      "publication_year": 2023,
+      "authorships": [
+        {
+          "author": {
+            "display_name": "Grace Hopper"
+          }
+        }
+      ],
+      "abstract_inverted_index": null,
+      "primary_location": {
+        "landing_page_url": "https://openalex.org/W200"
+      },
+      "best_oa_location": null,
+      "ids": {
+        "openalex": "https://openalex.org/W200"
+      }
+    }
+  ]
+}
