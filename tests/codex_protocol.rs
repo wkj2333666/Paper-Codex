@@ -58,7 +58,10 @@ impl RecordingHandler {
 #[async_trait]
 impl DynamicToolHandler for RecordingHandler {
     async fn call(&self, call: DynamicToolCall) -> anyhow::Result<Vec<Value>> {
-        let query = call.arguments["query"].as_str().unwrap_or_default();
+        let query = call.arguments["query"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
         self.calls.lock().await.push(call);
         Ok(vec![serde_json::json!({
             "query": query,
