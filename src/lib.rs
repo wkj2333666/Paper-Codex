@@ -14,6 +14,8 @@ pub mod knowledge;
 pub mod login_limiter;
 pub mod pdf_range;
 pub mod prompts;
+pub mod research;
+pub mod research_store;
 pub mod search;
 pub mod tasks;
 pub mod workspace;
