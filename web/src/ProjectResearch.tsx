@@ -157,7 +157,7 @@ function providerSummary(search:LiteratureSearchRun){
   return `${providers.length} 个来源 · ${hits} 条命中${failed.length?` · ${failed.join("、")} 暂不可用`:""}`
 }
 
-export function ProjectResearch({projectId,papers,onOpenPaper,onRemovePaper,onChanged}:{projectId:string;papers:Paper[];onOpenPaper:(paperId:string)=>void;onRemovePaper:(paperId:string)=>Promise<void>;onChanged?:()=>Promise<void>}){
+export function ProjectResearch({projectId,papers,focusWorkId,onFocusHandled,onOpenPaper,onRemovePaper,onChanged}:{projectId:string;papers:Paper[];focusWorkId?:string;onFocusHandled?:()=>void;onOpenPaper:(paperId:string)=>void;onRemovePaper:(paperId:string)=>Promise<void>;onChanged?:()=>Promise<void>}){
   const [tab,setTab]=useState<ProjectResearchTab>("papers")
   const [candidates,setCandidates]=useState<ProjectCandidate[]>([])
   const [searches,setSearches]=useState<LiteratureSearchRun[]>([])
@@ -166,6 +166,7 @@ export function ProjectResearch({projectId,papers,onOpenPaper,onRemovePaper,onCh
   const [error,setError]=useState("")
   const [selectedCandidate,setSelectedCandidate]=useState<ProjectCandidate|null>(null)
   const [searchDetail,setSearchDetail]=useState<LiteratureSearchDetail|null>(null)
+  const [loadedProjectId,setLoadedProjectId]=useState<string|null>(null)
   const load=useCallback(async()=>{
     try{
       const [nextCandidates,nextSearches]=await Promise.all([
@@ -173,12 +174,21 @@ export function ProjectResearch({projectId,papers,onOpenPaper,onRemovePaper,onCh
         api.projectLiteratureSearches(projectId),
       ])
       setCandidates(nextCandidates);setSearches(nextSearches);setError("")
+      setLoadedProjectId(projectId)
       setSelectedCandidate(current=>current?nextCandidates.find(item=>item.work.id===current.work.id)??null:null)
     }catch(value){setError(value instanceof Error?value.message:"加载项目候选失败")}
     finally{setBusy(false)}
   },[includeDismissed,projectId])
-  useEffect(()=>{setTab("papers");setSelectedCandidate(null);setSearchDetail(null)},[projectId])
+  useEffect(()=>{setTab("papers");setCandidates([]);setSearches([]);setSelectedCandidate(null);setSearchDetail(null);setLoadedProjectId(null)},[projectId])
   useEffect(()=>{setBusy(true);void load()},[load])
+  useEffect(()=>{
+    if(!focusWorkId||loadedProjectId!==projectId)return
+    const candidate=candidates.find(item=>item.work.id===focusWorkId)
+    if(!candidate)return
+    setTab("candidates")
+    setSelectedCandidate(candidate)
+    onFocusHandled?.()
+  },[candidates,focusWorkId,loadedProjectId,onFocusHandled,projectId])
   const active=useMemo(()=>candidates.some(item=>item.status==="importing")||searches.some(item=>item.state==="running"),[candidates,searches])
   useEffect(()=>{if(!active)return;const timer=window.setInterval(()=>void load(),4000);return()=>window.clearInterval(timer)},[active,load])
   const refresh=useCallback(async()=>{await load();await onChanged?.()},[load,onChanged])

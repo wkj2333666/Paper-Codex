@@ -34,6 +34,7 @@ import type { Dashboard, GraphNode, GraphPayload, KnowledgeKind, MessageCitation
 
 type Selection=CodexSelection
 type Select=(selection:Selection)=>void
+type CandidateFocus={projectId:string;workId:string}
 const SemanticGraph=lazy(()=>import("./SemanticGraph").then(module=>({default:module.SemanticGraph})))
 const PdfDocumentViewer=lazy(()=>import("./PdfDocumentViewer").then(module=>({default:module.PdfDocumentViewer})))
 
@@ -56,6 +57,7 @@ export default function App(){
   const [error,setError]=useState("")
   const [panels,setPanels]=useState(loadPanelLayout)
   const [citationFocus,setCitationFocus]=useState<MessageCitation|null>(null)
+  const [candidateFocus,setCandidateFocus]=useState<CandidateFocus|null>(null)
   const [citationOverlay,setCitationOverlay]=useState<MessageCitation[]>([])
   const updateCitationOverlay=useCallback((next:MessageCitation[])=>setCitationOverlay(current=>current.length===next.length&&current.every((item,index)=>item.id===next[index]?.id&&item.revision===next[index]?.revision)?current:next),[])
   const [activeDrawer,setActiveDrawer]=useState<PanelName|null>(null)
@@ -150,13 +152,13 @@ export default function App(){
     }
     <main className="main-pane">
       {error&&<div className="error-banner"><CircleAlert size={17}/>{error}</div>}
-      <MainView dashboard={dashboard} selection={selection} select={setSelection} refresh={load} citationOverlay={citationOverlay} citationFocus={citationFocus} paperGraphOpen={panels.paperGraphOpen} paperGraphWidth={panels.widths.paperGraph} isNarrow={isNarrow} activeDrawer={activeDrawer} openPanel={openPanel} collapsePanel={collapsePanel} resizePanel={resize} resetPanel={reset} theme={resolvedTheme}/>
+      <MainView dashboard={dashboard} selection={selection} select={setSelection} refresh={load} citationOverlay={citationOverlay} citationFocus={citationFocus} candidateFocus={candidateFocus} onCandidateFocusHandled={()=>setCandidateFocus(null)} paperGraphOpen={panels.paperGraphOpen} paperGraphWidth={panels.widths.paperGraph} isNarrow={isNarrow} activeDrawer={activeDrawer} openPanel={openPanel} collapsePanel={collapsePanel} resizePanel={resize} resetPanel={reset} theme={resolvedTheme}/>
     </main>
     {!graphMode&&!isNarrow&&panels.codexOpen&&
       <ResizableDivider panel="codex" value={panels.widths.codex} min={PANEL_LIMITS.codex[0]} max={PANEL_LIMITS.codex[1]} onResize={delta=>resize("codex",delta)} onReset={()=>reset("codex")}/>
     }
     {!graphMode&&((isNarrow||panels.codexOpen)
-      ?<CodexPanel selection={selection} scopeLabel={codexScopeLabel} activities={stream.activities} drawerOpen={activeDrawer==="codex"} onCollapse={()=>collapsePanel("codex")} onCitation={citation=>{setCitationFocus(citation);setSelection({kind:"paper",id:citation.paper_id})}} onCitations={updateCitationOverlay} onSelect={setSelection}/>
+      ?<CodexPanel selection={selection} scopeLabel={codexScopeLabel} activities={stream.activities} drawerOpen={activeDrawer==="codex"} onCollapse={()=>collapsePanel("codex")} onCitation={citation=>{setCitationFocus(citation);setSelection({kind:"paper",id:citation.paper_id})}} onCandidate={(projectId,workId)=>{setCandidateFocus({projectId,workId});setSelection({kind:"project",id:projectId})}} onCitations={updateCitationOverlay} onSelect={setSelection}/>
       :<PanelRail panel="codex" label="Codex" side="right" onExpand={trigger=>openPanel("codex",trigger)}/>)}
     {isNarrow&&<MobilePanelRails showPaperGraph={selection.kind==="paper"} showCodex={!graphMode} onOpen={openPanel}/>}
     {activeDrawer&&<button type="button" className="drawer-backdrop" aria-label="关闭面板" onClick={closeDrawer}/>}
@@ -207,10 +209,10 @@ function ProjectTreeRow({node,query,selected,select,move,rename,remove,depth=0}:
 function treeContains(node:ProjectTreeNode,query:string):boolean{return node.name.toLowerCase().includes(query.trim().toLowerCase())||node.children.some(child=>treeContains(child,query))}
 function Nav({active,icon,label,badge,onClick}:{active:boolean;icon:ReactNode;label:string;badge?:number;onClick:()=>void}){return <button className={active?"nav-row active":"nav-row"} onClick={onClick}>{icon}<span>{label}</span>{badge!==undefined&&<em>{badge}</em>}</button>}
 
-function MainView({dashboard,selection,select,refresh,citationOverlay,citationFocus,paperGraphOpen,paperGraphWidth,isNarrow,activeDrawer,openPanel,collapsePanel,resizePanel,resetPanel,theme}:{dashboard:Dashboard;selection:Selection;select:Select;refresh:()=>Promise<void>;citationOverlay:MessageCitation[];citationFocus:MessageCitation|null;paperGraphOpen:boolean;paperGraphWidth:number;isNarrow:boolean;activeDrawer:PanelName|null;openPanel:(panel:PanelName,trigger:HTMLButtonElement)=>void;collapsePanel:(panel:PanelName)=>void;resizePanel:(panel:PanelName,delta:number)=>void;resetPanel:(panel:PanelName)=>void;theme:ResolvedTheme}){
+function MainView({dashboard,selection,select,refresh,citationOverlay,citationFocus,candidateFocus,onCandidateFocusHandled,paperGraphOpen,paperGraphWidth,isNarrow,activeDrawer,openPanel,collapsePanel,resizePanel,resetPanel,theme}:{dashboard:Dashboard;selection:Selection;select:Select;refresh:()=>Promise<void>;citationOverlay:MessageCitation[];citationFocus:MessageCitation|null;candidateFocus:CandidateFocus|null;onCandidateFocusHandled:()=>void;paperGraphOpen:boolean;paperGraphWidth:number;isNarrow:boolean;activeDrawer:PanelName|null;openPanel:(panel:PanelName,trigger:HTMLButtonElement)=>void;collapsePanel:(panel:PanelName)=>void;resizePanel:(panel:PanelName,delta:number)=>void;resetPanel:(panel:PanelName)=>void;theme:ResolvedTheme}){
   const paperCitations=useMemo(()=>selection.kind==="paper"&&selection.id?citationsForPaper(citationOverlay,selection.id):[],[citationOverlay,selection.kind,selection.id])
   if(selection.kind==="paper"&&selection.id)return <PaperView id={selection.id} dashboard={dashboard} select={select} refresh={refresh} citations={paperCitations} citationFocus={citationFocus?.paper_id===selection.id?citationFocus:null} paperGraphOpen={paperGraphOpen} paperGraphWidth={paperGraphWidth} isNarrow={isNarrow} drawerOpen={activeDrawer==="paperGraph"} onExpandGraph={trigger=>openPanel("paperGraph",trigger)} onCollapseGraph={()=>collapsePanel("paperGraph")} onResizeGraph={delta=>resizePanel("paperGraph",delta)} onResetGraph={()=>resetPanel("paperGraph")} theme={theme}/>
-  if(selection.kind==="project"&&selection.id)return <ProjectView project={dashboard.projects.find(project=>project.id===selection.id)} dashboard={dashboard} select={select} refresh={refresh}/>
+  if(selection.kind==="project"&&selection.id)return <ProjectView project={dashboard.projects.find(project=>project.id===selection.id)} dashboard={dashboard} select={select} refresh={refresh} candidateFocus={candidateFocus?.projectId===selection.id?candidateFocus:null} onCandidateFocusHandled={onCandidateFocusHandled}/>
   if(selection.kind==="inbox")return <PaperGrid title="收件箱" subtitle="尚未归入研究项目的论文" papers={dashboard.inbox} select={select}/>
   if(selection.kind==="search")return <SearchView select={select}/>
   if(selection.kind==="graph")return <GraphWorkspace dashboard={dashboard} focusNode={selection.id} select={select} theme={theme}/>
@@ -237,13 +239,13 @@ export function Workbench({dashboard,select,refresh}:{dashboard:Dashboard;select
   </div>
 }
 
-function ProjectView({project,dashboard,select,refresh}:{project?:Project;dashboard:Dashboard;select:Select;refresh:()=>Promise<void>}){
+function ProjectView({project,dashboard,select,refresh,candidateFocus,onCandidateFocusHandled}:{project?:Project;dashboard:Dashboard;select:Select;refresh:()=>Promise<void>;candidateFocus:CandidateFocus|null;onCandidateFocusHandled:()=>void}){
   if(!project)return <Empty icon={<Folder/>} title="项目不存在" text="请重新选择。"/>
   const ids=dashboard.project_memberships[project.id]??[];const papers=dashboard.papers.filter(paper=>ids.includes(paper.id));const children=dashboard.projects.filter(item=>item.parent_id===project.id)
   const rename=async()=>{const name=window.prompt("新的项目名称",project.name)?.trim();if(!name)return;await api.updateProject(project.id,{name,purpose:project.purpose,parent_id:project.parent_id});await refresh()}
   const remove=async(subtree:boolean)=>{const impact=await api.projectImpact(project.id);const message=subtree?`删除“${project.name}”及 ${impact.descendant_projects} 个子项目？论文只会失去项目引用，不会被删除。`:`删除“${project.name}”？${impact.descendant_projects} 个子项目将上移，论文不会被删除。`;if(!window.confirm(message))return;await api.deleteProject(project.id,subtree);await refresh();select({kind:"workbench"})}
   const removePaper=async(paperId:string)=>{await api.removePaper(project.id,paperId);await refresh()}
-  return <div className="content-wrap"><header className="project-hero"><div className="folder-large"><Folder/></div><div><p className="eyebrow">研究项目</p><h1>{project.name}</h1><p>{project.purpose||"尚未写下研究目标"}</p></div><div className="project-actions"><button onClick={()=>void rename()}><Pencil/>重命名</button><button onClick={()=>void remove(false)}><Trash2/>删除并上移子项目</button>{children.length>0&&<button className="danger" onClick={()=>void remove(true)}><Trash2/>删除整个子树</button>}</div></header><div className="project-meta"><span>{papers.length} 篇直接论文</span><span>{children.length} 个子项目</span><span>论文可被多个项目引用</span></div><ProjectResearch projectId={project.id} papers={papers} onOpenPaper={paperId=>select({kind:"paper",id:paperId})} onRemovePaper={removePaper} onChanged={refresh}/></div>
+  return <div className="content-wrap"><header className="project-hero"><div className="folder-large"><Folder/></div><div><p className="eyebrow">研究项目</p><h1>{project.name}</h1><p>{project.purpose||"尚未写下研究目标"}</p></div><div className="project-actions"><button onClick={()=>void rename()}><Pencil/>重命名</button><button onClick={()=>void remove(false)}><Trash2/>删除并上移子项目</button>{children.length>0&&<button className="danger" onClick={()=>void remove(true)}><Trash2/>删除整个子树</button>}</div></header><div className="project-meta"><span>{papers.length} 篇直接论文</span><span>{children.length} 个子项目</span><span>论文可被多个项目引用</span></div><ProjectResearch projectId={project.id} papers={papers} focusWorkId={candidateFocus?.workId} onFocusHandled={onCandidateFocusHandled} onOpenPaper={paperId=>select({kind:"paper",id:paperId})} onRemovePaper={removePaper} onChanged={refresh}/></div>
 }
 
 function PaperView({id,dashboard,select,refresh,citations,citationFocus,paperGraphOpen,paperGraphWidth,isNarrow,drawerOpen,onExpandGraph,onCollapseGraph,onResizeGraph,onResetGraph,theme}:{id:string;dashboard:Dashboard;select:Select;refresh:()=>Promise<void>;citations:MessageCitation[];citationFocus:MessageCitation|null;paperGraphOpen:boolean;paperGraphWidth:number;isNarrow:boolean;drawerOpen:boolean;onExpandGraph:(trigger:HTMLButtonElement)=>void;onCollapseGraph:()=>void;onResizeGraph:(delta:number)=>void;onResetGraph:()=>void;theme:ResolvedTheme}){
