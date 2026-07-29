@@ -11,7 +11,7 @@ import type { Activity as TaskActivity, ChatMessage, CodexCapabilities, CodexRun
 
 export interface CodexPanelProps {selection:CodexSelection;scopeLabel:string;activities:TaskActivity[];drawerOpen:boolean;onCollapse:()=>void;onCitation:(citation:MessageCitation)=>void;onCitations:(citations:MessageCitation[])=>void;onSelect:(selection:CodexSelection)=>void;codexCapabilities?:CodexCapabilities}
 
-const fallbackCapabilities:CodexCapabilities={default:{model:"gpt-5.6-luna",reasoning_effort:"medium",service_tier:null},models:[{id:"gpt-5.6-luna",display_name:"GPT-5.6-Luna",default_reasoning_effort:"medium",supported_reasoning_efforts:["low","medium","high","xhigh"],supports_fast:false}]}
+const fallbackCapabilities:CodexCapabilities={default:{model:"gpt-5.6-luna",reasoning_effort:"medium",service_tier:null},models:[{id:"gpt-5.6-luna",display_name:"GPT-5.6-Luna",default_reasoning_effort:"medium",supported_reasoning_efforts:["low","medium","high","xhigh"],supports_fast:false}],supports_dynamic_tools:false}
 
 function normalizeSettings(capabilities:CodexCapabilities,settings?:CodexRunSettings|null):CodexRunSettings{
   const model=capabilities.models.find(item=>item.id===settings?.model)??capabilities.models[0]

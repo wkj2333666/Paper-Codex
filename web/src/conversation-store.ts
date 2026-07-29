@@ -1,4 +1,4 @@
-import type { ChatMessage, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexRunSettings, MessageCitation } from "./types"
+import type { CandidateCitation, ChatMessage, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexRunSettings, MessageCitation, ResearchProgressPhase } from "./types"
 
 export interface ConversationState {
   conversations: Conversation[]
@@ -21,9 +21,10 @@ export type ConversationAction=
   |{type:"drawer";open:boolean;view?:"history"|"activity"}
   |{type:"event";event:ConversationStreamEvent}
 
-function pendingMessage(id:string,conversationId:string):ChatMessage{return {id,conversation_id:conversationId,role:"assistant",content:"",live_content:"",turn_id:null,status:"streaming",error:null,citations:[],created_at:"",updated_at:""}}
+function pendingMessage(id:string,conversationId:string):ChatMessage{return {id,conversation_id:conversationId,role:"assistant",content:"",live_content:"",turn_id:null,status:"streaming",error:null,research_mode:"auto",citations:[],candidate_citations:[],created_at:"",updated_at:""}}
 
-function progressPhase(value:unknown):ChatMessage["progress_phase"]{return value==="reading"||value==="reasoning"||value==="tool"||value==="answering"?value:undefined}
+const researchProgressPhases:ResearchProgressPhase[]=["research-planning","research-searching","research-deduplicating","research-inspecting-abstract","research-fetching-fulltext","research-saving-candidates","research-partial"]
+function progressPhase(value:unknown):ChatMessage["progress_phase"]{return value==="reading"||value==="reasoning"||value==="tool"||value==="answering"||researchProgressPhases.includes(value as ResearchProgressPhase)?value as ChatMessage["progress_phase"]:undefined}
 
 export function reduceConversationEvent(state:ConversationState,event:ConversationStreamEvent):ConversationState{
   if(event.id<=state.lastEventId)return state
@@ -35,7 +36,7 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
   else if(event.type==="answer-started")next={...current,status:"running",progress_phase:"reasoning",progress_label:"Codex 已开始处理问题…"}
   else if(event.type==="answer-progress")next={...current,status:"streaming",progress_phase:progressPhase(event.payload.phase)??"reasoning",progress_label:String(event.payload.label??"")||undefined}
   else if(event.type==="answer-delta")next={...current,status:"streaming",live_content:`${current.live_content??""}${String(event.payload.text??"")}`,progress_phase:"answering",progress_label:"Codex 正在生成回答…"}
-  else if(event.type==="answer-completed")next={...current,status:"completed",content:String(event.payload.answer_markdown??""),live_content:undefined,citations:(event.payload.citations as MessageCitation[]|undefined)??[],progress_phase:undefined,progress_label:undefined}
+  else if(event.type==="answer-completed")next={...current,status:"completed",content:String(event.payload.answer_markdown??""),live_content:undefined,citations:(event.payload.citations as MessageCitation[]|undefined)??[],candidate_citations:(event.payload.candidate_citations as CandidateCitation[]|undefined)??[],progress_phase:undefined,progress_label:undefined}
   else if(event.type==="answer-failed")next={...current,status:"failed",live_content:undefined,error:String(event.payload.message??"回答失败"),progress_phase:undefined,progress_label:undefined}
   else if(event.type==="answer-cancelled")next={...current,status:"cancelled",live_content:undefined,progress_phase:undefined,progress_label:undefined}
   else if(event.type==="message-created")next={...current,role:(event.payload.role as ChatMessage["role"])??"user",content:String(event.payload.content??""),status:"completed"}

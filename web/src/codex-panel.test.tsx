@@ -5,6 +5,7 @@ import { CodexPanel, ConversationProgress } from "./CodexPanel"
 const capabilities = {
   default:{model:"gpt-test", reasoning_effort:"medium", service_tier:null},
   models:[{id:"gpt-test",display_name:"GPT Test",default_reasoning_effort:"medium",supported_reasoning_efforts:["low","medium","high"],supports_fast:true}],
+  supports_dynamic_tools:true,
 }
 
 describe("CodexPanel", () => {

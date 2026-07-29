@@ -1,4 +1,4 @@
-import type { Annotation, AnnotationAnchor, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexRunSettings, Dashboard, GraphPayload, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectImpact, SearchResult, StreamEvent, Task } from "./types"
+import type { Annotation, AnnotationAnchor, CandidateStatus, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexRunSettings, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectImpact, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
 
 export class ApiError extends Error { constructor(public status:number,message:string){super(message)} }
 const TOKEN_KEY = "paper-codex-token"
@@ -31,6 +31,12 @@ export const api = {
   projectImpact:(id:string)=>request<ProjectImpact>(`/api/projects/${encodeURIComponent(id)}/impact`),
   addPaper:(projectId:string,paperId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`,{method:"POST"}),
   removePaper:(projectId:string,paperId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`,{method:"DELETE"}),
+  projectCandidates:(projectId:string,includeDismissed=false)=>request<ProjectCandidate[]>(`/api/projects/${encodeURIComponent(projectId)}/candidates${includeDismissed?"?include_dismissed=true":""}`),
+  updateCandidate:(projectId:string,workId:string,value:{status:Extract<CandidateStatus,"candidate"|"dismissed">})=>request<ProjectCandidate>(`/api/projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(workId)}`,{method:"PATCH",body:JSON.stringify(value)}),
+  removeCandidate:(projectId:string,workId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(workId)}`,{method:"DELETE"}),
+  importCandidate:(projectId:string,workId:string)=>request<ImportCandidateOutcome>(`/api/projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(workId)}/import`,{method:"POST"}),
+  projectLiteratureSearches:(projectId:string)=>request<LiteratureSearchRun[]>(`/api/projects/${encodeURIComponent(projectId)}/literature-searches`),
+  literatureSearch:(id:string)=>request<LiteratureSearchDetail>(`/api/literature-searches/${encodeURIComponent(id)}`),
   trash:()=>request<Paper[]>("/api/trash"),
   paperImpact:(id:string)=>request<PaperImpact>(`/api/paper/impact?id=${encodeURIComponent(id)}`),
   trashPaper:(id:string)=>request<void>(`/api/paper?id=${encodeURIComponent(id)}`,{method:"DELETE"}),
@@ -52,7 +58,7 @@ export const api = {
   conversation:(id:string)=>request<ConversationDetail>(`/api/conversations/${encodeURIComponent(id)}`),
   updateConversation:(id:string,value:{title?:string;archived?:boolean;settings?:CodexRunSettings})=>request<Conversation>(`/api/conversations/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(value)}),
   replaceConversationScopes:(id:string,scopes:ConversationScope[])=>request<ConversationScope[]>(`/api/conversations/${encodeURIComponent(id)}/scopes`,{method:"PUT",body:JSON.stringify({scopes})}),
-  sendConversationMessage:(id:string,content:string)=>request<{message_id:string;status:string}>(`/api/conversations/${encodeURIComponent(id)}/messages`,{method:"POST",body:JSON.stringify({content})}),
+  sendConversationMessage:(id:string,content:string,researchMode:ResearchMode="auto")=>request<{message_id:string;status:string}>(`/api/conversations/${encodeURIComponent(id)}/messages`,{method:"POST",body:JSON.stringify({content,research_mode:researchMode})}),
   cancelConversation:(id:string)=>request<void>(`/api/conversations/${encodeURIComponent(id)}/cancel`,{method:"POST"}),
   pinCitation:(id:string)=>request<Annotation>(`/api/citations/${encodeURIComponent(id)}/pin`,{method:"POST"}),
   paperAnnotations:(paperId:string)=>request<PaperAnnotation[]>(`/api/paper/annotations?id=${encodeURIComponent(paperId)}`),
