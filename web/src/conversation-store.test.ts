@@ -46,6 +46,41 @@ describe("conversation store", () => {
     expect(state.messages.a.progress_phase).toBeUndefined()
   })
 
+  it("keeps external candidate citations separate on completion", () => {
+    const candidate = {
+      id:"candidate-1",
+      work_id:"work/one",
+      title:"Rule Complexity",
+      source_url:"https://example.test/work",
+      evidence_level:"abstract",
+      quote:"Rules use short descriptions.",
+      explanation:"支持规则描述复杂度",
+    }
+    const state = reduceConversationEvent(
+      conversationInitialState,
+      event(6,"answer-completed",{
+        answer_markdown:"候选回答 [candidate-1]",
+        citations:[],
+        candidate_citations:[candidate],
+      }),
+    )
+    expect(state.messages.a.citations).toEqual([])
+    expect(state.messages.a.candidate_citations).toEqual([candidate])
+  })
+
+  it("keeps research progress informational while the answer is running", () => {
+    const state = reduceConversationEvent(
+      conversationInitialState,
+      event(7,"answer-progress",{
+        phase:"research-partial",
+        label:"部分检索来源暂不可用",
+      }),
+    )
+    expect(state.messages.a.status).toBe("streaming")
+    expect(state.messages.a.progress_phase).toBe("research-partial")
+    expect(state.messages.a.progress_label).toBe("部分检索来源暂不可用")
+  })
+
   it("keeps the active answer while the history drawer opens", () => {
     const seed: ConversationState = {
       ...conversationInitialState,

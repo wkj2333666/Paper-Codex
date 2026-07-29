@@ -87,3 +87,15 @@ test("Codex capabilities and conversation settings use the conversation API", as
   expect(JSON.parse(String(capturedRequests[1].body))).toMatchObject({settings:{model:"gpt-test", reasoning_effort:"high", service_tier:"priority"}})
   expect(JSON.parse(String(capturedRequests[2].body))).toMatchObject({settings:{model:"gpt-test", reasoning_effort:"low", service_tier:null}})
 })
+
+test("conversation messages send explicit project research mode", async()=>{
+  await api.sendConversationMessage("conversation/1","查找相关工作","explicit")
+  expect(capturedRequests.at(-1)).toMatchObject({
+    method:"POST",
+    url:"/api/conversations/conversation%2F1/messages",
+  })
+  expect(JSON.parse(String(capturedRequests.at(-1)?.body))).toEqual({
+    content:"查找相关工作",
+    research_mode:"explicit",
+  })
+})
