@@ -14,7 +14,9 @@ use paper_codex::{
         canonical_key, EvidenceLevel, ResearchMode, ResearchProvider, ResearchQuery,
         ResearchTrigger, WorkMetadata,
     },
-    research_service::{ProjectResearchToolHandler, ResearchService, ResearchServiceConfig},
+    research_service::{
+        ImportCandidateOutcome, ProjectResearchToolHandler, ResearchService, ResearchServiceConfig,
+    },
     research_store::ResearchStore,
     workspace::{atomic_write, Workspace},
 };
@@ -402,6 +404,39 @@ async fn exact_project_tools_search_inspect_save_and_bind_candidate_evidence() {
     )
     .unwrap();
     assert_eq!(answer.candidate_citations.len(), 1);
+
+    assert!(research
+        .store()
+        .database()
+        .paper_project_ids("doi:10.1000/rules")
+        .await
+        .unwrap()
+        .is_empty());
+    research
+        .store()
+        .database()
+        .insert_paper("doi:10.1000/rules", "Kolmogorov Complexity of Game Rules")
+        .await
+        .unwrap();
+    sqlx::query("UPDATE papers SET doi='10.1000/rules' WHERE id='doi:10.1000/rules'")
+        .execute(research.store().database().pool())
+        .await
+        .unwrap();
+    let imported = research
+        .import_candidate(&project, &work_id, None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        imported,
+        ImportCandidateOutcome::LinkedExisting { .. }
+    ));
+    assert!(research
+        .store()
+        .database()
+        .paper_project_ids("doi:10.1000/rules")
+        .await
+        .unwrap()
+        .contains(&project));
 }
 
 #[tokio::test]

@@ -1238,6 +1238,135 @@ async fn project_literature_history_returns_run_results_without_creating_candida
 }
 
 #[tokio::test]
+async fn project_b_cannot_read_or_mutate_project_a_research_by_guessing_ids() {
+    let (app, db, research) = research_test_app().await;
+    let token = login_token(&app).await;
+    let project_a = db.create_project("a", "Project A", "").await.unwrap();
+    let project_b = db.create_project("b", "Project B", "").await.unwrap();
+    let conversation = db.create_conversation("Search A").await.unwrap();
+    let message = db
+        .append_chat_message(&conversation.id, "user", "search", "completed")
+        .await
+        .unwrap();
+    let run = research
+        .store()
+        .start_search(
+            &project_a,
+            &conversation.id,
+            &message.id,
+            ResearchTrigger::Explicit,
+            "rule complexity",
+        )
+        .await
+        .unwrap();
+    let work = research
+        .store()
+        .upsert_work(candidate_work("10.1000/private-a"))
+        .await
+        .unwrap();
+    research
+        .store()
+        .save_search_results(&run.id, "fixture", std::slice::from_ref(&work))
+        .await
+        .unwrap();
+    research
+        .save_candidate(&project_a, &work.id, "A 的候选", &[], Some(&run.id), None)
+        .await
+        .unwrap();
+
+    let b_candidates = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_b}/candidates"))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(json_response(b_candidates)
+        .await
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let b_searches = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_b}/literature-searches"))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(json_response(b_searches)
+        .await
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let guessed_search = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/projects/{project_b}/literature-searches/{}",
+                    run.id
+                ))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(guessed_search.status(), StatusCode::NOT_FOUND);
+
+    let unscoped_search = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/literature-searches/{}", run.id))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unscoped_search.status(), StatusCode::NOT_FOUND);
+
+    for request in [
+        Request::builder()
+            .method("PATCH")
+            .uri(format!("/api/projects/{project_b}/candidates/{}", work.id))
+            .header("content-type", "application/json")
+            .header("x-paper-codex-token", &token)
+            .body(Body::from(r#"{"status":"dismissed"}"#))
+            .unwrap(),
+        Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/projects/{project_b}/candidates/{}", work.id))
+            .header("x-paper-codex-token", &token)
+            .body(Body::empty())
+            .unwrap(),
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/projects/{project_b}/candidates/{}/import",
+                work.id
+            ))
+            .header("x-paper-codex-token", &token)
+            .body(Body::empty())
+            .unwrap(),
+    ] {
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
 async fn explicit_research_rejects_paper_scope_before_creating_messages() {
     let (app, db) = conversation_test_app().await;
     let token = login_token(&app).await;
