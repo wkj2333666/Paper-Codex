@@ -2,8 +2,8 @@ use crate::{
     db::Database,
     research::{
         canonical_arxiv_id, canonical_doi, canonical_key, canonical_openalex_id, CandidateSource,
-        CandidateStatus, DiscoveredWork, EvidenceLevel, LiteratureSearchResult,
-        LiteratureSearchRun, ProjectCandidate, ResearchTrigger, SearchRunState, WorkMetadata,
+        CandidateStatus, DiscoveredWork, LiteratureSearchResult, LiteratureSearchRun,
+        ProjectCandidate, ResearchTrigger, SearchRunState, WorkMetadata,
     },
 };
 use anyhow::{bail, Context, Result};
