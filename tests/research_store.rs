@@ -11,12 +11,8 @@ use serde_json::json;
 fn sample_work(canonical_key: &str) -> WorkMetadata {
     WorkMetadata {
         canonical_key: canonical_key.to_owned(),
-        doi: canonical_key
-            .strip_prefix("doi:")
-            .map(ToOwned::to_owned),
-        arxiv_id: canonical_key
-            .strip_prefix("arxiv:")
-            .map(ToOwned::to_owned),
+        doi: canonical_key.strip_prefix("doi:").map(ToOwned::to_owned),
+        arxiv_id: canonical_key.strip_prefix("arxiv:").map(ToOwned::to_owned),
         openalex_id: canonical_key
             .strip_prefix("openalex:")
             .map(ToOwned::to_owned),
@@ -104,10 +100,7 @@ async fn search_run_keeps_results_without_promoting_all_to_candidates() {
         .upsert_work(sample_work("arxiv:2401.00001"))
         .await
         .unwrap();
-    let second = store
-        .upsert_work(sample_work("openalex:W2"))
-        .await
-        .unwrap();
+    let second = store.upsert_work(sample_work("openalex:W2")).await.unwrap();
     store
         .save_search_results(&run.id, "openalex", &[first.clone(), second])
         .await
