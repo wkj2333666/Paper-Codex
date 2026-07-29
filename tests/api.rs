@@ -1220,7 +1220,10 @@ async fn project_literature_history_returns_run_results_without_creating_candida
     let detail = app
         .oneshot(
             Request::builder()
-                .uri(format!("/api/literature-searches/{}", run.id))
+                .uri(format!(
+                    "/api/projects/{project}/literature-searches/{}",
+                    run.id
+                ))
                 .header("x-paper-codex-token", token)
                 .body(Body::empty())
                 .unwrap(),

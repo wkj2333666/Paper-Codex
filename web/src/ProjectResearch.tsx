@@ -194,7 +194,7 @@ export function ProjectResearch({projectId,papers,focusWorkId,onFocusHandled,onO
   const refresh=useCallback(async()=>{await load();await onChanged?.()},[load,onChanged])
   const actions=useMemo(()=>createCandidateActions(projectId,refresh,onOpenPaper),[projectId,refresh,onOpenPaper])
   const openSearch=async(search:LiteratureSearchRun)=>{
-    setSearchDetail(await api.literatureSearch(search.id))
+    setSearchDetail(await api.literatureSearch(projectId,search.id))
   }
   return <>
     <ProjectResearchView tab={tab} papers={papers} candidates={candidates} searches={searches} includeDismissed={includeDismissed} busy={busy} error={error} actions={actions} onTab={setTab} onOpenCandidate={setSelectedCandidate} onOpenPaper={onOpenPaper} onRemovePaper={paperId=>void onRemovePaper(paperId)} onToggleDismissed={()=>setIncludeDismissed(value=>!value)} onOpenSearch={search=>void openSearch(search)}/>

@@ -106,13 +106,13 @@ test("project literature methods encode both project and work identifiers", asyn
   await api.removeCandidate("project/one","doi:10.1/work")
   await api.importCandidate("project/one","doi:10.1/work")
   await api.projectLiteratureSearches("project/one")
-  await api.literatureSearch("run/one")
+  await api.literatureSearch("project/one","run/one")
   expect(capturedRequests.map(request=>[request.method,request.url])).toEqual([
     ["GET","/api/projects/project%2Fone/candidates?include_dismissed=true"],
     ["PATCH","/api/projects/project%2Fone/candidates/doi%3A10.1%2Fwork"],
     ["DELETE","/api/projects/project%2Fone/candidates/doi%3A10.1%2Fwork"],
     ["POST","/api/projects/project%2Fone/candidates/doi%3A10.1%2Fwork/import"],
     ["GET","/api/projects/project%2Fone/literature-searches"],
-    ["GET","/api/literature-searches/run%2Fone"],
+    ["GET","/api/projects/project%2Fone/literature-searches/run%2Fone"],
   ])
 })

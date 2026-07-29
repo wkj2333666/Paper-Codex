@@ -36,7 +36,7 @@ export const api = {
   removeCandidate:(projectId:string,workId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(workId)}`,{method:"DELETE"}),
   importCandidate:(projectId:string,workId:string)=>request<ImportCandidateOutcome>(`/api/projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(workId)}/import`,{method:"POST"}),
   projectLiteratureSearches:(projectId:string)=>request<LiteratureSearchRun[]>(`/api/projects/${encodeURIComponent(projectId)}/literature-searches`),
-  literatureSearch:(id:string)=>request<LiteratureSearchDetail>(`/api/literature-searches/${encodeURIComponent(id)}`),
+  literatureSearch:(projectId:string,id:string)=>request<LiteratureSearchDetail>(`/api/projects/${encodeURIComponent(projectId)}/literature-searches/${encodeURIComponent(id)}`),
   trash:()=>request<Paper[]>("/api/trash"),
   paperImpact:(id:string)=>request<PaperImpact>(`/api/paper/impact?id=${encodeURIComponent(id)}`),
   trashPaper:(id:string)=>request<void>(`/api/paper?id=${encodeURIComponent(id)}`,{method:"DELETE"}),

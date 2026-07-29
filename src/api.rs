@@ -183,7 +183,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/projects/{id}/literature-searches",
             get(list_project_literature_searches),
         )
-        .route("/api/literature-searches/{id}", get(get_literature_search))
+        .route(
+            "/api/projects/{project_id}/literature-searches/{id}",
+            get(get_literature_search),
+        )
         .route(
             "/api/projects/{id}/papers/{*paper_id}",
             post(add_project_paper).delete(remove_project_paper),
@@ -543,7 +546,7 @@ async fn list_project_literature_searches(
 
 async fn get_literature_search(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path((project_id, id)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
     let research = require_research(&state)?;
     let run = research
@@ -552,6 +555,9 @@ async fn get_literature_search(
         .await
         .map_err(map_research_error)?
         .ok_or_else(|| ApiError::not_found("检索记录不存在"))?;
+    if run.project_id != project_id {
+        return Err(ApiError::not_found("检索记录不存在"));
+    }
     let results = research
         .store()
         .search_results(&id)
