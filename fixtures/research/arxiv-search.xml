@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>arXiv Query: search_query=all:games</title>
+  <entry>
+    <id>https://arxiv.org/abs/2401.01234v3</id>
+    <updated>2024-01-05T00:00:00Z</updated>
+    <published>2024-01-02T00:00:00Z</published>
+    <title>Game Rules and Information</title>
+    <summary>We study information in compact game rules.</summary>
+    <author><name>Claude Shannon</name></author>
+    <link href="https://arxiv.org/abs/2401.01234v3" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2401.01234v3" rel="related" type="application/pdf"/>
+  </entry>
+  <entry>
+    <id>https://arxiv.org/abs/cs/9901001v2</id>
+    <updated>1999-01-04T00:00:00Z</updated>
+    <published>1999-01-03T00:00:00Z</published>
+    <title>Legacy Identifier Work</title>
+    <summary>A second deterministic fixture.</summary>
+    <author><name>Joan Clarke</name></author>
+    <link href="https://arxiv.org/abs/cs/9901001v2" rel="alternate" type="text/html"/>
+  </entry>
+</feed>

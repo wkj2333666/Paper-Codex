@@ -1,8 +1,12 @@
+use crate::research::{CandidateSource, EvidenceLevel, ResearchMode};
 use anyhow::{bail, Result};
 use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ConversationAnswer {
@@ -10,7 +14,20 @@ pub struct ConversationAnswer {
     pub title: Option<String>,
     pub answer_markdown: String,
     pub citations: Vec<ConversationCitation>,
+    #[serde(default)]
+    pub candidate_citations: Vec<ConversationCandidateCitation>,
     pub annotation_intents: Vec<AnnotationIntent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ConversationCandidateCitation {
+    pub id: String,
+    pub work_id: String,
+    pub title: String,
+    pub source_url: String,
+    pub evidence_level: EvidenceLevel,
+    pub quote: String,
+    pub explanation: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -74,9 +91,18 @@ pub fn explicit_annotation_intent(question: &str) -> bool {
 }
 
 pub fn validate_conversation_answer(
+    answer: ConversationAnswer,
+    question: &str,
+    sources: &[ConversationSource],
+) -> Result<ConversationAnswer> {
+    validate_conversation_answer_with_candidates(answer, question, sources, &HashMap::new())
+}
+
+pub fn validate_conversation_answer_with_candidates(
     mut answer: ConversationAnswer,
     question: &str,
     sources: &[ConversationSource],
+    candidate_sources: &HashMap<String, CandidateSource>,
 ) -> Result<ConversationAnswer> {
     if answer.answer_markdown.trim().is_empty() {
         bail!("conversation answer is empty");
@@ -101,11 +127,13 @@ pub fn validate_conversation_answer(
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
+    let mut all_citation_ids = HashSet::new();
     let mut citation_ids = HashSet::new();
     for citation in &mut answer.citations {
-        if citation.id.trim().is_empty() || !citation_ids.insert(citation.id.clone()) {
+        if citation.id.trim().is_empty() || !all_citation_ids.insert(citation.id.clone()) {
             bail!("citation ids must be non-empty and unique");
         }
+        citation_ids.insert(citation.id.clone());
         if citation.quote.trim().is_empty() {
             bail!("citation quote cannot be empty");
         }
@@ -127,6 +155,32 @@ pub fn validate_conversation_answer(
         citation.quote = clean_control_characters(&citation.quote);
         citation.prefix = clean_control_characters(&citation.prefix);
         citation.suffix = clean_control_characters(&citation.suffix);
+        citation.explanation = clean_control_characters(&citation.explanation);
+    }
+    for citation in &mut answer.candidate_citations {
+        if citation.id.trim().is_empty() || !all_citation_ids.insert(citation.id.clone()) {
+            bail!("citation ids must be non-empty and unique across all evidence");
+        }
+        let inspected = candidate_sources
+            .get(&citation.work_id)
+            .ok_or_else(|| anyhow::anyhow!("candidate citation was not inspected in this turn"))?;
+        if citation.source_url != inspected.source_url {
+            bail!("candidate citation source URL does not match inspected evidence");
+        }
+        if citation.title != inspected.title {
+            bail!("candidate citation title does not match inspected evidence");
+        }
+        if inspected.evidence_level.strongest(citation.evidence_level) != inspected.evidence_level {
+            bail!("candidate citation claims stronger evidence than was inspected");
+        }
+        if citation.quote.trim().is_empty() {
+            bail!("candidate citation quote cannot be empty");
+        }
+        if citation.quote.chars().count() > 2_000 || citation.explanation.chars().count() > 8_000 {
+            bail!("candidate citation text is too long");
+        }
+        citation.title = clean_control_characters(&citation.title);
+        citation.quote = clean_control_characters(&citation.quote);
         citation.explanation = clean_control_characters(&citation.explanation);
     }
     let allow_persistence = explicit_annotation_intent(question);
@@ -207,6 +261,31 @@ pub fn scoped_question_prompt(scope: &str, question: &str, context: &str) -> Str
 }
 
 pub fn conversation_question_prompt(question: &str) -> String {
+    conversation_question_prompt_with_research(question, ResearchMode::Auto, false)
+}
+
+pub fn conversation_question_prompt_with_research(
+    question: &str,
+    research_mode: ResearchMode,
+    research_tools_enabled: bool,
+) -> String {
+    let research_instructions = if research_tools_enabled {
+        let mode_instruction = match research_mode {
+            ResearchMode::Auto => "这是自动研究模式：只有当前项目上下文不足时才调用研究工具。",
+            ResearchMode::Explicit => "这是显式研究模式：本轮必须至少调用一次 research_search。",
+        };
+        format!(
+            r#"
+- 当前对话允许使用项目研究工具 research_search、research_inspect 和 research_save。{mode_instruction}
+- 本地正式论文问题仍优先读取当前目录文件；外部候选论文必须先检索，再按需查证。
+- 候选证据必须标明 metadata、abstract 或 fulltext；不得为外部候选捏造页码。
+- 只有真正相关的结果才调用 research_save，不要把每个检索命中都保存成候选。
+- 使用外部候选证据时写入 candidate_citations；正式论文证据继续写入 citations。
+"#
+        )
+    } else {
+        "\n- 本轮没有项目研究工具；不得声称执行了外部论文检索。\n".to_owned()
+    };
     format!(
         r#"使用简体中文回答下面的论文研究问题。先读取当前目录中的 `context.md` 和 `context.json`，再按需检索 `papers/*.md` 的逐页原文。
 
@@ -217,6 +296,7 @@ pub fn conversation_question_prompt(question: &str) -> String {
 - 每条引用必须给出准确 paper_id、revision、从 1 开始的页码和可定位的连续原文 quote。
 - 区分论文作者的结论与分析解释；证据不足时明确说明。
 - 只有用户明确要求批注、标注、记住、固定或保存为笔记时，annotation intent 才可设置 persist=true。
+{research_instructions}
 
 问题：{question}"#
     )
@@ -243,6 +323,7 @@ mod tests {
             title: Some("  研究方法\n  ".into()),
             answer_markdown: "回答".into(),
             citations: vec![],
+            candidate_citations: vec![],
             annotation_intents: vec![],
         };
         let normalized = validate_conversation_answer(answer, "问题", &[]).unwrap();

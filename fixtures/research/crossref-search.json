@@ -1,0 +1,42 @@
+{
+  "status": "ok",
+  "message": {
+    "items": [
+      {
+        "DOI": "10.1000/RULE",
+        "title": ["Rule Complexity for Games"],
+        "author": [
+          {
+            "given": "Ada",
+            "family": "Lovelace"
+          }
+        ],
+        "published": {
+          "date-parts": [[2024]]
+        },
+        "abstract": "<jats:p>Rule complexity for games</jats:p>",
+        "URL": "https://doi.org/10.1000/rule",
+        "link": [
+          {
+            "URL": "https://example.test/rule.pdf",
+            "content-type": "application/pdf"
+          }
+        ]
+      },
+      {
+        "DOI": "10.1000/METADATA",
+        "title": ["Metadata Only Work"],
+        "author": [
+          {
+            "family": "Turing"
+          }
+        ],
+        "issued": {
+          "date-parts": [[2022]]
+        },
+        "URL": "https://doi.org/10.1000/metadata",
+        "link": []
+      }
+    ]
+  }
+}

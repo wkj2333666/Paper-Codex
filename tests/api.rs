@@ -3,6 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use paper_codex::{
+    acquisition::Acquirer,
     api::{build_router, AppState},
     auth::Auth,
     codex::{CodexCommand, CodexRuntime},
@@ -10,9 +11,13 @@ use paper_codex::{
     db::Database,
     domain::Paper,
     prompts::{ConversationAnswer, ConversationCitation},
+    research::{CandidateStatus, EvidenceLevel, ResearchTrigger, WorkMetadata},
+    research_service::{ResearchService, ResearchServiceConfig},
+    research_store::ResearchStore,
     workspace::Workspace,
 };
 use serde_json::Value;
+use std::{sync::Arc, time::Duration};
 use tower::ServiceExt;
 
 fn fake_command() -> CodexCommand {
@@ -439,6 +444,7 @@ async fn annotation_api_pins_lists_updates_and_stores_anchors() {
                     suffix: String::new(),
                     explanation: "说明".into(),
                 }],
+                candidate_citations: vec![],
                 annotation_intents: vec![],
             },
         )
@@ -970,4 +976,436 @@ async fn paper_pdf_supports_authenticated_ranges_and_etags() {
         .await
         .unwrap();
     assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+}
+
+async fn research_test_app() -> (axum::Router, Database, Arc<ResearchService>) {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.keep();
+    let workspace = Workspace::initialize(&root).await.unwrap();
+    let research = Arc::new(
+        ResearchService::new(
+            ResearchStore::new(db.clone()),
+            Vec::new(),
+            Acquirer::new(1024 * 1024).unwrap(),
+            ResearchServiceConfig {
+                cache_dir: root.join(".runtime/research-cache"),
+                cache_max_bytes: 1024 * 1024,
+                cache_ttl: Duration::from_secs(30 * 24 * 60 * 60),
+                max_concurrency: 3,
+            },
+        )
+        .unwrap(),
+    );
+    let hash = bcrypt::hash("paper-secret", 4).unwrap();
+    let state = AppState::for_test(
+        db.clone(),
+        workspace,
+        Auth::new(hash, "test-jwt-secret".into()),
+    )
+    .with_research_service(research.clone());
+    (build_router(state), db, research)
+}
+
+fn candidate_work(doi: &str) -> WorkMetadata {
+    WorkMetadata {
+        canonical_key: format!("doi:{doi}"),
+        doi: Some(doi.to_owned()),
+        arxiv_id: None,
+        openalex_id: None,
+        title: "Rule Complexity for Games".to_owned(),
+        authors: vec!["Ada Lovelace".to_owned()],
+        year: Some(2024),
+        abstract_text: Some("Verified abstract".to_owned()),
+        source_url: format!("https://doi.org/{doi}"),
+        pdf_url: Some("https://example.test/rule.pdf".to_owned()),
+        evidence_level: EvidenceLevel::Abstract,
+        metadata: serde_json::json!({"fixture": true}),
+    }
+}
+
+#[tokio::test]
+async fn candidate_import_reuses_an_existing_paper_only_after_authenticated_confirmation() {
+    let (app, db, research) = research_test_app().await;
+    let project = db.create_project("bench", "Bench", "").await.unwrap();
+    let work = research
+        .store()
+        .upsert_work(candidate_work("10.1000/rule"))
+        .await
+        .unwrap();
+    research
+        .save_candidate(&project, &work.id, "直接相关", &[], None, None)
+        .await
+        .unwrap();
+    db.insert_paper("doi:10.1000/rule", "Rule Complexity")
+        .await
+        .unwrap();
+    sqlx::query("UPDATE papers SET doi='10.1000/rule' WHERE id='doi:10.1000/rule'")
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/projects/{project}/candidates/{}/import",
+                    work.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let token = login_token(&app).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/projects/{project}/candidates/{}/import",
+                    work.id
+                ))
+                .header("x-paper-codex-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(db
+        .paper_project_ids("doi:10.1000/rule")
+        .await
+        .unwrap()
+        .contains(&project));
+    assert_eq!(
+        research
+            .store()
+            .get_candidate(&project, &work.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        CandidateStatus::Imported
+    );
+}
+
+#[tokio::test]
+async fn candidate_review_distinguishes_dismiss_remove_and_importing_conflict() {
+    let (app, db, research) = research_test_app().await;
+    let token = login_token(&app).await;
+    let project = db.create_project("review", "Review", "").await.unwrap();
+    let work = research
+        .store()
+        .upsert_work(candidate_work("10.1000/review"))
+        .await
+        .unwrap();
+    research
+        .save_candidate(&project, &work.id, "值得检查", &[], None, None)
+        .await
+        .unwrap();
+
+    let dismissed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/projects/{project}/candidates/{}", work.id))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(r#"{"status":"dismissed"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dismissed.status(), StatusCode::OK);
+
+    let active = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project}/candidates"))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json_response(active).await.as_array().unwrap().len(), 0);
+    let all = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/projects/{project}/candidates?include_dismissed=true"
+                ))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json_response(all).await.as_array().unwrap().len(), 1);
+
+    research
+        .store()
+        .set_candidate_status(&project, &work.id, CandidateStatus::Importing)
+        .await
+        .unwrap();
+    let conflict = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/projects/{project}/candidates/{}", work.id))
+                .header("x-paper-codex-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn project_literature_history_returns_run_results_without_creating_candidates() {
+    let (app, db, research) = research_test_app().await;
+    let token = login_token(&app).await;
+    let project = db.create_project("history", "History", "").await.unwrap();
+    let conversation = db.create_conversation("Search").await.unwrap();
+    let message = db
+        .append_chat_message(&conversation.id, "user", "search", "completed")
+        .await
+        .unwrap();
+    let run = research
+        .store()
+        .start_search(
+            &project,
+            &conversation.id,
+            &message.id,
+            ResearchTrigger::Explicit,
+            "rule complexity",
+        )
+        .await
+        .unwrap();
+    let work = research
+        .store()
+        .upsert_work(candidate_work("10.1000/history"))
+        .await
+        .unwrap();
+    research
+        .store()
+        .save_search_results(&run.id, "crossref", &[work])
+        .await
+        .unwrap();
+
+    let history = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project}/literature-searches"))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(history.status(), StatusCode::OK);
+    assert_eq!(json_response(history).await.as_array().unwrap().len(), 1);
+
+    let detail = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/projects/{project}/literature-searches/{}",
+                    run.id
+                ))
+                .header("x-paper-codex-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let detail = json_response(detail).await;
+    assert_eq!(detail["results"].as_array().unwrap().len(), 1);
+    assert!(research
+        .store()
+        .list_project_candidates(&project, false)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn project_b_cannot_read_or_mutate_project_a_research_by_guessing_ids() {
+    let (app, db, research) = research_test_app().await;
+    let token = login_token(&app).await;
+    let project_a = db.create_project("a", "Project A", "").await.unwrap();
+    let project_b = db.create_project("b", "Project B", "").await.unwrap();
+    let conversation = db.create_conversation("Search A").await.unwrap();
+    let message = db
+        .append_chat_message(&conversation.id, "user", "search", "completed")
+        .await
+        .unwrap();
+    let run = research
+        .store()
+        .start_search(
+            &project_a,
+            &conversation.id,
+            &message.id,
+            ResearchTrigger::Explicit,
+            "rule complexity",
+        )
+        .await
+        .unwrap();
+    let work = research
+        .store()
+        .upsert_work(candidate_work("10.1000/private-a"))
+        .await
+        .unwrap();
+    research
+        .store()
+        .save_search_results(&run.id, "fixture", std::slice::from_ref(&work))
+        .await
+        .unwrap();
+    research
+        .save_candidate(&project_a, &work.id, "A 的候选", &[], Some(&run.id), None)
+        .await
+        .unwrap();
+
+    let b_candidates = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_b}/candidates"))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(json_response(b_candidates)
+        .await
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let b_searches = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_b}/literature-searches"))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(json_response(b_searches)
+        .await
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let guessed_search = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/projects/{project_b}/literature-searches/{}",
+                    run.id
+                ))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(guessed_search.status(), StatusCode::NOT_FOUND);
+
+    let unscoped_search = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/literature-searches/{}", run.id))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unscoped_search.status(), StatusCode::NOT_FOUND);
+
+    for request in [
+        Request::builder()
+            .method("PATCH")
+            .uri(format!("/api/projects/{project_b}/candidates/{}", work.id))
+            .header("content-type", "application/json")
+            .header("x-paper-codex-token", &token)
+            .body(Body::from(r#"{"status":"dismissed"}"#))
+            .unwrap(),
+        Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/projects/{project_b}/candidates/{}", work.id))
+            .header("x-paper-codex-token", &token)
+            .body(Body::empty())
+            .unwrap(),
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/projects/{project_b}/candidates/{}/import",
+                work.id
+            ))
+            .header("x-paper-codex-token", &token)
+            .body(Body::empty())
+            .unwrap(),
+    ] {
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
+async fn explicit_research_rejects_paper_scope_before_creating_messages() {
+    let (app, db) = conversation_test_app().await;
+    let token = login_token(&app).await;
+    let conversation = db.create_conversation("论文问题").await.unwrap();
+    db.replace_conversation_scopes(
+        &conversation.id,
+        &[paper_codex::conversations::ConversationScopeInput {
+            scope_type: "paper".into(),
+            scope_id: Some("paper:one".into()),
+        }],
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/conversations/{}/messages", conversation.id))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "content":"检索更多相关论文",
+                        "research_mode":"explicit"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(db
+        .conversation_messages(&conversation.id, 100, 0)
+        .await
+        .unwrap()
+        .is_empty());
 }

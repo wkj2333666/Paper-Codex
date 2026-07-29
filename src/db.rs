@@ -158,6 +158,94 @@ CREATE TABLE IF NOT EXISTS conversation_events (
 CREATE INDEX IF NOT EXISTS conversation_events_replay ON conversation_events(conversation_id,id);
 "#;
 
+const RESEARCH_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS discovered_works (
+  id TEXT PRIMARY KEY,
+  canonical_key TEXT NOT NULL UNIQUE,
+  doi TEXT,
+  arxiv_id TEXT,
+  openalex_id TEXT,
+  title TEXT NOT NULL,
+  authors_json TEXT NOT NULL DEFAULT '[]',
+  year INTEGER,
+  abstract_text TEXT,
+  source_url TEXT NOT NULL,
+  pdf_url TEXT,
+  evidence_level TEXT NOT NULL CHECK(evidence_level IN ('metadata','abstract','fulltext')),
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  refreshed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS discovered_works_doi
+  ON discovered_works(doi) WHERE doi IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS discovered_works_arxiv
+  ON discovered_works(arxiv_id) WHERE arxiv_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS discovered_works_openalex
+  ON discovered_works(openalex_id) WHERE openalex_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS literature_search_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  trigger_type TEXT NOT NULL CHECK(trigger_type IN ('automatic','explicit')),
+  question TEXT NOT NULL,
+  query_plan_json TEXT NOT NULL DEFAULT '{}',
+  state TEXT NOT NULL CHECK(state IN ('running','completed','partial','failed','cancelled')),
+  provider_status_json TEXT NOT NULL DEFAULT '{}',
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS literature_search_runs_project
+  ON literature_search_runs(project_id,created_at);
+CREATE INDEX IF NOT EXISTS literature_search_runs_message
+  ON literature_search_runs(message_id);
+
+CREATE TABLE IF NOT EXISTS literature_search_results (
+  search_run_id TEXT NOT NULL REFERENCES literature_search_runs(id) ON DELETE CASCADE,
+  work_id TEXT NOT NULL REFERENCES discovered_works(id) ON DELETE CASCADE,
+  providers_json TEXT NOT NULL DEFAULT '[]',
+  best_rank INTEGER,
+  provider_scores_json TEXT NOT NULL DEFAULT '{}',
+  raw_results_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(search_run_id,work_id)
+);
+
+CREATE TABLE IF NOT EXISTS project_candidates (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_id TEXT NOT NULL REFERENCES discovered_works(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK(status IN ('candidate','importing','imported','dismissed')),
+  relevance_reason TEXT NOT NULL,
+  relevance_tags_json TEXT NOT NULL DEFAULT '[]',
+  evidence_level TEXT NOT NULL CHECK(evidence_level IN ('metadata','abstract','fulltext')),
+  discovered_by_search_run_id TEXT REFERENCES literature_search_runs(id) ON DELETE SET NULL,
+  discovered_by_conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+  import_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(project_id,work_id)
+);
+CREATE INDEX IF NOT EXISTS project_candidates_updated
+  ON project_candidates(project_id,updated_at);
+
+CREATE TABLE IF NOT EXISTS message_candidate_citations (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_id TEXT NOT NULL REFERENCES discovered_works(id) ON DELETE CASCADE,
+  source_url TEXT NOT NULL,
+  evidence_level TEXT NOT NULL CHECK(evidence_level IN ('metadata','abstract','fulltext')),
+  quote TEXT NOT NULL DEFAULT '',
+  explanation TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS message_candidate_citations_message
+  ON message_candidate_citations(message_id);
+"#;
+
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
@@ -184,6 +272,10 @@ impl Database {
             .execute(&pool)
             .await
             .context("create conversation extended schema")?;
+        sqlx::raw_sql(RESEARCH_SCHEMA)
+            .execute(&pool)
+            .await
+            .context("create research schema")?;
         Ok(Self { pool })
     }
 
@@ -202,6 +294,13 @@ impl Database {
         }
         if !has_column(pool, "chat_messages", "conversation_id").await? {
             Self::migrate_legacy_chat_messages(pool).await?;
+        }
+        if !has_column(pool, "chat_messages", "research_mode").await? {
+            sqlx::query(
+                "ALTER TABLE chat_messages ADD COLUMN research_mode TEXT NOT NULL DEFAULT 'auto'",
+            )
+            .execute(pool)
+            .await?;
         }
         for (column, definition) in [
             ("model", "TEXT"),
@@ -511,6 +610,29 @@ impl Database {
             .bind(id)
             .fetch_optional(&self.pool)
             .await?)
+    }
+
+    pub async fn find_paper_by_identity(
+        &self,
+        doi: Option<&str>,
+        arxiv_id: Option<&str>,
+    ) -> Result<Option<Paper>> {
+        Ok(sqlx::query_as(
+            r#"SELECT * FROM papers
+               WHERE deleted_at IS NULL
+                 AND (
+                   (? IS NOT NULL AND lower(doi)=lower(?))
+                   OR (? IS NOT NULL AND lower(arxiv_id)=lower(?))
+                 )
+               ORDER BY updated_at DESC
+               LIMIT 1"#,
+        )
+        .bind(doi)
+        .bind(doi)
+        .bind(arxiv_id)
+        .bind(arxiv_id)
+        .fetch_optional(&self.pool)
+        .await?)
     }
 
     pub async fn list_projects(&self) -> Result<Vec<Project>> {

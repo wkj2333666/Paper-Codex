@@ -1,8 +1,12 @@
+use async_trait::async_trait;
 use paper_codex::codex::{CodexCommand, CodexRunSettings, CodexRuntime, CodexTurn};
+use paper_codex::codex_tools::{
+    DynamicToolCall, DynamicToolDefinition, DynamicToolHandler, DynamicToolSession,
+};
 use paper_codex::prompts::conversation_answer_schema;
 use serde_json::Value;
-use std::path::PathBuf;
-use tokio::sync::watch;
+use std::{path::PathBuf, sync::Arc};
+use tokio::sync::{mpsc, watch, Mutex};
 
 fn fake_command() -> CodexCommand {
     CodexCommand {
@@ -16,11 +20,71 @@ fn fake_command() -> CodexCommand {
     }
 }
 
+fn fake_command_without_dynamic_tools() -> CodexCommand {
+    let mut command = fake_command();
+    command.args.push("--reject-dynamic-tools".into());
+    command
+}
+
 fn standard_settings() -> CodexRunSettings {
     CodexRunSettings {
         model: "gpt-test".into(),
         reasoning_effort: "low".into(),
         service_tier: None,
+    }
+}
+
+fn research_turn(prompt: &str) -> CodexTurn {
+    CodexTurn {
+        thread_id: None,
+        cwd: tempfile::tempdir().unwrap().keep(),
+        prompt: prompt.to_owned(),
+        output_schema: None,
+        settings: standard_settings(),
+    }
+}
+
+#[derive(Default)]
+struct RecordingHandler {
+    calls: Mutex<Vec<DynamicToolCall>>,
+}
+
+impl RecordingHandler {
+    async fn calls(&self) -> Vec<DynamicToolCall> {
+        self.calls.lock().await.clone()
+    }
+}
+
+#[async_trait]
+impl DynamicToolHandler for RecordingHandler {
+    async fn call(&self, call: DynamicToolCall) -> anyhow::Result<Vec<Value>> {
+        let query = call.arguments["query"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        self.calls.lock().await.push(call);
+        Ok(vec![serde_json::json!({
+            "query": query,
+            "works": [{"title": "Rule Complexity", "evidence_level": "abstract"}]
+        })])
+    }
+}
+
+fn test_tool_session(handler: Arc<RecordingHandler>) -> DynamicToolSession {
+    DynamicToolSession {
+        definitions: vec![DynamicToolDefinition {
+            name: "research_search".into(),
+            description: "检索当前项目的相关论文".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["query", "reason"],
+                "properties": {
+                    "query": {"type": "string"},
+                    "reason": {"type": "string"}
+                }
+            }),
+        }],
+        handler,
     }
 }
 
@@ -56,6 +120,78 @@ async fn advertises_model_effort_and_speed_capabilities() {
         vec!["low", "high"]
     );
     assert!(capabilities.models[0].supports_fast);
+    assert!(capabilities.supports_dynamic_tools);
+}
+
+#[tokio::test]
+async fn executes_dynamic_tool_requests_through_the_bound_handler() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let handler = Arc::new(RecordingHandler::default());
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (event_tx, _event_rx) = mpsc::unbounded_channel();
+    let outcome = runtime
+        .run_turn_with_events_and_tools(
+            research_turn("call-research-search"),
+            cancel_rx,
+            event_tx,
+            Some(test_tool_session(handler.clone())),
+        )
+        .await
+        .unwrap();
+
+    let calls = handler.calls().await;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].tool, "research_search");
+    assert_eq!(calls[0].thread_id, "thread-fake");
+    assert_eq!(outcome.status, "completed");
+    assert_eq!(outcome.final_text, "tool-backed answer");
+}
+
+#[tokio::test]
+async fn denies_non_tool_server_requests_without_invoking_the_handler() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let handler = Arc::new(RecordingHandler::default());
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (event_tx, _event_rx) = mpsc::unbounded_channel();
+    let outcome = runtime
+        .run_turn_with_events_and_tools(
+            research_turn("request-approval"),
+            cancel_rx,
+            event_tx,
+            Some(test_tool_session(handler.clone())),
+        )
+        .await
+        .unwrap();
+
+    assert!(handler.calls().await.is_empty());
+    assert_eq!(outcome.status, "completed");
+}
+
+#[tokio::test]
+async fn falls_back_safely_when_app_server_rejects_dynamic_tools() {
+    let runtime = CodexRuntime::spawn(fake_command_without_dynamic_tools())
+        .await
+        .unwrap();
+    let handler = Arc::new(RecordingHandler::default());
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let outcome = runtime
+        .run_turn_with_events_and_tools(
+            research_turn("ordinary fallback turn"),
+            cancel_rx,
+            event_tx,
+            Some(test_tool_session(handler)),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.status, "completed");
+    assert!(!runtime.capabilities().supports_dynamic_tools);
+    let mut unavailable = false;
+    while let Ok(event) = event_rx.try_recv() {
+        unavailable |= event.kind == "dynamic-tools-unavailable";
+    }
+    assert!(unavailable);
 }
 
 #[tokio::test]

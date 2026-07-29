@@ -5,6 +5,9 @@ use crate::{
     db::Database,
     domain::TaskEvent,
     login_limiter::LoginLimiter,
+    research::{CandidateStatus, ResearchMode},
+    research_service::ResearchService,
+    research_store::ResearchStore,
     search::SearchIndex,
     tasks::{IngestInput, QuestionInput, TaskEngine},
     workspace::{safe_key, Workspace},
@@ -42,6 +45,7 @@ pub struct AppState {
     pub login_limiter: LoginLimiter,
     pub engine: Option<Arc<TaskEngine>>,
     pub conversation_engine: Option<Arc<ConversationEngine>>,
+    pub research: Option<Arc<ResearchService>>,
     pub search: SearchIndex,
     pub static_dir: PathBuf,
     pub max_upload_bytes: usize,
@@ -65,6 +69,7 @@ impl AppState {
             login_limiter: LoginLimiter::default(),
             engine: Some(engine),
             conversation_engine: Some(conversation_engine),
+            research: None,
             static_dir,
             max_upload_bytes,
         }
@@ -78,6 +83,7 @@ impl AppState {
             login_limiter: LoginLimiter::default(),
             engine: None,
             conversation_engine: None,
+            research: None,
             static_dir: PathBuf::new(),
             max_upload_bytes: 10 * 1024 * 1024,
         }
@@ -85,6 +91,11 @@ impl AppState {
 
     pub fn with_conversation_engine(mut self, engine: Arc<ConversationEngine>) -> Self {
         self.conversation_engine = Some(engine);
+        self
+    }
+
+    pub fn with_research_service(mut self, research: Arc<ResearchService>) -> Self {
+        self.research = Some(research);
         self
     }
 }
@@ -156,6 +167,26 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(delete_project),
         )
         .route("/api/projects/{id}/impact", get(project_impact))
+        .route(
+            "/api/projects/{id}/candidates",
+            get(list_project_candidates),
+        )
+        .route(
+            "/api/projects/{id}/candidates/{work_id}",
+            axum::routing::patch(update_project_candidate).delete(remove_project_candidate),
+        )
+        .route(
+            "/api/projects/{id}/candidates/{work_id}/import",
+            post(import_project_candidate),
+        )
+        .route(
+            "/api/projects/{id}/literature-searches",
+            get(list_project_literature_searches),
+        )
+        .route(
+            "/api/projects/{project_id}/literature-searches/{id}",
+            get(get_literature_search),
+        )
         .route(
             "/api/projects/{id}/papers/{*paper_id}",
             post(add_project_paper).delete(remove_project_paper),
@@ -427,6 +458,136 @@ async fn project_impact(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(Json(json!(state.db.project_impact(&id).await?)))
+}
+
+#[derive(Deserialize)]
+struct CandidateListQuery {
+    #[serde(default)]
+    include_dismissed: bool,
+}
+
+async fn list_project_candidates(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<CandidateListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let research = require_research(&state)?;
+    let candidates = research
+        .store()
+        .list_project_candidates(&id, query.include_dismissed)
+        .await
+        .map_err(map_research_error)?;
+    Ok(Json(json!(candidates)))
+}
+
+#[derive(Deserialize)]
+struct CandidateStatusRequest {
+    status: CandidateStatus,
+}
+
+async fn update_project_candidate(
+    State(state): State<AppState>,
+    Path((project_id, work_id)): Path<(String, String)>,
+    Json(request): Json<CandidateStatusRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if !matches!(
+        request.status,
+        CandidateStatus::Candidate | CandidateStatus::Dismissed
+    ) {
+        return Err(ApiError::bad_request(
+            "候选论文只能手动恢复为候选或标记为忽略",
+        ));
+    }
+    let research = require_research(&state)?;
+    let candidate = research
+        .store()
+        .set_candidate_status(&project_id, &work_id, request.status)
+        .await
+        .map_err(map_research_error)?;
+    Ok(Json(json!(candidate)))
+}
+
+async fn remove_project_candidate(
+    State(state): State<AppState>,
+    Path((project_id, work_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let research = require_research(&state)?;
+    research
+        .remove_candidate(&project_id, &work_id)
+        .await
+        .map_err(map_research_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn import_project_candidate(
+    State(state): State<AppState>,
+    Path((project_id, work_id)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    let research = require_research(&state)?;
+    let outcome = research
+        .import_candidate(&project_id, &work_id, state.engine.as_deref())
+        .await
+        .map_err(map_research_error)?;
+    Ok(Json(json!(outcome)))
+}
+
+async fn list_project_literature_searches(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let research = require_research(&state)?;
+    let searches = research
+        .store()
+        .list_project_searches(&id)
+        .await
+        .map_err(map_research_error)?;
+    Ok(Json(json!(searches)))
+}
+
+async fn get_literature_search(
+    State(state): State<AppState>,
+    Path((project_id, id)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    let research = require_research(&state)?;
+    let run = research
+        .store()
+        .get_search(&id)
+        .await
+        .map_err(map_research_error)?
+        .ok_or_else(|| ApiError::not_found("检索记录不存在"))?;
+    if run.project_id != project_id {
+        return Err(ApiError::not_found("检索记录不存在"));
+    }
+    let results = research
+        .store()
+        .search_results(&id)
+        .await
+        .map_err(map_research_error)?;
+    Ok(Json(json!({"run":run,"results":results})))
+}
+
+fn require_research(state: &AppState) -> Result<Arc<ResearchService>, ApiError> {
+    state
+        .research
+        .clone()
+        .ok_or_else(|| ApiError::unavailable("论文检索服务尚未启用"))
+}
+
+fn map_research_error(error: anyhow::Error) -> ApiError {
+    let message = error.to_string();
+    if message.contains("does not exist") {
+        ApiError::not_found("项目或候选论文不存在")
+    } else if message.contains("already importing")
+        || message.contains("while it is importing")
+        || message.contains("cannot begin importing")
+    {
+        ApiError::conflict("候选论文正在导入")
+    } else if message.contains("unavailable") {
+        ApiError::unavailable("论文导入服务尚未启用")
+    } else {
+        tracing::error!(error=%error, "research API operation failed");
+        ApiError::bad_request(message)
+    }
 }
 
 async fn add_project_paper(
@@ -956,9 +1117,26 @@ async fn get_conversation(
         .conversation_messages(&id, query.limit.unwrap_or(100), query.offset.unwrap_or(0))
         .await?;
     let mut messages_with_citations = Vec::with_capacity(messages.len());
+    let research_store = ResearchStore::new(state.db.clone());
     for message in messages {
         let citations = state.db.message_citations(&message.id).await?;
-        messages_with_citations.push(json!({"id":message.id,"conversation_id":message.conversation_id,"role":message.role,"content":message.content,"turn_id":message.turn_id,"status":message.status,"error":message.error,"created_at":message.created_at,"updated_at":message.updated_at,"citations":citations}));
+        let candidate_citations = research_store
+            .message_candidate_citations(&message.id)
+            .await?;
+        messages_with_citations.push(json!({
+            "id":message.id,
+            "conversation_id":message.conversation_id,
+            "role":message.role,
+            "content":message.content,
+            "turn_id":message.turn_id,
+            "status":message.status,
+            "error":message.error,
+            "research_mode":message.research_mode,
+            "created_at":message.created_at,
+            "updated_at":message.updated_at,
+            "citations":citations,
+            "candidate_citations":candidate_citations
+        }));
     }
     Ok(Json(json!({
         "conversation": conversation,
@@ -1042,6 +1220,7 @@ async fn replace_conversation_scopes(
 #[derive(Deserialize)]
 struct CreateMessageRequest {
     content: String,
+    research_mode: Option<ResearchMode>,
 }
 
 async fn create_conversation_message(
@@ -1053,7 +1232,11 @@ async fn create_conversation_message(
         .conversation_engine
         .as_ref()
         .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
-        .enqueue_message(&id, &request.content)
+        .enqueue_message_with_research_mode(
+            &id,
+            &request.content,
+            request.research_mode.unwrap_or(ResearchMode::Auto),
+        )
         .await
         .map_err(conversation_api_error)?;
     Ok((

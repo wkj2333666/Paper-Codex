@@ -114,6 +114,7 @@ fn conversation_answer_requires_a_locatable_quote() {
             suffix: String::new(),
             explanation: "证据说明".into(),
         }],
+        candidate_citations: vec![],
         annotation_intents: vec![AnnotationIntent {
             citation_id: "1".into(),
             kind: "motivation".into(),
@@ -147,6 +148,7 @@ fn ordinary_questions_cannot_persist_model_generated_annotations() {
             suffix: String::new(),
             explanation: "证据说明".into(),
         }],
+        candidate_citations: vec![],
         annotation_intents: vec![AnnotationIntent {
             citation_id: "1".into(),
             kind: "motivation".into(),

@@ -5,6 +5,7 @@ import { CodexPanel, ConversationProgress } from "./CodexPanel"
 const capabilities = {
   default:{model:"gpt-test", reasoning_effort:"medium", service_tier:null},
   models:[{id:"gpt-test",display_name:"GPT Test",default_reasoning_effort:"medium",supported_reasoning_efforts:["low","medium","high"],supports_fast:true}],
+  supports_dynamic_tools:true,
 }
 
 describe("CodexPanel", () => {
@@ -41,5 +42,23 @@ describe("CodexPanel", () => {
     expect(reading).toContain("Codex 正在读取论文")
     expect(reasoning).toContain("Codex 正在分析证据并组织回答")
     expect(reasoning).not.toContain("chain-of-thought")
+  })
+
+  it("offers controlled literature search only in project scope", () => {
+    const project=renderToStaticMarkup(
+      <CodexPanel selection={{kind:"project",id:"project-a"}} scopeLabel="规则复杂度" activities={[]} drawerOpen={false} onCollapse={()=>{}} onCitation={()=>{}} onCandidate={()=>{}} onCitations={()=>{}} onSelect={()=>{}} codexCapabilities={capabilities}/>,
+    )
+    const paper=renderToStaticMarkup(
+      <CodexPanel selection={{kind:"paper",id:"paper-a"}} scopeLabel="论文" activities={[]} drawerOpen={false} onCollapse={()=>{}} onCitation={()=>{}} onCandidate={()=>{}} onCitations={()=>{}} onSelect={()=>{}} codexCapabilities={capabilities}/>,
+    )
+    expect(project).toContain('aria-label="检索论文"')
+    expect(paper).not.toContain('aria-label="检索论文"')
+  })
+
+  it("explains when controlled search is unavailable", () => {
+    const html=renderToStaticMarkup(
+      <CodexPanel selection={{kind:"project",id:"project-a"}} scopeLabel="规则复杂度" activities={[]} drawerOpen={false} onCollapse={()=>{}} onCitation={()=>{}} onCandidate={()=>{}} onCitations={()=>{}} onSelect={()=>{}} codexCapabilities={{...capabilities,supports_dynamic_tools:false}}/>,
+    )
+    expect(html).toContain("当前 Codex 版本不支持受控论文检索")
   })
 })

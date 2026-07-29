@@ -1,0 +1,67 @@
+import { renderToStaticMarkup } from "react-dom/server"
+import { describe, expect, it, vi } from "vitest"
+import { api } from "./api"
+import { createCandidateActions, ProjectResearchView } from "./ProjectResearch"
+import type { ProjectCandidate } from "./types"
+
+const candidate = (status:ProjectCandidate["status"]="candidate"):ProjectCandidate=>({
+  project_id:"project-a",
+  work:{
+    id:"work/1",
+    canonical_key:"doi:10.1000/rules",
+    doi:"10.1000/rules",
+    arxiv_id:null,
+    openalex_id:null,
+    title:"Rule Complexity for Games",
+    authors:["Ada"],
+    year:2025,
+    abstract_text:"Rules can be represented as descriptions.",
+    source_url:"https://doi.org/10.1000/rules",
+    pdf_url:null,
+    evidence_level:"abstract",
+    metadata:{},
+  },
+  status,
+  relevance_reason:"直接讨论规则描述复杂度",
+  relevance_tags:["游戏规则"],
+  evidence_level:"abstract",
+  discovered_by_search_run_id:"run-1",
+  discovered_by_conversation_id:"conversation-1",
+  import_task_id:status==="importing"?"task-1":null,
+  paper_id:status==="imported"?"paper-1":null,
+  created_at:"2026-07-29T00:00:00Z",
+  updated_at:"2026-07-29T00:00:00Z",
+})
+
+describe("ProjectResearch",()=>{
+  it("keeps candidate actions scoped to the selected project",async()=>{
+    const update=vi.spyOn(api,"updateCandidate").mockResolvedValue(candidate("dismissed"))
+    const refresh=vi.fn(async()=>{})
+    await createCandidateActions("project-a",refresh,vi.fn()).dismiss("work/1")
+    expect(update).toHaveBeenCalledWith("project-a","work/1",{status:"dismissed"})
+  })
+
+  it("distinguishes candidate, importing, and imported actions",()=>{
+    const html=renderToStaticMarkup(<ProjectResearchView
+      tab="candidates"
+      papers={[]}
+      candidates={[candidate(),candidate("importing"),candidate("imported")]}
+      searches={[]}
+      includeDismissed={false}
+      busy={false}
+      error=""
+      onTab={()=>{}}
+      onOpenCandidate={()=>{}}
+      onOpenPaper={()=>{}}
+      onRemovePaper={()=>{}}
+      onToggleDismissed={()=>{}}
+      actions={createCandidateActions("project-a",async()=>{},()=>{})}
+      onOpenSearch={()=>{}}
+    />)
+    expect(html).toContain("Rule Complexity for Games")
+    expect(html).toContain("加入项目并分析")
+    expect(html).toContain("正在导入")
+    expect(html).toContain("打开项目论文")
+    expect(html).toContain("显示暂不考虑")
+  })
+})
