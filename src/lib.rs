@@ -2,6 +2,7 @@ pub mod acquisition;
 pub mod api;
 pub mod auth;
 pub mod codex;
+pub mod codex_tools;
 pub mod config;
 pub mod conversation_context;
 pub mod conversation_engine;
