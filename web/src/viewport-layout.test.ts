@@ -45,7 +45,7 @@ describe("viewport containment", () => {
 
   it("gives active PDF readers exactly the space left by the paper header", () => {
     const page = declarations(compactViewportStyles, ".paper-page.reader-active")
-    const reading = declarations(compactViewportStyles, ".paper-page.reader-active .paper-reading")
+    const reading = declarations(viewportStyles, ".paper-page.reader-active .paper-reading")
     const viewer = declarations(compactPdfReaderStyles, ".pdf-viewer")
 
     expect(appSource).toContain('readerMode!=="smart"?" reader-active":""')
