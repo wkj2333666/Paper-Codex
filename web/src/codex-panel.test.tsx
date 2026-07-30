@@ -1,12 +1,30 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { CodexPanel, ConversationProgress } from "./CodexPanel"
+import { CodexMessage } from "./CodexMessage"
+import type { ChatMessage } from "./types"
 
 const capabilities = {
   default:{model:"gpt-test", reasoning_effort:"medium", service_tier:null},
   models:[{id:"gpt-test",display_name:"GPT Test",default_reasoning_effort:"medium",supported_reasoning_efforts:["low","medium","high"],supports_fast:true}],
   supports_dynamic_tools:true,
 }
+
+const message = (overrides: Partial<ChatMessage>): ChatMessage => ({
+  id: "message-1",
+  conversation_id: "conversation-1",
+  role: "assistant",
+  content: "最终回答",
+  turn_id: "turn-1",
+  status: "completed",
+  error: null,
+  research_mode: "auto",
+  citations: [],
+  candidate_citations: [],
+  created_at: "2026-07-30T00:00:00Z",
+  updated_at: "2026-07-30T00:00:00Z",
+  ...overrides,
+})
 
 describe("CodexPanel", () => {
   it("defaults to a conversation composer with history and activity controls", () => {
@@ -65,6 +83,33 @@ describe("CodexPanel", () => {
     expect(reading).toContain("Codex 正在读取论文")
     expect(reasoning).toContain("Codex 正在分析证据并组织回答")
     expect(reasoning).not.toContain("chain-of-thought")
+  })
+
+  it("renders user prompts, completed answers, and live work as distinct surfaces", () => {
+    const user = renderToStaticMarkup(
+      <CodexMessage message={message({ role: "user", content: "为什么选择这个游戏？" })} onCitation={() => {}} />,
+    )
+    const answer = renderToStaticMarkup(
+      <CodexMessage message={message({ content: "作者选择该环境是为了控制变量。" })} onCitation={() => {}} />,
+    )
+    const live = renderToStaticMarkup(
+      <CodexMessage
+        message={message({
+          content: "",
+          live_content: "正在核对实验设置",
+          status: "streaming",
+          progress_phase: "reading",
+        })}
+        onCitation={() => {}}
+      />,
+    )
+    expect(user).toContain("codex-user-message")
+    expect(user).toContain("你")
+    expect(answer).toContain("codex-answer")
+    expect(answer).toContain("Codex")
+    expect(live).toContain("codex-worklog")
+    expect(live).toContain("工作过程")
+    expect(live).toContain("正在核对实验设置")
   })
 
   it("offers controlled literature search only in project scope", () => {

@@ -13,5 +13,8 @@ describe("dark theme surface overrides", () => {
     for (const selector of [".app-shell", ".sidebar", ".activity-pane", ".codex-pane", ".paper-card", ".chat-box", ".login-page"]) {
       expect(themeCss).toContain(`[data-theme="dark"] ${selector}`)
     }
+    for (const selector of [".codex-task-header", ".codex-user-prompt", ".codex-worklog", ".codex-settings", ".codex-composer"]) {
+      expect(themeCss).toContain(`[data-theme="dark"] ${selector}`)
+    }
   })
 })
