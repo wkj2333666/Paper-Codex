@@ -248,6 +248,14 @@ pub struct CodexTurn {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexFailure {
+    pub message: String,
+    pub additional_details: Option<String>,
+    pub codex_error_info: Option<Value>,
+    pub http_status_code: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexOutcome {
     pub thread_id: String,
     pub turn_id: String,
@@ -255,6 +263,56 @@ pub struct CodexOutcome {
     pub final_text: String,
     pub answer: Option<ConversationAnswer>,
     pub error: Option<String>,
+    pub failure: Option<CodexFailure>,
+}
+
+impl CodexOutcome {
+    pub fn is_capacity_failure(&self) -> bool {
+        if self.status != "failed" {
+            return false;
+        }
+        let error_kind = self
+            .failure
+            .as_ref()
+            .and_then(|failure| failure.codex_error_info.as_ref())
+            .and_then(|value| {
+                value.as_str().or_else(|| {
+                    value
+                        .get("type")
+                        .or_else(|| value.get("code"))
+                        .and_then(Value::as_str)
+                })
+            })
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if [
+            "usagelimitexceeded",
+            "unauthorized",
+            "authenticationfailed",
+            "sandboxerror",
+            "responseserializationfailure",
+        ]
+        .iter()
+        .any(|excluded| error_kind.contains(excluded))
+        {
+            return false;
+        }
+        if ["serveroverloaded", "modelatcapacity", "capacity"]
+            .iter()
+            .any(|kind| error_kind.contains(kind))
+        {
+            return true;
+        }
+        let message = self.error.as_deref().unwrap_or_default().to_ascii_lowercase();
+        [
+            "selected model is at capacity",
+            "model is at capacity",
+            "server is overloaded",
+            "server overloaded",
+        ]
+        .iter()
+        .any(|needle| message.contains(needle))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -388,6 +446,32 @@ impl CodexRuntime {
 
     pub fn default_settings(&self) -> CodexRunSettings {
         self.capabilities.default.clone()
+    }
+
+    pub fn paper_analysis_settings(&self) -> Vec<CodexRunSettings> {
+        ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+            .into_iter()
+            .filter_map(|preferred| {
+                let model = self
+                    .capabilities
+                    .models
+                    .iter()
+                    .find(|model| model.id == preferred)?;
+                Some(CodexRunSettings {
+                    model: model.id.clone(),
+                    reasoning_effort: if model
+                        .supported_reasoning_efforts
+                        .iter()
+                        .any(|effort| effort == "medium")
+                    {
+                        "medium".into()
+                    } else {
+                        model.default_reasoning_effort.clone()
+                    },
+                    service_tier: None,
+                })
+            })
+            .collect()
     }
 
     pub fn validate_settings(&self, settings: &CodexRunSettings) -> Result<CodexRunSettings> {
@@ -719,16 +803,36 @@ impl CodexRuntime {
                         self.publish(CodexEvent { kind:"item-completed".into(), text:None, payload:message.clone() }, turn_events);
                     } else if method == "turn/completed" {
                         let status = message.pointer("/params/turn/status").and_then(Value::as_str).unwrap_or("failed").to_owned();
-                        let error = message.pointer("/params/turn/error/message").and_then(Value::as_str).map(|message_text| {
-                            let details = message.pointer("/params/turn/error/additionalDetails").and_then(Value::as_str).filter(|value| !value.is_empty());
-                            details.map(|value| format!("{message_text}: {value}")).unwrap_or_else(|| message_text.to_owned())
+                        let failure = message.pointer("/params/turn/error/message").and_then(Value::as_str).map(|message_text| {
+                            CodexFailure {
+                                message: message_text.to_owned(),
+                                additional_details: message
+                                    .pointer("/params/turn/error/additionalDetails")
+                                    .and_then(Value::as_str)
+                                    .filter(|value| !value.is_empty())
+                                    .map(str::to_owned),
+                                codex_error_info: message
+                                    .pointer("/params/turn/error/codexErrorInfo")
+                                    .cloned(),
+                                http_status_code: message
+                                    .pointer("/params/turn/error/httpStatusCode")
+                                    .and_then(Value::as_u64)
+                                    .and_then(|value| u16::try_from(value).ok()),
+                            }
+                        });
+                        let error = failure.as_ref().map(|failure| {
+                            failure
+                                .additional_details
+                                .as_deref()
+                                .map(|details| format!("{}: {details}", failure.message))
+                                .unwrap_or_else(|| failure.message.clone())
                         });
                         let answer = if status == "completed" && expects_conversation_answer {
                             Some(serde_json::from_str(&final_text).context("decode structured conversation answer")?)
                         } else {
                             None
                         };
-                        return Ok(CodexOutcome { thread_id, turn_id, status, final_text, answer, error });
+                        return Ok(CodexOutcome { thread_id, turn_id, status, final_text, answer, error, failure });
                     } else if message.get("method").is_some() {
                         self.publish(CodexEvent { kind:method.to_owned(), text:None, payload:message }, turn_events);
                     }

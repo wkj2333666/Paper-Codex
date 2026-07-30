@@ -349,7 +349,8 @@ async fn preserves_turn_failure_details() {
         outcome
             .failure
             .as_ref()
-            .and_then(|failure| failure.codex_error_info.as_deref()),
+            .and_then(|failure| failure.codex_error_info.as_ref())
+            .and_then(Value::as_str),
         Some("ResponseSerializationFailure")
     );
     assert_eq!(
@@ -386,7 +387,8 @@ async fn identifies_explicit_model_capacity_without_treating_other_failures_as_c
         outcome
             .failure
             .as_ref()
-            .and_then(|failure| failure.codex_error_info.as_deref()),
+            .and_then(|failure| failure.codex_error_info.as_ref())
+            .and_then(Value::as_str),
         Some("ServerOverloaded")
     );
     assert_eq!(

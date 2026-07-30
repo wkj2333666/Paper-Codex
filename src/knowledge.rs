@@ -130,6 +130,88 @@ pub struct ProposedKnowledge {
     pub recommended_projects: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SemanticRelationWarning {
+    pub source_key: String,
+    pub relation_type: String,
+    pub target_key: String,
+    pub reason: String,
+}
+
+pub fn normalize_semantic_relations(
+    proposal: &mut ProposedKnowledge,
+) -> Vec<SemanticRelationWarning> {
+    let paper_id = proposal.paper.paper_id.clone();
+    let entity_keys = proposal
+        .entities
+        .iter()
+        .map(|entity| entity.key.clone())
+        .collect::<Vec<_>>();
+    let mut warnings = Vec::new();
+    proposal.semantic_relations.retain_mut(|relation| {
+        let source = resolve_semantic_key(&relation.source_key, &paper_id, &entity_keys);
+        let target = resolve_semantic_key(&relation.target_key, &paper_id, &entity_keys);
+        match (source, target) {
+            (Ok(source), Ok(target)) => {
+                relation.source_key = source;
+                relation.target_key = target;
+                true
+            }
+            (source, target) => {
+                let reason = if matches!(source, Err("ambiguous"))
+                    || matches!(target, Err("ambiguous"))
+                {
+                    "ambiguous"
+                } else {
+                    "unresolved"
+                };
+                warnings.push(SemanticRelationWarning {
+                    source_key: relation.source_key.clone(),
+                    relation_type: relation.relation_type.clone(),
+                    target_key: relation.target_key.clone(),
+                    reason: reason.into(),
+                });
+                false
+            }
+        }
+    });
+    warnings
+}
+
+fn resolve_semantic_key(
+    candidate: &str,
+    paper_id: &str,
+    entity_keys: &[String],
+) -> std::result::Result<String, &'static str> {
+    if candidate == "paper"
+        || candidate == paper_id
+        || candidate == format!("paper:{paper_id}")
+        || candidate == format!("paper.{paper_id}")
+    {
+        return Ok("paper".into());
+    }
+    if entity_keys.iter().any(|key| key == candidate) {
+        return Ok(candidate.into());
+    }
+    let suffix = semantic_key_suffix(candidate);
+    let matches = entity_keys
+        .iter()
+        .filter(|key| semantic_key_suffix(key) == suffix)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [value] => Ok((*value).clone()),
+        [] => Err("unresolved"),
+        _ => Err("ambiguous"),
+    }
+}
+
+fn semantic_key_suffix(key: &str) -> &str {
+    key.char_indices()
+        .find(|(_, character)| matches!(character, ':' | '.'))
+        .map(|(index, character)| &key[index + character.len_utf8()..])
+        .unwrap_or(key)
+}
+
 pub fn proposal_schema() -> Value {
     let mut schema =
         serde_json::to_value(schema_for!(ProposedKnowledge)).unwrap_or(json!({"type":"object"}));
@@ -244,10 +326,29 @@ impl KnowledgeRepository {
         for relation in &proposal.semantic_relations {
             if !entity_keys.contains(relation.source_key.as_str())
                 || !entity_keys.contains(relation.target_key.as_str())
-                || !semantic_types.contains(&relation.relation_type.as_str())
-                || !(0.0..=1.0).contains(&relation.confidence)
             {
-                bail!("invalid semantic relation");
+                bail!(
+                    "invalid semantic relation endpoint: {} --{}--> {}",
+                    relation.source_key,
+                    relation.relation_type,
+                    relation.target_key
+                );
+            }
+            if !semantic_types.contains(&relation.relation_type.as_str()) {
+                bail!(
+                    "invalid semantic relation type: {} --{}--> {}",
+                    relation.source_key,
+                    relation.relation_type,
+                    relation.target_key
+                );
+            }
+            if !(0.0..=1.0).contains(&relation.confidence) {
+                bail!(
+                    "invalid semantic relation confidence: {} --{}--> {}",
+                    relation.source_key,
+                    relation.relation_type,
+                    relation.target_key
+                );
             }
             if !relation.hypothesis && relation.evidence.is_empty() {
                 bail!("formal semantic relation requires evidence");
