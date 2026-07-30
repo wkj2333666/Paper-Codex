@@ -1,24 +1,20 @@
-import { FormEvent, useCallback, useEffect, useReducer, useRef, useState } from "react"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
-import { Activity, Archive, Bot, History, LoaderCircle, MessageSquarePlus, Pencil, Search, Send, SlidersHorizontal, Square, X } from "lucide-react"
+import type { FormEvent } from "react"
+import { useCallback, useEffect, useReducer, useRef, useState } from "react"
+import { Activity, Archive, Bot, History, MessageSquarePlus, Pencil, Sparkles, X } from "lucide-react"
 import { api, streamConversationEvents } from "./api"
+import { CodexComposer, normalizeCodexSettings } from "./CodexComposer"
+import { CodexMessage } from "./CodexMessage"
 import { conversationInitialState, conversationReducer } from "./conversation-store"
 import { scopesMatchSelection, selectionForScopes, type CodexSelection } from "./conversation-scope"
 import { latestAnswerCitations } from "./citation-overlay"
 import { PanelCollapseButton } from "./PanelControls"
-import type { Activity as TaskActivity, CandidateCitation, ChatMessage, CodexCapabilities, CodexRunSettings, ConversationScope, MessageCitation, ResearchMode } from "./types"
+import type { Activity as TaskActivity, CandidateCitation, CodexCapabilities, CodexRunSettings, ConversationScope, MessageCitation, ResearchMode } from "./types"
+
+export { ConversationProgress } from "./CodexMessage"
 
 export interface CodexPanelProps {selection:CodexSelection;scopeLabel:string;activities:TaskActivity[];drawerOpen:boolean;onCollapse:()=>void;onCitation:(citation:MessageCitation)=>void;onCandidate?:(projectId:string,workId:string)=>void;onCitations:(citations:MessageCitation[])=>void;onSelect:(selection:CodexSelection)=>void;codexCapabilities?:CodexCapabilities}
 
 const fallbackCapabilities:CodexCapabilities={default:{model:"gpt-5.6-luna",reasoning_effort:"medium",service_tier:null},models:[{id:"gpt-5.6-luna",display_name:"GPT-5.6-Luna",default_reasoning_effort:"medium",supported_reasoning_efforts:["low","medium","high","xhigh"],supports_fast:false}],supports_dynamic_tools:false}
-
-function normalizeSettings(capabilities:CodexCapabilities,settings?:CodexRunSettings|null):CodexRunSettings{
-  const model=capabilities.models.find(item=>item.id===settings?.model)??capabilities.models[0]
-  if(!model)return capabilities.default
-  const reasoning_effort=model.supported_reasoning_efforts.includes(settings?.reasoning_effort??"")?settings!.reasoning_effort:model.default_reasoning_effort
-  return {model:model.id,reasoning_effort,service_tier:settings?.service_tier==="priority"&&model.supports_fast?"priority":null}
-}
 
 function scopeFor(selection:CodexPanelProps["selection"]):ConversationScope[]{
   if(selection.kind==="paper"&&selection.id)return [{scope_type:"paper",scope_id:selection.id}]
@@ -28,21 +24,6 @@ function scopeFor(selection:CodexPanelProps["selection"]):ConversationScope[]{
 
 function conversationStorageKey(selection: CodexSelection): string {
   return `paper-codex.active-conversation.${selection.kind}:${selection.id ?? "all"}`
-}
-
-export function ConversationProgress({phase,label}:{phase:ChatMessage["progress_phase"];label?:string}){
-  const researchLabels:Partial<Record<NonNullable<ChatMessage["progress_phase"]>,string>>={
-    "research-planning":"正在生成检索式…",
-    "research-searching":"正在检索外部论文…",
-    "research-deduplicating":"正在规范化与去重…",
-    "research-inspecting-abstract":"正在核验摘要…",
-    "research-fetching-fulltext":"正在获取开放全文…",
-    "research-saving-candidates":"正在保存候选论文…",
-    "research-partial":"部分来源不可用，正在使用其余结果…",
-  }
-  const fallback=(phase&&researchLabels[phase])
-    ??(phase==="reading"?"Codex 正在读取论文…":phase==="tool"?"Codex 正在调用研究工具…":phase==="answering"?"Codex 正在生成回答…":"Codex 正在分析证据并组织回答…")
-  return <div className="conversation-progress" role="status"><LoaderCircle className="spin"/><span>{label||fallback}</span></div>
 }
 
 const candidateEvidenceLabel=(value:CandidateCitation["evidence_level"])=>({metadata:"仅元数据",abstract:"已核验摘要",fulltext:"已核验全文"})[value]
@@ -67,7 +48,7 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
   const effectiveCapabilities=capabilities??fallbackCapabilities
   const projectResearchScope=selection.kind==="project"&&Boolean(selection.id)
   const controlledResearchAvailable=projectResearchScope&&effectiveCapabilities.supports_dynamic_tools
-  const effectiveSettings=normalizeSettings(effectiveCapabilities,state.activeSettings??draftSettings)
+  const effectiveSettings=normalizeCodexSettings(effectiveCapabilities,state.activeSettings??draftSettings)
   const rememberConversation=(id:string)=>{try{localStorage.setItem(scopeKey,id)}catch{}}
   const refreshList=useCallback(async()=>{
     const items=await api.conversations();dispatch({type:"conversations",items})
@@ -82,25 +63,48 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
   useEffect(()=>{if(state.activeConversationId&&state.scopes.length&&!scopesMatchSelection(state.scopes,selection)){if(preserveConversationForCitation.current){preserveConversationForCitation.current=false;return}dispatch({type:"active",id:null})}},[selection.kind,selection.id,state.activeConversationId,state.scopes])
   useEffect(()=>onCitations(latestAnswerCitations(state.messages,state.messageOrder)),[onCitations,state.messages,state.messageOrder])
   useEffect(()=>{if(!state.activeConversationId)return;const conversationId=state.activeConversationId;const controller=new AbortController();void streamConversationEvents(conversationId,state.lastEventId,event=>{dispatch({type:"event",event});if(["answer-completed","answer-failed","answer-cancelled"].includes(event.type)){void loadDetail(conversationId);if(event.type==="answer-completed")void refreshList()}},controller.signal).catch(()=>{});return()=>controller.abort()},[state.activeConversationId,loadDetail,refreshList])
-  const create=async()=>{const item=await api.createConversation("新对话",scopeFor(selection),normalizeSettings(effectiveCapabilities,null));rememberConversation(item.id);await refreshList();dispatch({type:"active",id:item.id});return item.id}
+  const create=async()=>{const item=await api.createConversation("新对话",scopeFor(selection),normalizeCodexSettings(effectiveCapabilities,null));rememberConversation(item.id);await refreshList();dispatch({type:"active",id:item.id});return item.id}
   const openConversation=async(id:string)=>{const detail=await api.conversation(id);const target=selectionForScopes(detail.scopes);if(target){try{localStorage.setItem(conversationStorageKey(target),id)}catch{};onSelect(target)}dispatch({type:"detail",detail})}
   const submit=async(event:FormEvent)=>{event.preventDefault();const content=text.trim();if(!content)return;setBusy(true);setError("");try{const id=state.activeConversationId??await create();await api.sendConversationMessage(id,content,researchMode);setText("");setResearchMode("auto");await loadDetail(id)}catch(value){setError(value instanceof Error?value.message:"发送失败")}finally{setBusy(false)}}
   const rename=async()=>{if(!state.activeConversationId)return;const current=state.conversations.find(item=>item.id===state.activeConversationId);const title=window.prompt("对话名称",current?.title??"")?.trim();if(title){await api.updateConversation(state.activeConversationId,{title});await refreshList()}}
   const archive=async()=>{if(!state.activeConversationId)return;await api.updateConversation(state.activeConversationId,{archived:true});try{localStorage.removeItem(scopeKey)}catch{};dispatch({type:"active",id:null});await refreshList()}
   const updateSettings=async(next:CodexRunSettings)=>{setDraftSettings(next);if(!state.activeConversationId)return;try{await api.updateConversation(state.activeConversationId,{settings:next});await loadDetail(state.activeConversationId);await refreshList()}catch(value){setError(value instanceof Error?value.message:"保存运行设置失败")}}
-  const selectedModel=effectiveCapabilities.models.find(item=>item.id===effectiveSettings.model)??effectiveCapabilities.models[0]
   const active=state.conversations.find(item=>item.id===state.activeConversationId)
   const answerRunning=state.messageOrder.some(id=>{const message=state.messages[id];return message.role==="assistant"&&["queued","running","streaming"].includes(message.status)})
+  const suggestions=selection.kind==="paper"
+    ?["概括这篇论文的核心贡献","这篇论文的实验设计可靠吗？","解释作者选择这个方法的动机"]
+    :selection.kind==="project"
+      ?["比较项目中论文的方法差异","这个方向还缺少哪些证据？","检索与当前选题相关的论文"]
+      :["总结论文库中的主要研究线索","哪些论文之间存在方法联系？","找出值得继续研究的问题"]
+  const placeholder=researchMode==="explicit"
+    ?"描述你希望检索的研究问题…"
+    :selection.kind==="paper"
+      ?"询问这篇论文…"
+      :selection.kind==="project"
+        ?"询问这个项目…"
+        :"询问整个论文库…"
   return <aside className={`activity-pane codex-pane workspace-panel${drawerOpen?" drawer-open":""}`} data-panel="codex">
-    <header className="codex-header"><div><Bot/><strong>{active?.title??"Codex 对话"}</strong></div><div className="codex-actions"><button aria-label="新建对话" title="新建对话" onClick={()=>void create()}><MessageSquarePlus/></button><details className="codex-settings-popover"><summary aria-label="Codex 运行设置" title="Codex 运行设置"><SlidersHorizontal/></summary><div className="codex-settings" role="dialog" aria-label="Codex 运行设置"><label>模型<select value={effectiveSettings.model} onChange={event=>{const model=effectiveCapabilities.models.find(item=>item.id===event.target.value)??selectedModel;if(model)void updateSettings(normalizeSettings(effectiveCapabilities,{...effectiveSettings,model:model.id,reasoning_effort:model.default_reasoning_effort,service_tier:null}))}}>{effectiveCapabilities.models.map(model=><option key={model.id} value={model.id}>{model.display_name}</option>)}</select></label><label>推理强度<select value={effectiveSettings.reasoning_effort} onChange={event=>void updateSettings({...effectiveSettings,reasoning_effort:event.target.value})}>{(selectedModel?.supported_reasoning_efforts??[]).map(effort=><option key={effort} value={effort}>{effort}</option>)}</select></label><label>速度<select value={effectiveSettings.service_tier==="priority"?"fast":"standard"} disabled={!selectedModel?.supports_fast} onChange={event=>void updateSettings({...effectiveSettings,service_tier:event.target.value==="fast"?"priority":null})}><option value="standard">标准</option><option value="fast">快速</option></select></label></div></details><button aria-label="重命名对话" onClick={()=>void rename()}><Pencil/></button><button aria-label="归档对话" onClick={()=>void archive()}><Archive/></button><PanelCollapseButton label="Codex" direction="right" onCollapse={onCollapse}/></div></header>
-    <div className="codex-scope-banner" data-testid="codex-scope"><span>当前作用域</span><strong>{scopeLabel}</strong></div>
-    <nav className="codex-subnav"><button onClick={()=>dispatch({type:"drawer",open:true,view:"history"})}><History/>对话历史</button><button onClick={()=>dispatch({type:"drawer",open:true,view:"activity"})}><Activity/>活动记录</button></nav>
-    <div className="conversation-feed">{state.messageOrder.length?state.messageOrder.map(id=>{const message=state.messages[id];const live=message.role==="assistant"&&["queued","running","streaming"].includes(message.status);return <article key={id} className={`chat-message ${message.role}`}><div className="message-body">{live?<div className="conversation-live">{message.live_content&&<div className="conversation-live-output"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.live_content}</ReactMarkdown></div>}<ConversationProgress phase={message.progress_phase} label={message.progress_label}/></div>:<ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>}{message.status==="failed"&&<p className="message-error">{message.error}</p>}</div>{message.citations.length>0&&<div className="citation-list">{message.citations.map(citation=><button key={citation.id} onClick={()=>{preserveConversationForCitation.current=true;onCitation(citation)}}><strong>第 {citation.page} 页</strong><span>{citation.quote}</span></button>)}</div>}{projectResearchScope&&(message.candidate_citations?.length??0)>0&&<CandidateCitationList projectId={selection.id!} citations={message.candidate_citations} onCandidate={onCandidate}/>}</article>}):<div className="quiet"><Bot/><p>新建对话，直接询问论文的方法、动机与实验设计。</p></div>}</div>
+    <header className="codex-task-header">
+      <div className="codex-task-identity">
+        <span className="codex-task-mark"><Sparkles/></span>
+        <div>
+          <span className="codex-task-label">Codex</span>
+          <strong>{active?.title??"新对话"}</strong>
+          <div className="codex-scope-pill" data-testid="codex-scope"><span>当前作用域</span><b>{scopeLabel}</b></div>
+        </div>
+      </div>
+      <div className="codex-actions">
+        <button className="codex-new-task" aria-label="新建对话" title="新建对话" onClick={()=>void create()}><MessageSquarePlus/><span>新对话</span></button>
+        <button aria-label="对话历史" title="对话历史" onClick={()=>dispatch({type:"drawer",open:true,view:"history"})}><History/></button>
+        <button aria-label="活动记录" title="活动记录" onClick={()=>dispatch({type:"drawer",open:true,view:"activity"})}><Activity/></button>
+        <button aria-label="重命名对话" title="重命名对话" onClick={()=>void rename()}><Pencil/></button>
+        <button aria-label="归档对话" title="归档对话" onClick={()=>void archive()}><Archive/></button>
+        <PanelCollapseButton label="Codex" direction="right" onCollapse={onCollapse}/>
+      </div>
+    </header>
+    <div className="conversation-feed">{state.messageOrder.length?state.messageOrder.map(id=>{const message=state.messages[id];return <div className="codex-message-group" key={id}><CodexMessage message={message} onCitation={citation=>{preserveConversationForCitation.current=true;onCitation(citation)}}/>{projectResearchScope&&(message.candidate_citations?.length??0)>0&&<CandidateCitationList projectId={selection.id!} citations={message.candidate_citations} onCandidate={onCandidate}/>}</div>}):<div className="codex-empty-state"><span className="codex-empty-mark"><Bot/></span><h3>和 Codex 一起研究</h3><p>围绕当前内容提问、追踪证据，或继续扩展你的研究线索。</p><div className="codex-empty-prompts"><span>可以这样开始</span>{suggestions.map(suggestion=><button type="button" key={suggestion} onClick={()=>setText(suggestion)}>{suggestion}</button>)}</div></div>}</div>
     {error&&<p className="codex-error">{error}</p>}
-    <form className={`conversation-composer${researchMode==="explicit"?" research-explicit":""}`} onSubmit={submit}>
-      {projectResearchScope&&<div className="research-composer-control">{controlledResearchAvailable?<button type="button" aria-label="检索论文" aria-pressed={researchMode==="explicit"} onClick={()=>setResearchMode(value=>value==="explicit"?"auto":"explicit")}><Search/>{researchMode==="explicit"?"本轮将检索论文":"检索论文"}</button>:<span>当前 Codex 版本不支持受控论文检索</span>}</div>}
-      <div className="conversation-composer-row"><textarea value={text} onChange={event=>setText(event.target.value)} placeholder={researchMode==="explicit"?"描述你希望检索的研究问题…":selection.kind==="paper"?"询问这篇论文…":selection.kind==="project"?"询问这个项目…":"询问整个论文库…"}/>{answerRunning&&state.activeConversationId?<button type="button" aria-label="停止回答" onClick={()=>void api.cancelConversation(state.activeConversationId!)}><Square/></button>:<button aria-label="发送消息" disabled={busy||!text.trim()}>{busy?<LoaderCircle className="spin"/>:<Send/>}</button>}</div>
-    </form>
+    <CodexComposer text={text} placeholder={placeholder} busy={busy} answerRunning={answerRunning&&Boolean(state.activeConversationId)} projectResearchScope={projectResearchScope} controlledResearchAvailable={controlledResearchAvailable} researchMode={researchMode} capabilities={effectiveCapabilities} settings={effectiveSettings} onText={setText} onSubmit={submit} onCancel={()=>{if(state.activeConversationId)void api.cancelConversation(state.activeConversationId)}} onResearchMode={setResearchMode} onSettings={next=>void updateSettings(next)}/>
     {state.drawerOpen&&<div className="conversation-drawer"><header><strong>{state.drawerView==="history"?"对话历史":"活动记录"}</strong><button aria-label="关闭抽屉" onClick={()=>dispatch({type:"drawer",open:false})}><X/></button></header>{state.drawerView==="history"?<div className="conversation-list">{state.conversations.map(item=><button className={item.id===state.activeConversationId?"active":""} key={item.id} onClick={()=>void openConversation(item.id)}><strong>{item.title}</strong><span>{new Date(item.updated_at).toLocaleString()}</span></button>)}</div>:<div className="activity-feed">{activities.map(item=><div className="activity-item" key={item.id}><Activity/><div><p>{item.label}</p><span>{item.createdAt?new Date(item.createdAt).toLocaleTimeString():"刚刚"}</span></div></div>)}</div>}</div>}
   </aside>
 }
