@@ -1,7 +1,8 @@
 use paper_codex::{
     knowledge::{
-        analysis_from_markdown, proposal_schema, Evidence, KnowledgeEntity, KnowledgeRepository,
-        PaperNote, ProposedKnowledge, Relation, SemanticRelation,
+        analysis_from_markdown, normalize_semantic_relations, proposal_schema, Evidence,
+        KnowledgeEntity, KnowledgeRepository, PaperNote, ProposedKnowledge, Relation,
+        SemanticRelation,
     },
     prompts::first_pass_prompt,
     prompts::{
@@ -217,6 +218,108 @@ fn app_server_schema_exposes_validator_vocabularies() {
     assert!(relation_types.iter().any(|value| value == "uses-dataset"));
 }
 
+#[test]
+fn semantic_relations_normalize_paper_aliases_and_unique_entity_suffixes() {
+    let mut value = proposal(2);
+    value.entities.push(KnowledgeEntity {
+        key: "finding:hierarchical-sharing".into(),
+        kind: "finding".into(),
+        name: "Hierarchical sharing".into(),
+        description: "A finding".into(),
+        evidence: value.paper.evidence.clone(),
+    });
+    value.semantic_relations = vec![
+        SemanticRelation {
+            source_key: "paper:doi:10.1/example".into(),
+            target_key: "attention".into(),
+            relation_type: "uses-method".into(),
+            hypothesis: false,
+            confidence: 0.9,
+            evidence: value.paper.evidence.clone(),
+        },
+        SemanticRelation {
+            source_key: "method:attention".into(),
+            target_key: "concept:hierarchical-sharing".into(),
+            relation_type: "extends".into(),
+            hypothesis: false,
+            confidence: 0.8,
+            evidence: value.paper.evidence.clone(),
+        },
+    ];
+
+    let warnings = normalize_semantic_relations(&mut value);
+
+    assert!(warnings.is_empty());
+    assert_eq!(value.semantic_relations[0].source_key, "paper");
+    assert_eq!(value.semantic_relations[0].target_key, "attention");
+    assert_eq!(value.semantic_relations[1].source_key, "attention");
+    assert_eq!(
+        value.semantic_relations[1].target_key,
+        "finding:hierarchical-sharing"
+    );
+}
+
+#[test]
+fn semantic_relations_drop_unresolved_or_ambiguous_edges_only() {
+    let mut value = proposal(2);
+    value.entities.extend([
+        KnowledgeEntity {
+            key: "concept:shared".into(),
+            kind: "concept".into(),
+            name: "Shared concept".into(),
+            description: "A concept".into(),
+            evidence: value.paper.evidence.clone(),
+        },
+        KnowledgeEntity {
+            key: "finding:shared".into(),
+            kind: "finding".into(),
+            name: "Shared finding".into(),
+            description: "A finding".into(),
+            evidence: value.paper.evidence.clone(),
+        },
+    ]);
+    value.semantic_relations = vec![
+        SemanticRelation {
+            source_key: "paper".into(),
+            target_key: "method:missing".into(),
+            relation_type: "introduces".into(),
+            hypothesis: false,
+            confidence: 0.9,
+            evidence: value.paper.evidence.clone(),
+        },
+        SemanticRelation {
+            source_key: "paper".into(),
+            target_key: "method:shared".into(),
+            relation_type: "reports".into(),
+            hypothesis: false,
+            confidence: 0.8,
+            evidence: value.paper.evidence.clone(),
+        },
+        value.semantic_relations[0].clone(),
+    ];
+
+    let warnings = normalize_semantic_relations(&mut value);
+
+    assert_eq!(value.semantic_relations.len(), 1);
+    assert_eq!(value.semantic_relations[0].target_key, "attention");
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings.iter().any(|warning| warning.reason == "unresolved"));
+    assert!(warnings.iter().any(|warning| warning.reason == "ambiguous"));
+}
+
+#[tokio::test]
+async fn semantic_relation_validation_names_the_invalid_edge() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = Workspace::initialize(temp.path()).await.unwrap();
+    let repository = KnowledgeRepository::new(workspace);
+    let mut value = proposal(2);
+    value.semantic_relations[0].target_key = "missing".into();
+
+    let error = repository.validate(&value).unwrap_err().to_string();
+
+    assert!(error.contains("paper --uses-method--> missing"));
+}
+
 #[tokio::test]
 async fn rejects_invalid_evidence_and_protected_commit_paths() {
     let temp = tempfile::tempdir().unwrap();
@@ -305,4 +408,6 @@ fn codex_prompt_requires_concise_chinese_and_evidence_graded_graph_output() {
     assert!(prompt.contains("最多 3 条"));
     assert!(prompt.contains("不得嵌入作者/分析者标签或证据编号"));
     assert!(prompt.contains("假设关系"));
+    assert!(prompt.contains("论文根节点的键必须精确写成 `paper`"));
+    assert!(prompt.contains("必须逐字复用 entities 中已经声明的 key"));
 }
