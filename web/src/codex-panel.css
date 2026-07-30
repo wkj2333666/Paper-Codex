@@ -4,6 +4,7 @@
   position: relative;
   overflow: hidden;
   background: var(--codex-surface);
+  container-type: inline-size;
 }
 
 .codex-task-header {
@@ -920,10 +921,6 @@
 }
 
 @media (min-width: 1500px) {
-  .codex-pane {
-    container-type: inline-size;
-  }
-
   @container (min-width: 520px) {
     .conversation-drawer {
       position: relative;
