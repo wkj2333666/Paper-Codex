@@ -2,8 +2,10 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 
-const baseStyles = readFileSync(new URL("./styles.css", import.meta.url), "utf8")
+const viewportStyles = readFileSync(new URL("./viewport.css", import.meta.url), "utf8")
+const entrypoint = readFileSync(new URL("./main.tsx", import.meta.url), "utf8")
 const panelLayout = readFileSync(new URL("./panel-layout.css", import.meta.url), "utf8")
+const compactViewportStyles = viewportStyles.replace(/\s+/g, "")
 
 function declarations(source: string, selector: string) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -14,10 +16,13 @@ function declarations(source: string, selector: string) {
 
 describe("viewport containment", () => {
   it("keeps document scrolling disabled and lets the application inherit the root height", () => {
-    const roots = declarations(baseStyles, "html,body,#root")
-    const body = declarations(baseStyles, "body")
-    const shell = declarations(baseStyles, ".app-shell")
+    const roots = declarations(compactViewportStyles, "html,body,#root")
+    const body = declarations(compactViewportStyles, "body")
+    const shell = declarations(compactViewportStyles, ".app-shell")
 
+    const viewportImport = entrypoint.indexOf('import "./viewport.css"')
+    expect(viewportImport).toBeGreaterThan(entrypoint.indexOf('import "./styles.css"'))
+    expect(viewportImport).toBeGreaterThan(entrypoint.indexOf('import "./panel-layout.css"'))
     expect(roots).toMatch(/height:\s*100%/)
     expect(roots).toMatch(/overflow:\s*hidden/)
     expect(body).toMatch(/min-height:\s*0/)
