@@ -36,9 +36,32 @@ describe("CodexPanel", () => {
     expect(html).toContain("速度")
   })
 
+  it("uses a task-oriented Codex Desktop layout", () => {
+    const html = renderToStaticMarkup(
+      <CodexPanel
+        selection={{ kind: "paper", id: "paper:one" }}
+        scopeLabel="Attention Is All You Need"
+        activities={[]}
+        drawerOpen={false}
+        onCollapse={() => {}}
+        onCitation={() => {}}
+        onCitations={() => {}}
+        onSelect={() => {}}
+        codexCapabilities={capabilities}
+      />,
+    )
+    expect(html).toContain("codex-task-header")
+    expect(html).toContain("codex-scope-pill")
+    expect(html).toContain("codex-empty-prompts")
+    expect(html).toContain("codex-composer-context")
+    expect(html).toContain("可以这样开始")
+    expect(html).not.toContain("codex-subnav")
+  })
+
   it("shows application progress without exposing model reasoning", () => {
     const reading = renderToStaticMarkup(<ConversationProgress phase="reading" />)
     const reasoning = renderToStaticMarkup(<ConversationProgress phase="reasoning" />)
+    expect(reading).toContain("工作过程")
     expect(reading).toContain("Codex 正在读取论文")
     expect(reasoning).toContain("Codex 正在分析证据并组织回答")
     expect(reasoning).not.toContain("chain-of-thought")
