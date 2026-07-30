@@ -536,3 +536,111 @@ fn redact_error(value: &str) -> String {
         value.chars().take(500).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codex::CodexCommand;
+
+    fn fake_command() -> CodexCommand {
+        CodexCommand {
+            program: PathBuf::from("python3"),
+            args: vec![format!(
+                "{}/fixtures/fake-app-server.py",
+                env!("CARGO_MANIFEST_DIR")
+            )],
+            codex_home: None,
+            runtime_tmp: None,
+        }
+    }
+
+    async fn engine() -> (Arc<TaskEngine>, Database, tempfile::TempDir) {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::initialize(root.path()).await.unwrap();
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let codex = CodexRuntime::spawn(fake_command()).await.unwrap();
+        let engine = TaskEngine::start(
+            db.clone(),
+            workspace,
+            Acquirer::new(1024 * 1024).unwrap(),
+            codex,
+        )
+        .await
+        .unwrap();
+        (engine, db, root)
+    }
+
+    #[tokio::test]
+    async fn paper_analysis_retries_capacity_on_a_fresh_lower_priority_model() {
+        let (engine, db, root) = engine().await;
+        let task_id = db.create_task("ingest", "{}").await.unwrap();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let result = engine
+            .run_paper_analysis(
+                &task_id,
+                root.path(),
+                "capacity-sol",
+                None,
+                cancel_rx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.settings.model, "gpt-5.6-terra");
+        assert_eq!(result.outcome.status, "completed");
+        let events = db.events_after(0).await.unwrap();
+        let switch = events
+            .iter()
+            .find(|event| event.event_type == "model-switch")
+            .expect("capacity fallback event");
+        let payload: serde_json::Value = serde_json::from_str(&switch.payload_json).unwrap();
+        assert_eq!(payload["from"], "gpt-5.6-sol");
+        assert_eq!(payload["to"], "gpt-5.6-terra");
+    }
+
+    #[tokio::test]
+    async fn paper_analysis_never_retries_non_capacity_failures() {
+        let (engine, db, root) = engine().await;
+        let task_id = db.create_task("ingest", "{}").await.unwrap();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let result = engine
+            .run_paper_analysis(&task_id, root.path(), "fail-me", None, cancel_rx)
+            .await
+            .unwrap();
+
+        assert_eq!(result.settings.model, "gpt-5.6-sol");
+        assert_eq!(result.outcome.status, "failed");
+        assert!(db
+            .events_after(0)
+            .await
+            .unwrap()
+            .iter()
+            .all(|event| event.event_type != "model-switch"));
+    }
+
+    #[tokio::test]
+    async fn paper_analysis_stops_after_the_three_bounded_capacity_candidates() {
+        let (engine, db, root) = engine().await;
+        let task_id = db.create_task("ingest", "{}").await.unwrap();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let result = engine
+            .run_paper_analysis(&task_id, root.path(), "capacity-me", None, cancel_rx)
+            .await
+            .unwrap();
+
+        assert_eq!(result.settings.model, "gpt-5.6-luna");
+        assert_eq!(result.outcome.status, "failed");
+        assert_eq!(
+            db.events_after(0)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|event| event.event_type == "model-switch")
+                .count(),
+            2
+        );
+    }
+}

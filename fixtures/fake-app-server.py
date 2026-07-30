@@ -149,7 +149,7 @@ for raw in sys.stdin:
                 "httpStatusCode": 422
             }}}})
             pending_turn = None
-        elif "capacity-me" in text:
+        elif "capacity-me" in text or ("capacity-sol" in text and msg["params"]["model"] == "gpt-5.6-sol"):
             send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "failed", "error": {
                 "message": "Selected model is at capacity. Please try a different model.",
                 "codexErrorInfo": "ServerOverloaded",
