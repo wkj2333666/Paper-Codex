@@ -52,7 +52,10 @@ export function CodexMessage({
   if (message.role === "user") {
     return (
       <article className="codex-turn codex-user-message">
-        <span className="codex-message-author">你</span>
+        <div className="codex-user-meta">
+          <span className="codex-message-author">你</span>
+          {message.skill_name && <span className="codex-message-skill">Skill · {message.skill_name}</span>}
+        </div>
         <div className="codex-user-prompt">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         </div>

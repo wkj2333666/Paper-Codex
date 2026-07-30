@@ -53,6 +53,10 @@ impl ConversationContextBuilder {
         self
     }
 
+    pub fn workspace_root(&self) -> &Path {
+        self.workspace.root()
+    }
+
     pub async fn refresh(
         &self,
         conversation_id: &str,

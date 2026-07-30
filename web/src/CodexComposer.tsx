@@ -1,6 +1,6 @@
 import type { FormEvent } from "react"
-import { Gauge, LoaderCircle, Search, Send, Settings2, Square } from "lucide-react"
-import type { CodexCapabilities, CodexRunSettings, ResearchMode } from "./types"
+import { Gauge, LoaderCircle, Search, Send, Settings2, Sparkles, Square, X } from "lucide-react"
+import type { CodexCapabilities, CodexRunSettings, CodexSkill, ResearchMode } from "./types"
 
 export function normalizeCodexSettings(
   capabilities: CodexCapabilities,
@@ -38,6 +38,8 @@ interface CodexComposerProps {
   researchMode: ResearchMode
   capabilities: CodexCapabilities
   settings: CodexRunSettings
+  selectedSkill: CodexSkill | null
+  onClearSkill: () => void
   onText: (value: string) => void
   onSubmit: (event: FormEvent) => void
   onCancel: () => void
@@ -55,6 +57,8 @@ export function CodexComposer({
   researchMode,
   capabilities,
   settings,
+  selectedSkill,
+  onClearSkill,
   onText,
   onSubmit,
   onCancel,
@@ -68,6 +72,18 @@ export function CodexComposer({
       className={`conversation-composer codex-composer${researchMode === "explicit" ? " research-explicit" : ""}`}
       onSubmit={onSubmit}
     >
+      {selectedSkill && (
+        <div className="codex-selected-skill" aria-label={`已选择 Skill：${selectedSkill.display_name}`}>
+          <Sparkles />
+          <span>
+            <small>Skill</small>
+            <strong>{selectedSkill.display_name}</strong>
+          </span>
+          <button type="button" aria-label="取消选择 Skill" onClick={onClearSkill}>
+            <X />
+          </button>
+        </div>
+      )}
       <textarea value={text} onChange={(event) => onText(event.target.value)} placeholder={placeholder} />
       <div className="codex-composer-context">
         <div className="codex-context-controls">

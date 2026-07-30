@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use paper_codex::codex::{CodexCommand, CodexRunSettings, CodexRuntime, CodexTurn};
+use paper_codex::codex::{
+    CodexCommand, CodexRunSettings, CodexRuntime, CodexSkillSelection, CodexTurn,
+};
 use paper_codex::codex_tools::{
     DynamicToolCall, DynamicToolDefinition, DynamicToolHandler, DynamicToolSession,
 };
@@ -39,6 +41,7 @@ fn research_turn(prompt: &str) -> CodexTurn {
         thread_id: None,
         cwd: tempfile::tempdir().unwrap().keep(),
         prompt: prompt.to_owned(),
+        skill: None,
         output_schema: None,
         settings: standard_settings(),
     }
@@ -121,6 +124,65 @@ async fn advertises_model_effort_and_speed_capabilities() {
     );
     assert!(capabilities.models[0].supports_fast);
     assert!(capabilities.supports_dynamic_tools);
+}
+
+#[tokio::test]
+async fn lists_safe_skill_and_mcp_capabilities_from_app_server() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let root = tempfile::tempdir().unwrap();
+
+    let integrations = runtime.integrations(root.path(), true).await.unwrap();
+
+    assert!(integrations.supports_skills);
+    assert!(integrations.supports_mcp_status);
+    assert_eq!(integrations.skills[0].name, "paper-research");
+    assert_eq!(integrations.mcp_servers[0].name, "openalex");
+    assert_eq!(integrations.mcp_servers[0].tools[0].name, "works/search");
+}
+
+#[tokio::test]
+async fn sends_selected_skill_as_a_structured_turn_input() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let selection = CodexSkillSelection {
+        name: "paper-research".into(),
+        path: root.path().join(".codex/skills/paper-research/SKILL.md"),
+    };
+    let validated = runtime
+        .validate_skill(root.path(), &selection)
+        .await
+        .unwrap();
+    assert_eq!(validated.name, "paper-research");
+    let events = next_test_turn_params(runtime.subscribe());
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+    runtime
+        .run_turn(
+            CodexTurn {
+                thread_id: None,
+                cwd: root.path().to_path_buf(),
+                prompt: "skill-turn".into(),
+                skill: Some(selection),
+                output_schema: None,
+                settings: standard_settings(),
+            },
+            cancel_rx,
+        )
+        .await
+        .unwrap();
+
+    let payload = tokio::time::timeout(std::time::Duration::from_secs(1), events)
+        .await
+        .unwrap();
+    assert_eq!(payload["input"][1]["type"], "skill");
+    assert_eq!(payload["input"][1]["name"], "paper-research");
+    assert_eq!(
+        payload["input"][1]["path"],
+        root.path()
+            .join(".codex/skills/paper-research/SKILL.md")
+            .to_string_lossy()
+            .as_ref()
+    );
 }
 
 #[tokio::test]
@@ -224,6 +286,7 @@ async fn initializes_starts_thread_and_streams_final_agent_text() {
                 thread_id: None,
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "summarize".into(),
+                skill: None,
                 output_schema: None,
                 settings: standard_settings(),
             },
@@ -248,6 +311,7 @@ async fn maps_cancellation_to_turn_interrupt() {
                 thread_id: None,
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "cancel-me".into(),
+                skill: None,
                 output_schema: None,
                 settings: standard_settings(),
             },
@@ -268,6 +332,7 @@ async fn preserves_turn_failure_details() {
                 thread_id: None,
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "fail-me".into(),
+                skill: None,
                 output_schema: None,
                 settings: standard_settings(),
             },
@@ -292,6 +357,7 @@ async fn resumes_thread_and_parses_two_structured_answers() {
                 thread_id: None,
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "structured-turn-one".into(),
+                skill: None,
                 output_schema: Some(conversation_answer_schema()),
                 settings: standard_settings(),
             },
@@ -305,6 +371,7 @@ async fn resumes_thread_and_parses_two_structured_answers() {
                 thread_id: Some(first.thread_id.clone()),
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "structured-turn-two".into(),
+                skill: None,
                 output_schema: Some(conversation_answer_schema()),
                 settings: standard_settings(),
             },
@@ -332,6 +399,7 @@ async fn rejects_invalid_structured_answer_json() {
                 thread_id: None,
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "invalid-structured".into(),
+                skill: None,
                 output_schema: Some(conversation_answer_schema()),
                 settings: standard_settings(),
             },
@@ -357,6 +425,7 @@ async fn sends_per_turn_model_effort_and_fast_service_tier() {
                 thread_id: None,
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "settings".into(),
+                skill: None,
                 output_schema: None,
                 settings: params,
             },
@@ -383,6 +452,7 @@ async fn omits_service_tier_for_standard_speed() {
                 thread_id: None,
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "standard-settings".into(),
+                skill: None,
                 output_schema: None,
                 settings: standard_settings(),
             },
@@ -416,6 +486,7 @@ async fn rebuilds_project_local_runtime_tmp_before_each_turn() {
                 thread_id: None,
                 cwd: root.path().to_path_buf(),
                 prompt: "runtime-tmp".into(),
+                skill: None,
                 output_schema: None,
                 settings: standard_settings(),
             },

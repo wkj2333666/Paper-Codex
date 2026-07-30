@@ -47,6 +47,8 @@ pub struct ChatMessage {
     pub status: String,
     pub error: Option<String>,
     pub research_mode: ResearchMode,
+    pub skill_name: Option<String>,
+    pub skill_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -263,6 +265,7 @@ impl Database {
             content,
             status,
             ResearchMode::Auto,
+            None,
         )
         .await
     }
@@ -274,6 +277,7 @@ impl Database {
         content: &str,
         status: &str,
         research_mode: ResearchMode,
+        skill: Option<&crate::codex::CodexSkillSelection>,
     ) -> Result<ChatMessage> {
         if !matches!(role, "user" | "assistant" | "system") {
             bail!("invalid chat message role");
@@ -283,7 +287,7 @@ impl Database {
         }
         let id = Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO chat_messages(id,conversation_id,role,content,status,research_mode) VALUES(?,?,?,?,?,?)",
+            "INSERT INTO chat_messages(id,conversation_id,role,content,status,research_mode,skill_name,skill_path) VALUES(?,?,?,?,?,?,?,?)",
         )
         .bind(&id)
         .bind(conversation_id)
@@ -291,9 +295,11 @@ impl Database {
         .bind(content)
         .bind(status)
         .bind(research_mode)
+        .bind(skill.map(|value| value.name.as_str()))
+        .bind(skill.map(|value| value.path.to_string_lossy().into_owned()))
         .execute(self.pool())
         .await?;
-        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,created_at,updated_at FROM chat_messages WHERE id=?")
+        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,created_at,updated_at FROM chat_messages WHERE id=?")
             .bind(id)
             .fetch_one(self.pool())
             .await?)
@@ -331,7 +337,7 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<ChatMessage>> {
-        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,created_at,updated_at FROM chat_messages WHERE conversation_id=? ORDER BY created_at,rowid LIMIT ? OFFSET ?")
+        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,created_at,updated_at FROM chat_messages WHERE conversation_id=? ORDER BY created_at,rowid LIMIT ? OFFSET ?")
             .bind(conversation_id)
             .bind(limit.clamp(1, 500))
             .bind(offset.max(0))
@@ -340,13 +346,13 @@ impl Database {
     }
 
     pub async fn list_conversation_messages(&self) -> Result<Vec<ChatMessage>> {
-        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,created_at,updated_at FROM chat_messages ORDER BY created_at,rowid")
+        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,created_at,updated_at FROM chat_messages ORDER BY created_at,rowid")
             .fetch_all(self.pool())
             .await?)
     }
 
     pub async fn get_chat_message(&self, id: &str) -> Result<Option<ChatMessage>> {
-        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,created_at,updated_at FROM chat_messages WHERE id=?")
+        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,created_at,updated_at FROM chat_messages WHERE id=?")
             .bind(id)
             .fetch_optional(self.pool())
             .await?)
@@ -386,7 +392,7 @@ impl Database {
 
     pub async fn previous_user_message(&self, assistant_id: &str) -> Result<Option<ChatMessage>> {
         Ok(sqlx::query_as(
-            r#"SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,created_at,updated_at
+            r#"SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,created_at,updated_at
                FROM chat_messages
                WHERE role='user'
                  AND conversation_id=(SELECT conversation_id FROM chat_messages WHERE id=?1)

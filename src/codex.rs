@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -40,6 +40,49 @@ pub struct CodexCapabilities {
     pub default: CodexRunSettings,
     pub models: Vec<CodexModel>,
     pub supports_dynamic_tools: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexSkill {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub path: PathBuf,
+    pub scope: String,
+    pub enabled: bool,
+    pub dependencies: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexSkillSelection {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexMcpTool {
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexMcpServer {
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub auth_status: String,
+    pub tools: Vec<CodexMcpTool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexIntegrations {
+    pub skills: Vec<CodexSkill>,
+    pub mcp_servers: Vec<CodexMcpServer>,
+    pub supports_skills: bool,
+    pub supports_mcp_status: bool,
+    pub skills_error: Option<String>,
+    pub mcp_error: Option<String>,
 }
 
 impl CodexCapabilities {
@@ -199,6 +242,7 @@ pub struct CodexTurn {
     pub thread_id: Option<String>,
     pub cwd: PathBuf,
     pub prompt: String,
+    pub skill: Option<CodexSkillSelection>,
     pub output_schema: Option<Value>,
     pub settings: CodexRunSettings,
 }
@@ -381,6 +425,124 @@ impl CodexRuntime {
         self.events.subscribe()
     }
 
+    pub async fn integrations(&self, cwd: &Path, force_reload: bool) -> Result<CodexIntegrations> {
+        self.command.prepare_runtime_tmp().await?;
+        let cwd = tokio::fs::canonicalize(cwd)
+            .await
+            .with_context(|| format!("resolve Codex integration scope {}", cwd.display()))?;
+        let _turn_guard = self.turn_lock.lock().await;
+        let existing_session = self.session.lock().await.take();
+        let mut session = if let Some(session) = existing_session {
+            session
+        } else {
+            Session::spawn(&self.command).await?.0
+        };
+
+        let skills_response = session
+            .request(
+                "skills/list",
+                json!({"cwds":[&cwd],"forceReload":force_reload}),
+            )
+            .await;
+        let (mut skills, supports_skills, skills_error) = match skills_response {
+            Ok(response) if rpc_method_unsupported(&response) => (
+                Vec::new(),
+                false,
+                Some("当前 Codex 版本不支持列出 Skills".into()),
+            ),
+            Ok(response) if response.get("error").is_some() => (
+                Vec::new(),
+                true,
+                Some("读取 Skills 失败，请稍后刷新".into()),
+            ),
+            Ok(response) => match parse_skills_response(&response) {
+                Ok(skills) => (skills, true, None),
+                Err(_) => (
+                    Vec::new(),
+                    true,
+                    Some("Codex 返回了无法识别的 Skills 数据".into()),
+                ),
+            },
+            Err(_) => (
+                Vec::new(),
+                true,
+                Some("读取 Skills 失败，请稍后刷新".into()),
+            ),
+        };
+
+        if !supports_skills {
+            let fallback_path = cwd.join(".codex/skills/paper-research/SKILL.md");
+            if tokio::fs::metadata(&fallback_path).await.is_ok() {
+                skills.push(CodexSkill {
+                    name: "paper-research".into(),
+                    display_name: "Paper Research".into(),
+                    description: "论文阅读、比较、综合与关系发现".into(),
+                    path: fallback_path,
+                    scope: "repo".into(),
+                    enabled: true,
+                    dependencies: Vec::new(),
+                });
+            }
+        }
+
+        let mcp_response = session
+            .request(
+                "mcpServerStatus/list",
+                json!({"detail":"toolsAndAuthOnly","limit":100}),
+            )
+            .await;
+        let (mcp_servers, supports_mcp_status, mcp_error) = match mcp_response {
+            Ok(response) if rpc_method_unsupported(&response) => (
+                Vec::new(),
+                false,
+                Some("当前 Codex 版本不支持查看 MCP 状态".into()),
+            ),
+            Ok(response) if response.get("error").is_some() => (
+                Vec::new(),
+                true,
+                Some("读取 MCP 状态失败，请稍后刷新".into()),
+            ),
+            Ok(response) => match parse_mcp_status_response(&response) {
+                Ok(servers) => (servers, true, None),
+                Err(_) => (
+                    Vec::new(),
+                    true,
+                    Some("Codex 返回了无法识别的 MCP 数据".into()),
+                ),
+            },
+            Err(_) => (
+                Vec::new(),
+                true,
+                Some("读取 MCP 状态失败，请稍后刷新".into()),
+            ),
+        };
+
+        *self.session.lock().await = Some(session);
+        Ok(CodexIntegrations {
+            skills,
+            mcp_servers,
+            supports_skills,
+            supports_mcp_status,
+            skills_error,
+            mcp_error,
+        })
+    }
+
+    pub async fn validate_skill(
+        &self,
+        cwd: &Path,
+        selection: &CodexSkillSelection,
+    ) -> Result<CodexSkill> {
+        self.integrations(cwd, true)
+            .await?
+            .skills
+            .into_iter()
+            .find(|skill| {
+                skill.enabled && skill.name == selection.name && skill.path == selection.path
+            })
+            .context("selected Skill is unavailable or changed")
+    }
+
     pub async fn run_turn(
         &self,
         turn: CodexTurn,
@@ -497,7 +659,7 @@ impl CodexRuntime {
             "threadId":thread_id,
             "cwd":turn.cwd,
             "approvalPolicy":"never",
-            "input":[{"type":"text","text":turn.prompt}]
+            "input":turn_input(&turn.prompt, turn.skill.as_ref())
         });
         if let Some(schema) = turn.output_schema {
             params["outputSchema"] = schema;
@@ -620,4 +782,295 @@ fn dynamic_tools_unsupported(response: &Value) -> bool {
         response.pointer("/error/code").and_then(Value::as_i64),
         Some(-32601 | -32602)
     )
+}
+
+fn rpc_method_unsupported(response: &Value) -> bool {
+    matches!(
+        response.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32601 | -32602)
+    )
+}
+
+fn parse_skills_response(response: &Value) -> Result<Vec<CodexSkill>> {
+    let entries = response
+        .pointer("/result/data")
+        .and_then(Value::as_array)
+        .context("Skills response lacks data")?;
+    let mut skills = Vec::new();
+    for entry in entries {
+        let Some(items) = entry.get("skills").and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .context("Skill lacks name")?
+                .to_owned();
+            let path = item
+                .get("path")
+                .and_then(Value::as_str)
+                .context("Skill lacks path")?;
+            let interface = item.get("interface");
+            let display_name = interface
+                .and_then(|value| value.get("displayName"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(&name)
+                .to_owned();
+            let description = interface
+                .and_then(|value| value.get("shortDescription"))
+                .and_then(Value::as_str)
+                .or_else(|| item.get("shortDescription").and_then(Value::as_str))
+                .or_else(|| item.get("description").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_owned();
+            let dependencies = item
+                .pointer("/dependencies/tools")
+                .and_then(Value::as_array)
+                .map(|tools| {
+                    tools
+                        .iter()
+                        .filter_map(|tool| {
+                            let kind = tool.get("type").and_then(Value::as_str)?;
+                            let value = tool.get("value").and_then(Value::as_str)?;
+                            Some(format!("{kind}:{value}"))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            skills.push(CodexSkill {
+                name,
+                display_name,
+                description,
+                path: PathBuf::from(path),
+                scope: item
+                    .get("scope")
+                    .and_then(Value::as_str)
+                    .unwrap_or("user")
+                    .to_owned(),
+                enabled: item.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                dependencies,
+            });
+        }
+    }
+    skills.sort_by(|left, right| {
+        left.display_name
+            .to_lowercase()
+            .cmp(&right.display_name.to_lowercase())
+    });
+    Ok(skills)
+}
+
+fn parse_mcp_status_response(response: &Value) -> Result<Vec<CodexMcpServer>> {
+    let items = response
+        .pointer("/result/data")
+        .and_then(Value::as_array)
+        .context("MCP response lacks data")?;
+    let mut servers = Vec::with_capacity(items.len());
+    for item in items {
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .context("MCP server lacks name")?
+            .to_owned();
+        let server_info = item.get("serverInfo");
+        let mut tools = item
+            .get("tools")
+            .and_then(Value::as_object)
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|(key, value)| CodexMcpTool {
+                        name: value
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or(key)
+                            .to_owned(),
+                        title: value
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        description: value
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        tools.sort_by(|left, right| left.name.cmp(&right.name));
+        servers.push(CodexMcpServer {
+            name,
+            title: server_info
+                .and_then(|value| value.get("title"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            description: server_info
+                .and_then(|value| value.get("description"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            auth_status: item
+                .get("authStatus")
+                .and_then(Value::as_str)
+                .unwrap_or("unsupported")
+                .to_owned(),
+            tools,
+        });
+    }
+    servers.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(servers)
+}
+
+fn turn_input(prompt: &str, skill: Option<&CodexSkillSelection>) -> Value {
+    let mut input = vec![json!({"type":"text","text":prompt})];
+    if let Some(skill) = skill {
+        input.push(json!({
+            "type":"skill",
+            "name":skill.name,
+            "path":skill.path,
+        }));
+    }
+    Value::Array(input)
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_skills_without_exposing_dependency_configuration() {
+        let response = json!({
+            "result": {
+                "data": [{
+                    "cwd": "/workspace",
+                    "skills": [{
+                        "name": "paper-research",
+                        "description": "Read and compare papers",
+                        "enabled": true,
+                        "path": "/workspace/.codex/skills/paper-research/SKILL.md",
+                        "scope": "repo",
+                        "interface": {
+                            "displayName": "Paper Research",
+                            "shortDescription": "Evidence-first paper research"
+                        },
+                        "dependencies": {
+                            "tools": [{
+                                "type": "mcp",
+                                "value": "papers",
+                                "transport": "streamable_http",
+                                "url": "https://private.example/mcp",
+                                "command": "secret-command"
+                            }]
+                        }
+                    }],
+                    "errors": []
+                }]
+            }
+        });
+
+        let skills = parse_skills_response(&response).expect("skills response");
+
+        assert_eq!(
+            skills,
+            vec![CodexSkill {
+                name: "paper-research".into(),
+                display_name: "Paper Research".into(),
+                description: "Evidence-first paper research".into(),
+                path: PathBuf::from("/workspace/.codex/skills/paper-research/SKILL.md"),
+                scope: "repo".into(),
+                enabled: true,
+                dependencies: vec!["mcp:papers".into()],
+            }]
+        );
+        let serialized = serde_json::to_string(&skills).expect("serialize skills");
+        assert!(!serialized.contains("private.example"));
+        assert!(!serialized.contains("secret-command"));
+    }
+
+    #[test]
+    fn parses_mcp_status_to_safe_tool_summaries() {
+        let response = json!({
+            "result": {
+                "data": [{
+                    "name": "openalex",
+                    "authStatus": "oAuth",
+                    "serverInfo": {
+                        "name": "openalex-server",
+                        "version": "1.2.3",
+                        "title": "OpenAlex",
+                        "description": "Search scholarly works",
+                        "websiteUrl": "https://private.example"
+                    },
+                    "tools": {
+                        "works/search": {
+                            "name": "works/search",
+                            "title": "Search works",
+                            "description": "Search metadata",
+                            "inputSchema": {"type": "object", "properties": {"token": {"type": "string"}}},
+                            "_meta": {"authorization": "secret"}
+                        }
+                    },
+                    "resources": [],
+                    "resourceTemplates": []
+                }],
+                "nextCursor": null
+            }
+        });
+
+        let servers = parse_mcp_status_response(&response).expect("MCP response");
+
+        assert_eq!(
+            servers,
+            vec![CodexMcpServer {
+                name: "openalex".into(),
+                title: Some("OpenAlex".into()),
+                description: Some("Search scholarly works".into()),
+                auth_status: "oAuth".into(),
+                tools: vec![CodexMcpTool {
+                    name: "works/search".into(),
+                    title: Some("Search works".into()),
+                    description: Some("Search metadata".into()),
+                }],
+            }]
+        );
+        let serialized = serde_json::to_string(&servers).expect("serialize MCP servers");
+        assert!(!serialized.contains("inputSchema"));
+        assert!(!serialized.contains("authorization"));
+        assert!(!serialized.contains("private.example"));
+    }
+
+    #[test]
+    fn unsupported_integration_method_is_detected_without_disabling_conversations() {
+        assert!(rpc_method_unsupported(&json!({
+            "error": {"code": -32601, "message": "Method not found"}
+        })));
+        assert!(!rpc_method_unsupported(&json!({
+            "error": {"code": -32000, "message": "temporary failure"}
+        })));
+    }
+
+    #[test]
+    fn structured_skill_input_contains_name_and_discovered_path() {
+        let input = turn_input(
+            "分析实验设计",
+            Some(&CodexSkillSelection {
+                name: "paper-research".into(),
+                path: PathBuf::from("/workspace/.codex/skills/paper-research/SKILL.md"),
+            }),
+        );
+
+        assert_eq!(
+            input,
+            json!([
+                {"type": "text", "text": "分析实验设计"},
+                {
+                    "type": "skill",
+                    "name": "paper-research",
+                    "path": "/workspace/.codex/skills/paper-research/SKILL.md"
+                }
+            ])
+        );
+    }
 }

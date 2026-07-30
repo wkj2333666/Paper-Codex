@@ -103,6 +103,10 @@ codex login
 
 The Codex panel exposes conversation scope, model, reasoning effort, and service speed when the connected Codex runtime supports them. Paper Codex does not store your Codex credentials in the repository.
 
+The **Codex capabilities** drawer lists Skills discovered for the paper workspace and the safe status summary of MCP servers configured for the operating-system user running Paper Codex. The built-in `paper-research` Skill is installed inside each workspace; personal Skills and MCP configuration come from that user's effective `CODEX_HOME`.
+
+Selecting a Skill sends it to Codex as a structured app-server input for the next conversation turn. MCP configuration and authentication still belong to Codex CLI or a supported Codex desktop client. Paper Codex only displays server, authentication, and tool summaries: it does not store MCP credentials, expose server commands or environment variables, start OAuth flows, or provide direct MCP tool-call buttons. Already configured tools that do not require interactive approval remain available to Codex according to the user's Codex policy.
+
 Project literature discovery additionally requires Codex app-server dynamic tools. Paper Codex detects this capability at runtime: unsupported installations keep ordinary conversations available and clearly disable controlled paper search.
 
 ## Research resource settings

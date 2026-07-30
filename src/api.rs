@@ -212,6 +212,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/events", get(events))
         .route("/api/search", get(search))
         .route("/api/codex/capabilities", get(codex_capabilities))
+        .route("/api/codex/integrations", get(codex_integrations))
         .route("/api/questions", post(question))
         .route(
             "/api/conversations",
@@ -1072,6 +1073,24 @@ async fn codex_capabilities(State(state): State<AppState>) -> Result<Json<Value>
 }
 
 #[derive(Deserialize)]
+struct CodexIntegrationsQuery {
+    refresh: Option<bool>,
+}
+
+async fn codex_integrations(
+    State(state): State<AppState>,
+    Query(query): Query<CodexIntegrationsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let engine = state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?;
+    Ok(Json(json!(
+        engine.integrations(query.refresh.unwrap_or(false)).await?
+    )))
+}
+
+#[derive(Deserialize)]
 struct CreateConversationRequest {
     title: String,
     scopes: Vec<ConversationScopeInput>,
@@ -1221,6 +1240,7 @@ async fn replace_conversation_scopes(
 struct CreateMessageRequest {
     content: String,
     research_mode: Option<ResearchMode>,
+    skill: Option<crate::codex::CodexSkillSelection>,
 }
 
 async fn create_conversation_message(
@@ -1232,10 +1252,11 @@ async fn create_conversation_message(
         .conversation_engine
         .as_ref()
         .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
-        .enqueue_message_with_research_mode(
+        .enqueue_message_with_options(
             &id,
             &request.content,
             request.research_mode.unwrap_or(ResearchMode::Auto),
+            request.skill,
         )
         .await
         .map_err(conversation_api_error)?;
@@ -1314,6 +1335,8 @@ fn conversation_api_error(error: anyhow::Error) -> ApiError {
         ApiError::not_found("对话或上下文不存在")
     } else if message.contains("busy") {
         ApiError::conflict("当前对话正在生成回答")
+    } else if message.contains("selected Skill") {
+        ApiError::conflict("Skill 已变化，请刷新能力列表")
     } else {
         ApiError::bad_request(message)
     }

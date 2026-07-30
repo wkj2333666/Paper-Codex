@@ -1,4 +1,4 @@
-import type { Annotation, AnnotationAnchor, CandidateStatus, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexRunSettings, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectImpact, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
+import type { Annotation, AnnotationAnchor, CandidateStatus, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectImpact, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
 
 export class ApiError extends Error { constructor(public status:number,message:string){super(message)} }
 const TOKEN_KEY = "paper-codex-token"
@@ -53,12 +53,13 @@ export const api = {
   search:(query:string)=>request<SearchResult[]>(`/api/search?q=${encodeURIComponent(query)}`),
   question:(scope_type:string,scope_id:string|null,question:string)=>request<{task_id:string}>("/api/questions",{method:"POST",body:JSON.stringify({scope_type,scope_id,question})}),
   codexCapabilities:()=>request<CodexCapabilities>("/api/codex/capabilities"),
+  codexIntegrations:(refresh=false)=>request<CodexIntegrations>(`/api/codex/integrations${refresh?"?refresh=true":""}`),
   conversations:(archived=false)=>request<Conversation[]>(`/api/conversations?archived=${archived}`),
   createConversation:(title:string,scopes:ConversationScope[],settings?:CodexRunSettings)=>request<Conversation>("/api/conversations",{method:"POST",body:JSON.stringify({title,scopes,...(settings?{settings}:{})})}),
   conversation:(id:string)=>request<ConversationDetail>(`/api/conversations/${encodeURIComponent(id)}`),
   updateConversation:(id:string,value:{title?:string;archived?:boolean;settings?:CodexRunSettings})=>request<Conversation>(`/api/conversations/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(value)}),
   replaceConversationScopes:(id:string,scopes:ConversationScope[])=>request<ConversationScope[]>(`/api/conversations/${encodeURIComponent(id)}/scopes`,{method:"PUT",body:JSON.stringify({scopes})}),
-  sendConversationMessage:(id:string,content:string,researchMode:ResearchMode="auto")=>request<{message_id:string;status:string}>(`/api/conversations/${encodeURIComponent(id)}/messages`,{method:"POST",body:JSON.stringify({content,research_mode:researchMode})}),
+  sendConversationMessage:(id:string,content:string,researchMode:ResearchMode="auto",skill?:CodexSkillSelection|null)=>request<{message_id:string;status:string}>(`/api/conversations/${encodeURIComponent(id)}/messages`,{method:"POST",body:JSON.stringify({content,research_mode:researchMode,...(skill?{skill}:{})})}),
   cancelConversation:(id:string)=>request<void>(`/api/conversations/${encodeURIComponent(id)}/cancel`,{method:"POST"}),
   pinCitation:(id:string)=>request<Annotation>(`/api/citations/${encodeURIComponent(id)}/pin`,{method:"POST"}),
   paperAnnotations:(paperId:string)=>request<PaperAnnotation[]>(`/api/paper/annotations?id=${encodeURIComponent(paperId)}`),

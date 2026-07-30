@@ -89,7 +89,10 @@ test("Codex capabilities and conversation settings use the conversation API", as
 })
 
 test("conversation messages send explicit project research mode", async()=>{
-  await api.sendConversationMessage("conversation/1","查找相关工作","explicit")
+  await api.sendConversationMessage("conversation/1","查找相关工作","explicit",{
+    name:"paper-research",
+    path:"/workspace/.codex/skills/paper-research/SKILL.md",
+  })
   expect(capturedRequests.at(-1)).toMatchObject({
     method:"POST",
     url:"/api/conversations/conversation%2F1/messages",
@@ -97,6 +100,18 @@ test("conversation messages send explicit project research mode", async()=>{
   expect(JSON.parse(String(capturedRequests.at(-1)?.body))).toEqual({
     content:"查找相关工作",
     research_mode:"explicit",
+    skill:{
+      name:"paper-research",
+      path:"/workspace/.codex/skills/paper-research/SKILL.md",
+    },
+  })
+})
+
+test("Codex integrations support an explicit refresh", async()=>{
+  await api.codexIntegrations(true)
+  expect(capturedRequests.at(-1)).toMatchObject({
+    method:"GET",
+    url:"/api/codex/integrations?refresh=true",
   })
 })
 

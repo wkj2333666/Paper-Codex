@@ -302,6 +302,7 @@ async fn exact_project_tools_search_inspect_save_and_bind_candidate_evidence() {
             "查找相关论文",
             "completed",
             ResearchMode::Explicit,
+            None,
         )
         .await
         .unwrap();

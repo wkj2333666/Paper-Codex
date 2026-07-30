@@ -54,6 +54,45 @@ for raw in sys.stdin:
             ],
             "serviceTiers": [{"id": "priority", "name": "Fast", "description": "fast"}]
         }]}})
+    elif method == "skills/list":
+        cwd = msg["params"]["cwds"][0]
+        send({"id": msg["id"], "result": {"data": [{
+            "cwd": cwd,
+            "skills": [{
+                "name": "paper-research",
+                "description": "Read, compare, and synthesize papers",
+                "enabled": True,
+                "path": f"{cwd}/.codex/skills/paper-research/SKILL.md",
+                "scope": "repo",
+                "interface": {
+                    "displayName": "Paper Research",
+                    "shortDescription": "Evidence-first paper research"
+                },
+                "dependencies": {"tools": []}
+            }],
+            "errors": []
+        }]}})
+    elif method == "mcpServerStatus/list":
+        send({"id": msg["id"], "result": {"data": [{
+            "name": "openalex",
+            "authStatus": "oAuth",
+            "serverInfo": {
+                "name": "openalex-server",
+                "version": "1.0.0",
+                "title": "OpenAlex",
+                "description": "Search scholarly metadata"
+            },
+            "tools": {
+                "works/search": {
+                    "name": "works/search",
+                    "title": "Search works",
+                    "description": "Search scholarly works",
+                    "inputSchema": {"type": "object"}
+                }
+            },
+            "resources": [],
+            "resourceTemplates": []
+        }], "nextCursor": None}})
     elif method == "thread/start":
         if reject_dynamic_tools and "dynamicTools" in msg["params"]:
             send({"id": msg["id"], "error": {"code": -32602, "message": "dynamicTools unsupported"}})
@@ -73,7 +112,7 @@ for raw in sys.stdin:
         text = msg["params"]["input"][0]["text"]
         if "runtime-tmp" in text:
             send({"method": "test/runtime-tmp", "params": {"path": os.environ.get("TMPDIR")}})
-        if "settings" in text:
+        if "settings" in text or "skill-turn" in text:
             send({"method": "test/turn-params", "params": msg["params"]})
         if "fail-me" in text:
             send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "failed", "error": {"message": "structured output rejected", "additionalDetails": "schema mismatch"}}}})

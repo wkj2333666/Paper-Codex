@@ -1,5 +1,8 @@
 use crate::{
-    codex::{CodexCapabilities, CodexEvent, CodexRunSettings, CodexRuntime, CodexTurn},
+    codex::{
+        CodexCapabilities, CodexEvent, CodexIntegrations, CodexRunSettings, CodexRuntime,
+        CodexSkillSelection, CodexTurn,
+    },
     conversation_context::ConversationContextBuilder,
     conversations::{
         ChatMessage, Conversation, ConversationEvent, ConversationScope, ConversationScopeInput,
@@ -127,7 +130,7 @@ fn codex_progress(event: &CodexEvent) -> Option<(&'static str, &'static str)> {
             match item_type {
                 "agentMessage" => Some(("answering", "Codex 正在组织回答…")),
                 "commandExecution" => Some(("tool", "Codex 正在执行辅助操作…")),
-                "mcpToolCall" => Some(("tool", "Codex 正在调用研究工具…")),
+                "mcpToolCall" => Some(("tool", "Codex 正在调用 MCP 工具…")),
                 "fileChange" => Some(("tool", "Codex 正在处理工作区文件…")),
                 "webSearch" => Some(("tool", "Codex 正在检索资料…")),
                 _ => None,
@@ -195,6 +198,12 @@ impl ConversationEngine {
         self.codex.capabilities()
     }
 
+    pub async fn integrations(&self, force_reload: bool) -> Result<CodexIntegrations> {
+        self.codex
+            .integrations(self.contexts.workspace_root(), force_reload)
+            .await
+    }
+
     pub fn validate_settings(&self, settings: &CodexRunSettings) -> Result<CodexRunSettings> {
         self.codex.validate_settings(settings)
     }
@@ -251,6 +260,17 @@ impl ConversationEngine {
         question: &str,
         research_mode: ResearchMode,
     ) -> Result<ChatMessage> {
+        self.enqueue_message_with_options(conversation_id, question, research_mode, None)
+            .await
+    }
+
+    pub async fn enqueue_message_with_options(
+        &self,
+        conversation_id: &str,
+        question: &str,
+        research_mode: ResearchMode,
+        skill: Option<CodexSkillSelection>,
+    ) -> Result<ChatMessage> {
         let question = question.trim();
         if question.is_empty() {
             bail!("question cannot be empty");
@@ -286,6 +306,19 @@ impl ConversationEngine {
                 bail!("当前 Codex 不支持项目文献检索工具");
             }
         }
+        let validated_skill = match skill {
+            Some(selection) => {
+                let skill = self
+                    .codex
+                    .validate_skill(self.contexts.workspace_root(), &selection)
+                    .await?;
+                Some(CodexSkillSelection {
+                    name: skill.name,
+                    path: skill.path,
+                })
+            }
+            None => None,
+        };
         let user = self
             .db
             .append_chat_message_with_research_mode(
@@ -294,6 +327,7 @@ impl ConversationEngine {
                 question,
                 "completed",
                 research_mode,
+                validated_skill.as_ref(),
             )
             .await?;
         let assistant = self
@@ -304,7 +338,11 @@ impl ConversationEngine {
             conversation_id,
             Some(&user.id),
             "message-created",
-            json!({"role":"user","content":question}),
+            json!({
+                "role":"user",
+                "content":question,
+                "skill":validated_skill.as_ref().map(|skill| json!({"name":skill.name}))
+            }),
         )
         .await?;
         self.emit(
@@ -415,6 +453,26 @@ impl ConversationEngine {
 
         let scopes = self.db.conversation_scopes(&conversation.id).await?;
         let bundle = self.contexts.refresh(&conversation.id, &scopes).await?;
+        let selected_skill = question
+            .skill_name
+            .as_ref()
+            .zip(question.skill_path.as_ref())
+            .map(|(name, path)| CodexSkillSelection {
+                name: name.clone(),
+                path: path.into(),
+            });
+        if let Some(skill) = &selected_skill {
+            self.emit(
+                &conversation.id,
+                Some(&assistant.id),
+                "answer-progress",
+                json!({
+                    "phase":"tool",
+                    "label":format!("正在使用 Skill：{}", skill.name)
+                }),
+            )
+            .await?;
+        }
         self.emit(
             &conversation.id,
             Some(&assistant.id),
@@ -466,6 +524,7 @@ impl ConversationEngine {
                     question.research_mode,
                     research_handler.is_some(),
                 ),
+                skill: selected_skill,
                 output_schema: Some(conversation_answer_schema()),
                 settings: conversation
                     .model

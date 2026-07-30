@@ -44,6 +44,7 @@ describe("CodexPanel", () => {
     expect(html).toContain("新建对话")
     expect(html).toContain("对话历史")
     expect(html).toContain("活动记录")
+    expect(html).toContain("Codex 能力")
     expect(html).toContain("询问这篇论文")
     expect(html).toContain('data-testid="codex-scope"')
     expect(html).toContain("当前作用域")
@@ -87,7 +88,7 @@ describe("CodexPanel", () => {
 
   it("renders user prompts, completed answers, and live work as distinct surfaces", () => {
     const user = renderToStaticMarkup(
-      <CodexMessage message={message({ role: "user", content: "为什么选择这个游戏？" })} onCitation={() => {}} />,
+      <CodexMessage message={message({ role: "user", content: "为什么选择这个游戏？", skill_name:"paper-research" })} onCitation={() => {}} />,
     )
     const answer = renderToStaticMarkup(
       <CodexMessage message={message({ content: "作者选择该环境是为了控制变量。" })} onCitation={() => {}} />,
@@ -105,6 +106,7 @@ describe("CodexPanel", () => {
     )
     expect(user).toContain("codex-user-message")
     expect(user).toContain("你")
+    expect(user).toContain("paper-research")
     expect(answer).toContain("codex-answer")
     expect(answer).toContain("Codex")
     expect(live).toContain("codex-worklog")

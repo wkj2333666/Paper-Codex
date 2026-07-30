@@ -1,4 +1,5 @@
 use paper_codex::{
+    codex::CodexSkillSelection,
     conversations::{AnnotationAnchor, ConversationScopeInput},
     db::Database,
     prompts::{ConversationAnswer, ConversationCitation},
@@ -169,6 +170,46 @@ async fn conversation_crud_separates_active_and_archived_lists() {
         db.list_conversations(true, 20, 0).await.unwrap(),
         vec![changed]
     );
+}
+
+#[tokio::test]
+async fn selected_skill_survives_queue_and_database_reload() {
+    let db = test_db().await;
+    let conversation = db.create_conversation("Skill persistence").await.unwrap();
+    let selected = CodexSkillSelection {
+        name: "paper-research".into(),
+        path: PathBuf::from("/workspace/.codex/skills/paper-research/SKILL.md"),
+    };
+    let user = db
+        .append_chat_message_with_research_mode(
+            &conversation.id,
+            "user",
+            "分析实验",
+            "completed",
+            paper_codex::research::ResearchMode::Auto,
+            Some(&selected),
+        )
+        .await
+        .unwrap();
+    let assistant = db
+        .append_chat_message(&conversation.id, "assistant", "", "queued")
+        .await
+        .unwrap();
+
+    let reloaded = db.get_chat_message(&user.id).await.unwrap().unwrap();
+    let previous = db
+        .previous_user_message(&assistant.id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reloaded.skill_name.as_deref(), Some("paper-research"));
+    assert_eq!(
+        reloaded.skill_path.as_deref(),
+        Some("/workspace/.codex/skills/paper-research/SKILL.md")
+    );
+    assert_eq!(previous.skill_name, reloaded.skill_name);
+    assert_eq!(previous.skill_path, reloaded.skill_path);
 }
 
 #[tokio::test]

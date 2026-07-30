@@ -419,6 +419,97 @@ async fn conversation_api_exposes_and_persists_codex_run_settings() {
 }
 
 #[tokio::test]
+async fn codex_integrations_require_auth_and_selected_skill_is_persisted() {
+    let (app, db) = conversation_test_app().await;
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/codex/integrations")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    let token = login_token(&app).await;
+    let integrations = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/codex/integrations?refresh=true")
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(integrations.status(), StatusCode::OK);
+    let integrations = json_response(integrations).await;
+    assert_eq!(integrations["skills"][0]["name"], "paper-research");
+    assert_eq!(integrations["mcp_servers"][0]["name"], "openalex");
+    assert!(integrations["mcp_servers"][0].get("command").is_none());
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/conversations")
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "title":"Skill 对话",
+                        "scopes":[{"scope_type":"paper","scope_id":"paper:one"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let conversation_id = json_response(created).await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let selected_skill = integrations["skills"][0].clone();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/conversations/{conversation_id}/messages"))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "content":"分析实验设计",
+                        "skill":{
+                            "name":selected_skill["name"],
+                            "path":selected_skill["path"]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    let messages = db
+        .conversation_messages(&conversation_id, 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(messages[0].skill_name.as_deref(), Some("paper-research"));
+    assert!(messages[0]
+        .skill_path
+        .as_deref()
+        .is_some_and(|path| path.ends_with("/.codex/skills/paper-research/SKILL.md")));
+}
+
+#[tokio::test]
 async fn annotation_api_pins_lists_updates_and_stores_anchors() {
     let (app, db) = conversation_test_app().await;
     let conversation = db.create_conversation("批注接口").await.unwrap();

@@ -302,6 +302,15 @@ impl Database {
             .execute(pool)
             .await?;
         }
+        for column in ["skill_name", "skill_path"] {
+            if !has_column(pool, "chat_messages", column).await? {
+                sqlx::query(&format!(
+                    "ALTER TABLE chat_messages ADD COLUMN {column} TEXT"
+                ))
+                .execute(pool)
+                .await?;
+            }
+        }
         for (column, definition) in [
             ("model", "TEXT"),
             ("reasoning_effort", "TEXT"),
@@ -331,6 +340,8 @@ impl Database {
                 conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
                 role TEXT NOT NULL, content TEXT NOT NULL, turn_id TEXT,
                 status TEXT NOT NULL DEFAULT 'completed', error TEXT,
+                research_mode TEXT NOT NULL DEFAULT 'auto',
+                skill_name TEXT, skill_path TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )"#,

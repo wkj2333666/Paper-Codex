@@ -68,6 +68,22 @@ describe("conversation store", () => {
     expect(state.messages.a.candidate_citations).toEqual([candidate])
   })
 
+  it("records the Skill used by a newly streamed user message", () => {
+    const state = reduceConversationEvent(
+      conversationInitialState,
+      event(6, "message-created", {
+        role: "user",
+        content: "分析实验设计",
+        skill: { name: "paper-research" },
+      }),
+    )
+    expect(state.messages.a).toMatchObject({
+      role: "user",
+      content: "分析实验设计",
+      skill_name: "paper-research",
+    })
+  })
+
   it("keeps research progress informational while the answer is running", () => {
     const state = reduceConversationEvent(
       conversationInitialState,
