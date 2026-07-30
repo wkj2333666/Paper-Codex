@@ -36,6 +36,27 @@ export function mergeIntakeTaskEvent(tasks: Task[], event: StreamEvent): Task[] 
     if (event.type === "stage" && typeof event.payload.state === "string") {
       return { ...task, state: event.payload.state, updated_at: event.created_at || task.updated_at }
     }
+    if (event.type === "model-switch" && typeof event.payload.from === "string" && typeof event.payload.to === "string") {
+      return {
+        ...task,
+        analysis_model: event.payload.to,
+        status_note: `${event.payload.from} 容量不足，已切换至 ${event.payload.to}`,
+        updated_at: event.created_at || task.updated_at,
+      }
+    }
+    if (
+      event.type === "analysis-warning"
+      && typeof event.payload.source_key === "string"
+      && typeof event.payload.relation_type === "string"
+      && typeof event.payload.target_key === "string"
+    ) {
+      const warning = `已忽略无法定位的关系：${event.payload.source_key} --${event.payload.relation_type}--> ${event.payload.target_key}`
+      return {
+        ...task,
+        analysis_warnings: [...(task.analysis_warnings ?? []), warning].slice(-5),
+        updated_at: event.created_at || task.updated_at,
+      }
+    }
     if (event.type === "failed") {
       return {
         ...task,
@@ -45,7 +66,18 @@ export function mergeIntakeTaskEvent(tasks: Task[], event: StreamEvent): Task[] 
       }
     }
     if (event.type === "cancelled") return { ...task, state: "cancelled", updated_at: event.created_at || task.updated_at }
-    if (event.type === "result" || event.type === "done") return { ...task, state: "done", updated_at: event.created_at || task.updated_at }
+    if (event.type === "result" || event.type === "done") {
+      const model = typeof event.payload.analysis_model === "string" ? event.payload.analysis_model : task.analysis_model
+      const effort = typeof event.payload.reasoning_effort === "string" ? event.payload.reasoning_effort : task.reasoning_effort
+      return {
+        ...task,
+        state: "done",
+        analysis_model: model,
+        reasoning_effort: effort,
+        status_note: model ? `由 ${model}${effort ? ` · ${effort}` : ""} 完成` : task.status_note,
+        updated_at: event.created_at || task.updated_at,
+      }
+    }
     return task
   })
 }

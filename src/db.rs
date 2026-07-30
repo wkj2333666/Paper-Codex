@@ -72,7 +72,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS paper_analyses (
   paper_id TEXT PRIMARY KEY REFERENCES papers(id) ON DELETE CASCADE,
-  revision TEXT NOT NULL, analysis_json TEXT NOT NULL,
+  revision TEXT NOT NULL, analysis_json TEXT NOT NULL, model TEXT, reasoning_effort TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -324,6 +324,15 @@ impl Database {
                 .await?;
             }
         }
+        for column in ["model", "reasoning_effort"] {
+            if !has_column(pool, "paper_analyses", column).await? {
+                sqlx::query(&format!(
+                    "ALTER TABLE paper_analyses ADD COLUMN {column} TEXT"
+                ))
+                .execute(pool)
+                .await?;
+            }
+        }
         Ok(())
     }
 
@@ -441,6 +450,26 @@ impl Database {
             .bind(&paper.id).bind(&paper.title).bind(&paper.authors_json).bind(paper.year)
             .bind(&paper.doi).bind(&paper.arxiv_id).bind(&paper.canonical_sha256)
             .bind(&paper.source_url).bind(&paper.note_path).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn register_provisional_paper(&self, paper: &Paper) -> Result<()> {
+        sqlx::query(
+            r#"INSERT OR IGNORE INTO papers(
+                id,title,authors_json,year,doi,arxiv_id,canonical_sha256,source_url,note_path
+            ) VALUES(?,?,?,?,?,?,?,?,?)"#,
+        )
+        .bind(&paper.id)
+        .bind(&paper.title)
+        .bind(&paper.authors_json)
+        .bind(paper.year)
+        .bind(&paper.doi)
+        .bind(&paper.arxiv_id)
+        .bind(&paper.canonical_sha256)
+        .bind(&paper.source_url)
+        .bind(&paper.note_path)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -755,13 +784,44 @@ impl Database {
         revision: &str,
         analysis: &serde_json::Value,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO paper_analyses(paper_id,revision,analysis_json) VALUES(?,?,?) ON CONFLICT(paper_id) DO UPDATE SET revision=excluded.revision,analysis_json=excluded.analysis_json,updated_at=CURRENT_TIMESTAMP")
+        sqlx::query("INSERT INTO paper_analyses(paper_id,revision,analysis_json,model,reasoning_effort) VALUES(?,?,?,NULL,NULL) ON CONFLICT(paper_id) DO UPDATE SET revision=excluded.revision,analysis_json=excluded.analysis_json,model=NULL,reasoning_effort=NULL,updated_at=CURRENT_TIMESTAMP")
             .bind(paper_id)
             .bind(revision)
             .bind(serde_json::to_string(analysis)?)
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn upsert_paper_analysis_with_provenance(
+        &self,
+        paper_id: &str,
+        revision: &str,
+        analysis: &serde_json::Value,
+        model: &str,
+        reasoning_effort: &str,
+    ) -> Result<()> {
+        sqlx::query("INSERT INTO paper_analyses(paper_id,revision,analysis_json,model,reasoning_effort) VALUES(?,?,?,?,?) ON CONFLICT(paper_id) DO UPDATE SET revision=excluded.revision,analysis_json=excluded.analysis_json,model=excluded.model,reasoning_effort=excluded.reasoning_effort,updated_at=CURRENT_TIMESTAMP")
+            .bind(paper_id)
+            .bind(revision)
+            .bind(serde_json::to_string(analysis)?)
+            .bind(model)
+            .bind(reasoning_effort)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn paper_analysis_provenance(
+        &self,
+        paper_id: &str,
+    ) -> Result<Option<(String, String)>> {
+        let value: Option<(Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT model,reasoning_effort FROM paper_analyses WHERE paper_id=?")
+                .bind(paper_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(value.and_then(|(model, effort)| model.zip(effort)))
     }
 
     pub async fn paper_analysis(&self, paper_id: &str) -> Result<Option<serde_json::Value>> {

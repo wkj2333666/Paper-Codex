@@ -53,6 +53,33 @@ for raw in sys.stdin:
                 {"effort": "high", "description": "deep"}
             ],
             "serviceTiers": [{"id": "priority", "name": "Fast", "description": "fast"}]
+        }, {
+            "id": "gpt-sol-id", "model": "gpt-5.6-sol", "displayName": "GPT-5.6-Sol",
+            "description": "paper analysis primary", "hidden": False, "isDefault": False,
+            "defaultReasoningEffort": "high",
+            "supportedReasoningEfforts": [
+                {"effort": "medium", "description": "balanced"},
+                {"effort": "high", "description": "deep"}
+            ],
+            "serviceTiers": [{"id": "priority", "name": "Fast", "description": "fast"}]
+        }, {
+            "id": "gpt-terra-id", "model": "gpt-5.6-terra", "displayName": "GPT-5.6-Terra",
+            "description": "paper analysis fallback", "hidden": False, "isDefault": False,
+            "defaultReasoningEffort": "medium",
+            "supportedReasoningEfforts": [
+                {"effort": "low", "description": "fast"},
+                {"effort": "medium", "description": "balanced"}
+            ],
+            "serviceTiers": []
+        }, {
+            "id": "gpt-luna-id", "model": "gpt-5.6-luna", "displayName": "GPT-5.6-Luna",
+            "description": "paper analysis fallback", "hidden": False, "isDefault": False,
+            "defaultReasoningEffort": "low",
+            "supportedReasoningEfforts": [
+                {"effort": "low", "description": "fast"},
+                {"effort": "medium", "description": "balanced"}
+            ],
+            "serviceTiers": []
         }]}})
     elif method == "skills/list":
         cwd = msg["params"]["cwds"][0]
@@ -115,7 +142,19 @@ for raw in sys.stdin:
         if "settings" in text or "skill-turn" in text:
             send({"method": "test/turn-params", "params": msg["params"]})
         if "fail-me" in text:
-            send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "failed", "error": {"message": "structured output rejected", "additionalDetails": "schema mismatch"}}}})
+            send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "failed", "error": {
+                "message": "structured output rejected",
+                "additionalDetails": "schema mismatch",
+                "codexErrorInfo": "ResponseSerializationFailure",
+                "httpStatusCode": 422
+            }}}})
+            pending_turn = None
+        elif "capacity-me" in text or ("capacity-sol" in text and msg["params"]["model"] == "gpt-5.6-sol"):
+            send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "failed", "error": {
+                "message": "Selected model is at capacity. Please try a different model.",
+                "codexErrorInfo": "ServerOverloaded",
+                "httpStatusCode": 503
+            }}}})
             pending_turn = None
         elif "call-research-search" in text:
             assert any(tool.get("name") == "research_search" for tool in active_dynamic_tools)

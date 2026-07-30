@@ -243,6 +243,8 @@ pub fn first_pass_prompt(
 - 每个重要事实都必须用从 1 开始的页码定位证据，并区分作者结论与分析者解释。
 - 抽取简短、可复用的概念、方法、数据集和研究发现实体，不要把整段摘要当作节点名称。
 - 有直接论文证据的关系写为正式关系；没有直接证据的推断写为假设关系（hypothesis=true），不得伪装成事实。
+- semantic_relations 中论文根节点的键必须精确写成 `paper`，不得写成 `paper:<paper_id>` 或论文 ID。
+- semantic_relations 的其他 source_key 和 target_key 必须逐字复用 entities 中已经声明的 key，不得自行更换 `concept:`、`method:`、`finding:` 等前缀。
 - 记录局限、前提和可复现性，不得用“具有重要意义”等空泛措辞填充。
 - 只推荐已有项目 slug；除非论文明确形成独立研究方向，否则不要发明项目。
 

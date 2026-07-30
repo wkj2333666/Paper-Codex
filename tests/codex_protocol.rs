@@ -345,6 +345,78 @@ async fn preserves_turn_failure_details() {
         outcome.error.as_deref(),
         Some("structured output rejected: schema mismatch")
     );
+    assert_eq!(
+        outcome
+            .failure
+            .as_ref()
+            .and_then(|failure| failure.codex_error_info.as_ref())
+            .and_then(Value::as_str),
+        Some("ResponseSerializationFailure")
+    );
+    assert_eq!(
+        outcome
+            .failure
+            .as_ref()
+            .and_then(|failure| failure.http_status_code),
+        Some(422)
+    );
+    assert!(!outcome.is_capacity_failure());
+}
+
+#[tokio::test]
+async fn identifies_explicit_model_capacity_without_treating_other_failures_as_capacity() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let outcome = runtime
+        .run_turn(
+            CodexTurn {
+                thread_id: None,
+                cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
+                prompt: "capacity-me".into(),
+                skill: None,
+                output_schema: None,
+                settings: standard_settings(),
+            },
+            cancel_rx,
+        )
+        .await
+        .unwrap();
+
+    assert!(outcome.is_capacity_failure());
+    assert_eq!(
+        outcome
+            .failure
+            .as_ref()
+            .and_then(|failure| failure.codex_error_info.as_ref())
+            .and_then(Value::as_str),
+        Some("ServerOverloaded")
+    );
+    assert_eq!(
+        outcome
+            .failure
+            .as_ref()
+            .and_then(|failure| failure.http_status_code),
+        Some(503)
+    );
+}
+
+#[tokio::test]
+async fn paper_analysis_prefers_sol_then_terra_then_luna_at_medium_standard() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+
+    let settings = runtime.paper_analysis_settings();
+
+    assert_eq!(
+        settings
+            .iter()
+            .map(|item| item.model.as_str())
+            .collect::<Vec<_>>(),
+        vec!["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+    );
+    assert!(settings
+        .iter()
+        .all(|item| item.reasoning_effort == "medium"));
+    assert!(settings.iter().all(|item| item.service_tier.is_none()));
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 export interface Paper { id:string; title:string; authors_json:string; year:number|null; doi:string|null; arxiv_id:string|null; canonical_sha256:string|null; source_url:string|null; note_path:string|null; deleted_at:string|null; created_at:string; updated_at:string }
 export interface Project { id:string; slug:string; name:string; purpose:string; parent_id:string|null; created_at:string; updated_at:string }
-export interface Task { id:string; kind:string; state:string; input_json:string; paper_id:string|null; project_id:string|null; thread_id:string|null; error:string|null; created_at:string; updated_at:string }
+export interface Task { id:string; kind:string; state:string; input_json:string; paper_id:string|null; project_id:string|null; thread_id:string|null; error:string|null; created_at:string; updated_at:string; analysis_model?:string; reasoning_effort?:string; status_note?:string; analysis_warnings?:string[] }
 export interface Dashboard { papers:Paper[]; projects:Project[]; tasks:Task[]; inbox:Paper[]; trash_count:number; project_memberships:Record<string,string[]> }
 export interface Evidence { paper_id:string; revision:string; page:number; section:string|null; locator:string|null; kind:string }
 export interface PaperAnalysis { takeaway?:string; research_question?:string; contribution?:string; method?:string; experimental_design?:string; baselines?:string[]; results?:string[]; limitations?:string[]; assumptions?:string[]; reproducibility?:string; evidence?:Evidence[]; [key:string]:unknown }

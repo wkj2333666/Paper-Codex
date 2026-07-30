@@ -1,11 +1,13 @@
 use crate::{
     acquisition::Acquirer,
-    codex::{CodexRuntime, CodexTurn},
+    codex::{CodexOutcome, CodexRunSettings, CodexRuntime, CodexTurn},
     db::Database,
     domain::{Paper, TaskEvent, TaskState},
     extraction::extract_pdf,
     graph::materialize_proposal,
-    knowledge::{proposal_schema, KnowledgeRepository, ProposedKnowledge},
+    knowledge::{
+        normalize_semantic_relations, proposal_schema, KnowledgeRepository, ProposedKnowledge,
+    },
     prompts::{first_pass_prompt, scoped_question_prompt},
     research_store::ResearchStore,
     search::SearchIndex,
@@ -20,6 +22,11 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
+
+struct PaperAnalysisRun {
+    outcome: CodexOutcome,
+    settings: CodexRunSettings,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestInput {
@@ -259,7 +266,7 @@ impl TaskEngine {
             created_at: now.clone(),
             updated_at: now,
         };
-        self.db.upsert_paper(&paper).await?;
+        self.db.register_provisional_paper(&paper).await?;
         self.db
             .add_revision(
                 &paper_id,
@@ -287,20 +294,16 @@ impl TaskEngine {
         self.stage(id, TaskState::Analyzing).await?;
         let projects = self.db.list_projects().await?;
         let context = serde_json::to_string_pretty(&projects)?;
-        let outcome = self
-            .codex
-            .run_turn(
-                CodexTurn {
-                    thread_id: None,
-                    cwd: staging.clone(),
-                    prompt: first_pass_prompt(&extracted_path, &paper_id, &stored.sha256, &context),
-                    skill: None,
-                    output_schema: Some(proposal_schema()),
-                    settings: self.codex.default_settings(),
-                },
+        let analysis = self
+            .run_paper_analysis(
+                id,
+                &staging,
+                &first_pass_prompt(&extracted_path, &paper_id, &stored.sha256, &context),
+                Some(proposal_schema()),
                 cancel.clone(),
             )
             .await?;
+        let outcome = analysis.outcome;
         if outcome.status != "completed" {
             bail!(
                 "Codex turn ended with {}{}",
@@ -335,6 +338,11 @@ impl TaskEngine {
                 evidence.revision = stored.sha256.clone();
             }
         }
+        let relation_warnings = normalize_semantic_relations(&mut proposal);
+        for warning in relation_warnings {
+            self.emit(id, "analysis-warning", serde_json::to_value(&warning)?)
+                .await?;
+        }
         if proposal.paper.title.trim().is_empty() {
             proposal.paper.title = paper.title.clone();
         }
@@ -366,10 +374,12 @@ impl TaskEngine {
         paper.note_path = Some(committed.note_path.to_string_lossy().to_string());
         self.db.upsert_paper(&paper).await?;
         self.db
-            .upsert_paper_analysis(
+            .upsert_paper_analysis_with_provenance(
                 &paper_id,
                 &stored.sha256,
                 &serde_json::to_value(&proposal.paper)?,
+                &analysis.settings.model,
+                &analysis.settings.reasoning_effort,
             )
             .await?;
         let graph = materialize_proposal(&proposal);
@@ -411,8 +421,79 @@ impl TaskEngine {
             research.complete_candidate_import(id, &paper_id).await?;
         }
         self.stage(id, TaskState::Done).await?;
-        self.emit(id, "result", serde_json::json!({"paper_id":paper_id,"title":paper.title,"note_path":paper.note_path})).await?;
+        self.emit(
+            id,
+            "result",
+            serde_json::json!({
+                "paper_id":paper_id,
+                "title":paper.title,
+                "note_path":paper.note_path,
+                "analysis_model":analysis.settings.model,
+                "reasoning_effort":analysis.settings.reasoning_effort
+            }),
+        )
+        .await?;
         Ok(())
+    }
+
+    async fn run_paper_analysis(
+        &self,
+        id: &str,
+        cwd: &std::path::Path,
+        prompt: &str,
+        output_schema: Option<serde_json::Value>,
+        mut cancel: watch::Receiver<bool>,
+    ) -> Result<PaperAnalysisRun> {
+        let settings = self.codex.paper_analysis_settings();
+        if settings.is_empty() {
+            bail!("no supported Codex paper-analysis model is available");
+        }
+        for (index, current) in settings.iter().enumerate() {
+            self.check_cancel(&cancel)?;
+            let outcome = self
+                .codex
+                .run_turn(
+                    CodexTurn {
+                        thread_id: None,
+                        cwd: cwd.to_path_buf(),
+                        prompt: prompt.to_owned(),
+                        skill: None,
+                        output_schema: output_schema.clone(),
+                        settings: current.clone(),
+                    },
+                    cancel.clone(),
+                )
+                .await?;
+            let result = PaperAnalysisRun {
+                outcome,
+                settings: current.clone(),
+            };
+            let Some(next) = settings.get(index + 1) else {
+                return Ok(result);
+            };
+            if !result.outcome.is_capacity_failure() {
+                return Ok(result);
+            }
+            self.emit(
+                id,
+                "model-switch",
+                serde_json::json!({
+                    "from":current.model,
+                    "to":next.model,
+                    "reason":result.outcome.error
+                }),
+            )
+            .await?;
+            tokio::select! {
+                _ = tokio::time::sleep(paper_analysis_backoff(index)) => {}
+                changed = cancel.changed() => {
+                    if changed.is_ok() && *cancel.borrow() {
+                        bail!("task cancelled");
+                    }
+                }
+            }
+        }
+        unreachable!("paper analysis settings are non-empty")
     }
 
     async fn question(
@@ -528,11 +609,120 @@ impl TaskEngine {
     }
 }
 
+fn paper_analysis_backoff(index: usize) -> std::time::Duration {
+    if cfg!(test) {
+        return std::time::Duration::from_millis(1);
+    }
+    std::time::Duration::from_secs(if index == 0 { 2 } else { 5 })
+}
+
 fn redact_error(value: &str) -> String {
     let lower = value.to_ascii_lowercase();
     if lower.contains("token") || lower.contains("authorization") || lower.contains("secret") {
         "operation failed; inspect protected service logs".into()
     } else {
         value.chars().take(500).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codex::CodexCommand;
+
+    fn fake_command() -> CodexCommand {
+        CodexCommand {
+            program: PathBuf::from("python3"),
+            args: vec![format!(
+                "{}/fixtures/fake-app-server.py",
+                env!("CARGO_MANIFEST_DIR")
+            )],
+            codex_home: None,
+            runtime_tmp: None,
+        }
+    }
+
+    async fn engine() -> (Arc<TaskEngine>, Database, tempfile::TempDir) {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::initialize(root.path()).await.unwrap();
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let codex = CodexRuntime::spawn(fake_command()).await.unwrap();
+        let engine = TaskEngine::start(
+            db.clone(),
+            workspace,
+            Acquirer::new(1024 * 1024).unwrap(),
+            codex,
+        )
+        .await
+        .unwrap();
+        (engine, db, root)
+    }
+
+    #[tokio::test]
+    async fn paper_analysis_retries_capacity_on_a_fresh_lower_priority_model() {
+        let (engine, db, root) = engine().await;
+        let task_id = db.create_task("ingest", "{}").await.unwrap();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let result = engine
+            .run_paper_analysis(&task_id, root.path(), "capacity-sol", None, cancel_rx)
+            .await
+            .unwrap();
+
+        assert_eq!(result.settings.model, "gpt-5.6-terra");
+        assert_eq!(result.outcome.status, "completed");
+        let events = db.events_after(0).await.unwrap();
+        let switch = events
+            .iter()
+            .find(|event| event.event_type == "model-switch")
+            .expect("capacity fallback event");
+        let payload: serde_json::Value = serde_json::from_str(&switch.payload_json).unwrap();
+        assert_eq!(payload["from"], "gpt-5.6-sol");
+        assert_eq!(payload["to"], "gpt-5.6-terra");
+    }
+
+    #[tokio::test]
+    async fn paper_analysis_never_retries_non_capacity_failures() {
+        let (engine, db, root) = engine().await;
+        let task_id = db.create_task("ingest", "{}").await.unwrap();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let result = engine
+            .run_paper_analysis(&task_id, root.path(), "fail-me", None, cancel_rx)
+            .await
+            .unwrap();
+
+        assert_eq!(result.settings.model, "gpt-5.6-sol");
+        assert_eq!(result.outcome.status, "failed");
+        assert!(db
+            .events_after(0)
+            .await
+            .unwrap()
+            .iter()
+            .all(|event| event.event_type != "model-switch"));
+    }
+
+    #[tokio::test]
+    async fn paper_analysis_stops_after_the_three_bounded_capacity_candidates() {
+        let (engine, db, root) = engine().await;
+        let task_id = db.create_task("ingest", "{}").await.unwrap();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let result = engine
+            .run_paper_analysis(&task_id, root.path(), "capacity-me", None, cancel_rx)
+            .await
+            .unwrap();
+
+        assert_eq!(result.settings.model, "gpt-5.6-luna");
+        assert_eq!(result.outcome.status, "failed");
+        assert_eq!(
+            db.events_after(0)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|event| event.event_type == "model-switch")
+                .count(),
+            2
+        );
     }
 }
