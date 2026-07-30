@@ -31,4 +31,21 @@ describe("IntakeTaskCard", () => {
     expect(html).not.toContain("spin")
     expect(html).not.toContain('aria-label="取消任务"')
   })
+
+  it("shows model fallback progress and keeps relation warnings compact", () => {
+    const value = {
+      ...task("analyzing"),
+      analysis_model: "gpt-5.6-terra",
+      status_note: "gpt-5.6-sol 容量不足，已切换至 gpt-5.6-terra",
+      analysis_warnings: [
+        "已忽略无法定位的关系：paper --reports--> method:missing",
+      ],
+    }
+    const html = renderToStaticMarkup(
+      <IntakeTaskCard task={value} onCancel={() => {}} onDismiss={() => {}} />,
+    )
+    expect(html).toContain("gpt-5.6-sol 容量不足，已切换至 gpt-5.6-terra")
+    expect(html).toContain("<details")
+    expect(html).toContain("1 条图谱关系未写入")
+  })
 })
