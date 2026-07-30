@@ -14,3 +14,24 @@ body {
   height: 100%;
   min-height: 0;
 }
+
+.paper-page.reader-active {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.paper-page.reader-active .paper-reading {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.paper-page.reader-active .pdf-viewer {
+  flex: 1 1 auto;
+}
+
+.paper-page.reader-active .paper-graph {
+  min-height: 0;
+  overflow: auto;
+}

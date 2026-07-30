@@ -52,6 +52,7 @@ describe("viewport containment", () => {
     expect(page).toMatch(/height:\s*100%/)
     expect(page).toMatch(/min-height:\s*0/)
     expect(page).toMatch(/overflow:\s*hidden/)
+    expect(page).toMatch(/padding-bottom:\s*0/)
     expect(reading).toMatch(/display:\s*flex/)
     expect(reading).toMatch(/flex-direction:\s*column/)
     expect(reading).toMatch(/min-height:\s*0/)
