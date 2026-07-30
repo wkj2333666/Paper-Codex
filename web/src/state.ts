@@ -12,7 +12,13 @@ export function reduceEvent(state:AppStreamState,event:StreamEvent):AppStreamSta
     : typeof event.payload.title === "string" ? event.payload.title : ""
   const label=event.type==="stage"&&typeof event.payload.state==="string"
     ? intakeStateLabel(event.payload.state)
-    : `${EVENT_LABELS[event.type]??event.type}${detail ? ` · ${detail}` : ""}`
+    : event.type==="model-switch"&&typeof event.payload.from==="string"&&typeof event.payload.to==="string"
+      ? `模型容量不足：${event.payload.from} → ${event.payload.to}`
+      : event.type==="analysis-warning"&&typeof event.payload.source_key==="string"&&typeof event.payload.relation_type==="string"&&typeof event.payload.target_key==="string"
+        ? `已忽略无法定位的图谱关系：${event.payload.source_key} --${event.payload.relation_type}--> ${event.payload.target_key}`
+        : event.type==="result"&&typeof event.payload.analysis_model==="string"
+          ? `论文处理完成 · ${event.payload.analysis_model}${typeof event.payload.reasoning_effort==="string"?` · ${event.payload.reasoning_effort}`:""}`
+          : `${EVENT_LABELS[event.type]??event.type}${detail ? ` · ${detail}` : ""}`
   const activity:Activity = { id:event.id,taskId:event.task_id,type:event.type,label,createdAt:event.created_at }
   return { activities:[activity,...state.activities].slice(0,100),
     latestAnswer:event.type === "answer" && typeof event.payload.text === "string" ? event.payload.text : state.latestAnswer,
