@@ -303,7 +303,9 @@ fn semantic_relations_drop_unresolved_or_ambiguous_edges_only() {
     assert_eq!(value.semantic_relations.len(), 1);
     assert_eq!(value.semantic_relations[0].target_key, "attention");
     assert_eq!(warnings.len(), 2);
-    assert!(warnings.iter().any(|warning| warning.reason == "unresolved"));
+    assert!(warnings
+        .iter()
+        .any(|warning| warning.reason == "unresolved"));
     assert!(warnings.iter().any(|warning| warning.reason == "ambiguous"));
 }
 
