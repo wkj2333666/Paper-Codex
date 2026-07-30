@@ -107,10 +107,7 @@ async fn provisional_duplicate_registration_preserves_committed_metadata_and_mem
     assert_eq!(stored.year, committed.year);
     assert_eq!(stored.canonical_sha256, committed.canonical_sha256);
     assert_eq!(stored.note_path, committed.note_path);
-    assert_eq!(
-        db.paper_project_ids(&committed.id).await.unwrap().len(),
-        2
-    );
+    assert_eq!(db.paper_project_ids(&committed.id).await.unwrap().len(), 2);
 }
 
 #[tokio::test]

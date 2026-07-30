@@ -577,13 +577,7 @@ mod tests {
         let (_cancel_tx, cancel_rx) = watch::channel(false);
 
         let result = engine
-            .run_paper_analysis(
-                &task_id,
-                root.path(),
-                "capacity-sol",
-                None,
-                cancel_rx,
-            )
+            .run_paper_analysis(&task_id, root.path(), "capacity-sol", None, cancel_rx)
             .await
             .unwrap();
 
