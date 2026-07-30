@@ -303,7 +303,11 @@ impl CodexOutcome {
         {
             return true;
         }
-        let message = self.error.as_deref().unwrap_or_default().to_ascii_lowercase();
+        let message = self
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         [
             "selected model is at capacity",
             "model is at capacity",

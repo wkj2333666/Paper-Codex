@@ -158,13 +158,12 @@ pub fn normalize_semantic_relations(
                 true
             }
             (source, target) => {
-                let reason = if matches!(source, Err("ambiguous"))
-                    || matches!(target, Err("ambiguous"))
-                {
-                    "ambiguous"
-                } else {
-                    "unresolved"
-                };
+                let reason =
+                    if matches!(source, Err("ambiguous")) || matches!(target, Err("ambiguous")) {
+                        "ambiguous"
+                    } else {
+                        "unresolved"
+                    };
                 warnings.push(SemanticRelationWarning {
                     source_key: relation.source_key.clone(),
                     relation_type: relation.relation_type.clone(),
