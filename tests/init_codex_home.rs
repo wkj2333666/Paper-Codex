@@ -95,12 +95,12 @@ fn initializes_empty_home_and_preserves_existing_config() {
 }
 
 #[test]
-fn user_service_blocks_main_codex_home() {
+fn user_service_cannot_write_main_codex_home() {
     let service = repository_file("deploy/paper-codex.user.service");
     assert!(service.contains(
         "ExecStartPre=/usr/bin/install -d -m 0700 %h/projects/paper-codex/.runtime/codex-home"
     ));
-    assert!(service.contains("InaccessiblePaths=-%h/.codex"));
+    assert!(!service.contains("InaccessiblePaths=-%h/.codex"));
     assert!(!service
         .lines()
         .any(|line| { line.starts_with("ReadWritePaths=") && line.contains("%h/.codex") }));
