@@ -1,10 +1,7 @@
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 
 fn script() -> &'static str {
-    concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/scripts/init-codex-home.sh"
-    )
+    concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/init-codex-home.sh")
 }
 
 fn run_initializer(root: &Path, args: &[&str]) -> std::process::Output {
@@ -38,11 +35,7 @@ fn imports_config_and_personal_skills_without_auth_or_runtime_state() {
         "system",
     )
     .unwrap();
-    fs::write(
-        source.join("skills/private-writer/SKILL.md"),
-        "personal",
-    )
-    .unwrap();
+    fs::write(source.join("skills/private-writer/SKILL.md"), "personal").unwrap();
 
     let output = run_initializer(
         temp.path(),
@@ -81,10 +74,7 @@ fn initializes_empty_home_and_preserves_existing_config() {
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path().join("target");
 
-    let first = run_initializer(
-        temp.path(),
-        &["--target", target.to_str().unwrap()],
-    );
+    let first = run_initializer(temp.path(), &["--target", target.to_str().unwrap()]);
     assert!(first.status.success());
     assert_eq!(
         fs::read_to_string(target.join("config.toml")).unwrap(),
@@ -92,10 +82,7 @@ fn initializes_empty_home_and_preserves_existing_config() {
     );
 
     fs::write(target.join("config.toml"), "model = \"kept\"\n").unwrap();
-    let second = run_initializer(
-        temp.path(),
-        &["--target", target.to_str().unwrap()],
-    );
+    let second = run_initializer(temp.path(), &["--target", target.to_str().unwrap()]);
     assert!(second.status.success());
     assert_eq!(
         fs::read_to_string(target.join("config.toml")).unwrap(),
