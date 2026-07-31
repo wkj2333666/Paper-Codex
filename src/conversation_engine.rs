@@ -733,7 +733,11 @@ fn research_progress_label(kind: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_json_string_prefix, should_generate_conversation_title, AnswerPreview};
+    use super::{
+        extract_json_string_prefix, research_project_id, should_generate_conversation_title,
+        AnswerPreview,
+    };
+    use crate::{conversations::ConversationScope, db::Database};
 
     #[test]
     fn only_placeholder_titles_are_generated() {
@@ -752,5 +756,49 @@ mod tests {
         assert_eq!(preview.push(r#"回答","#), Some("回答".into()));
         assert_eq!(preview.visible, "逐步回答");
         assert_eq!(extract_json_string_prefix(&preview.raw, "citations"), None);
+    }
+
+    #[tokio::test]
+    async fn research_project_resolves_only_an_unambiguous_scope() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let first = db.create_project("first", "第一个项目", "").await.unwrap();
+        let second = db.create_project("second", "第二个项目", "").await.unwrap();
+        db.insert_paper("paper:one", "唯一归属论文").await.unwrap();
+        db.insert_paper("paper:many", "多重归属论文").await.unwrap();
+        db.add_paper_to_project("paper:one", &first).await.unwrap();
+        db.add_paper_to_project("paper:many", &first).await.unwrap();
+        db.add_paper_to_project("paper:many", &second).await.unwrap();
+
+        let scope = |scope_type: &str, scope_id: &str| ConversationScope {
+            conversation_id: "conversation".into(),
+            scope_type: scope_type.into(),
+            scope_id: Some(scope_id.into()),
+            added_at: String::new(),
+        };
+
+        assert_eq!(
+            research_project_id(&db, &[scope("project", &second)])
+                .await
+                .unwrap(),
+            Some(second)
+        );
+        assert_eq!(
+            research_project_id(&db, &[scope("paper", "paper:one")])
+                .await
+                .unwrap(),
+            Some(first)
+        );
+        assert_eq!(
+            research_project_id(&db, &[scope("paper", "paper:many")])
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            research_project_id(&db, &[scope("paper", "paper:none")])
+                .await
+                .unwrap(),
+            None
+        );
     }
 }

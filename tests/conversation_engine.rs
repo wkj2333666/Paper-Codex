@@ -502,3 +502,69 @@ async fn explicit_research_tools_reject_non_exact_project_scope() {
         .unwrap_err();
     assert!(error.to_string().contains("项目作用域"));
 }
+
+#[tokio::test]
+async fn research_tools_accept_a_paper_in_the_handlers_only_project() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = Workspace::initialize(temp.path()).await.unwrap();
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let project = db.create_project("rules", "规则", "").await.unwrap();
+    let conversation = db.create_conversation("论文范围").await.unwrap();
+    db.insert_paper("paper:one", "论文").await.unwrap();
+    db.add_paper_to_project("paper:one", &project).await.unwrap();
+    db.replace_conversation_scopes(
+        &conversation.id,
+        &[ConversationScopeInput {
+            scope_type: "paper".into(),
+            scope_id: Some("paper:one".into()),
+        }],
+    )
+    .await
+    .unwrap();
+    let message = db
+        .append_chat_message(&conversation.id, "user", "检索论文", "completed")
+        .await
+        .unwrap();
+    let research = Arc::new(
+        ResearchService::new(
+            ResearchStore::new(db),
+            vec![Arc::new(RuleProvider)],
+            Acquirer::new(1024 * 1024).unwrap(),
+            ResearchServiceConfig {
+                cache_dir: workspace.root().join(".runtime/research-cache"),
+                cache_max_bytes: 1024,
+                cache_ttl: Duration::from_secs(60),
+                max_concurrency: 1,
+            },
+        )
+        .unwrap(),
+    );
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (events, _event_rx) = mpsc::unbounded_channel();
+    let handler = ProjectResearchToolHandler::new(
+        research,
+        project,
+        conversation.id,
+        message.id,
+        ResearchTrigger::Explicit,
+        cancel_rx,
+        events,
+    );
+
+    let search = handler
+        .call(DynamicToolCall {
+            thread_id: "thread".into(),
+            turn_id: "turn".into(),
+            call_id: "search".into(),
+            tool: "research_search".into(),
+            arguments: serde_json::json!({
+                "query":"rules",
+                "reason":"scope test",
+                "limit":5
+            }),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(search[0]["works"][0]["title"], "Kolmogorov Complexity of Game Rules");
+}

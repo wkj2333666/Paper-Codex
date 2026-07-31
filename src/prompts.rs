@@ -331,4 +331,25 @@ mod tests {
         let normalized = validate_conversation_answer(answer, "问题", &[]).unwrap();
         assert_eq!(normalized.title.as_deref(), Some("研究方法"));
     }
+
+    #[test]
+    fn automatic_research_requires_search_for_an_explicit_literature_request() {
+        let prompt = conversation_question_prompt_with_research(
+            "帮我找找别的论文",
+            ResearchMode::Auto,
+            true,
+        );
+        assert!(prompt.contains("明确要求查找、搜索或推荐其他论文"));
+        assert!(prompt.contains("必须调用 research_search"));
+    }
+
+    #[test]
+    fn unmanaged_external_research_can_use_available_web_or_mcp_tools() {
+        let prompt =
+            conversation_question_prompt_with_research("帮我找找别的论文", ResearchMode::Auto, false);
+        assert!(prompt.contains("Web 或 MCP"));
+        assert!(prompt.contains("Markdown 链接"));
+        assert!(!prompt.contains("只使用当前上下文中的论文"));
+        assert!(!prompt.contains("不得声称执行了外部论文检索"));
+    }
 }
