@@ -306,4 +306,40 @@ describe("conversation store", () => {
     expect(next).toBe(seed)
     expect(next.messages["message-conversation-2"].content).toBe("新对话")
   })
+
+  it("ignores a late stream event from the conversation that was switched away", () => {
+    const seed = conversationReducer(conversationInitialState, {
+      type: "detail",
+      detail: detail("conversation-2", "当前对话"),
+    })
+
+    const next = reduceConversationEvent(
+      seed,
+      event(9, "answer-delta", { text: "旧对话迟到内容" }),
+    )
+
+    expect(next).toBe(seed)
+    expect(next.messages.a).toBeUndefined()
+  })
+
+  it("rejects a switch response whose detail belongs to another conversation", () => {
+    const seed = conversationReducer(conversationInitialState, {
+      type: "detail",
+      detail: detail("conversation-1", "原对话"),
+    })
+    const started = conversationReducer(seed, {
+      type: "switch-start",
+      requestId: 8,
+      conversationId: "conversation-2",
+    })
+    const mismatched = conversationReducer(started, {
+      type: "switch-resolved",
+      requestId: 8,
+      detail: detail("conversation-3", "错误目标"),
+      targetSelection: { kind: "project" as const, id: "project-one" },
+    })
+
+    expect(mismatched).toBe(started)
+    expect(mismatched.activeConversationId).toBe("conversation-1")
+  })
 })
