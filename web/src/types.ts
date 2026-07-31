@@ -19,6 +19,7 @@ export interface CodexModel { id:string; display_name:string; default_reasoning_
 export interface CodexCapabilities { default:CodexRunSettings; models:CodexModel[]; supports_dynamic_tools:boolean }
 export interface CodexSkill { name:string; display_name:string; description:string; path:string; scope:"user"|"repo"|"system"|"admin"|string; enabled:boolean; dependencies:string[] }
 export interface CodexSkillSelection { name:string; path:string }
+export interface CodexToolPreference { server:string; tool:string }
 export interface CodexMcpTool { name:string; title:string|null; description:string|null }
 export interface CodexMcpServer { name:string; title:string|null; description:string|null; auth_status:"unsupported"|"notLoggedIn"|"bearerToken"|"oAuth"|string; tools:CodexMcpTool[] }
 export interface CodexIntegrations { skills:CodexSkill[]; mcp_servers:CodexMcpServer[]; supports_skills:boolean; supports_mcp_status:boolean; skills_error:string|null; mcp_error:string|null }
@@ -42,6 +43,6 @@ export type ImportCandidateOutcome={state:"already_in_project"|"linked_existing"
 export interface Annotation { id:string; citation_id:string; paper_id:string; revision:string; source_message_id:string; kind:string; body:string; state:"visible"|"hidden"; availability:"available"|"revision-stale"|"paper-missing"; created_at:string; updated_at:string }
 export interface AnnotationAnchor { annotation_id:string; page:number; rect_index:number; x:number; y:number; width:number; height:number }
 export interface PaperAnnotation { annotation:Annotation; citation:MessageCitation; anchors:AnnotationAnchor[] }
-export interface ChatMessage { id:string; conversation_id:string; role:"user"|"assistant"|"system"; content:string; live_content?:string; turn_id:string|null; status:string; error:string|null; research_mode:ResearchMode; skill_name?:string|null; skill_path?:string|null; citations:MessageCitation[]; candidate_citations:CandidateCitation[]; progress_phase?:"reading"|"reasoning"|"tool"|"answering"|ResearchProgressPhase; progress_label?:string; created_at:string; updated_at:string }
+export interface ChatMessage { id:string; conversation_id:string; role:"user"|"assistant"|"system"; content:string; live_content?:string; turn_id:string|null; status:string; error:string|null; research_mode:ResearchMode; skill_name?:string|null; skill_path?:string|null; tool_preferences:CodexToolPreference[]; citations:MessageCitation[]; candidate_citations:CandidateCitation[]; progress_phase?:"reading"|"reasoning"|"tool"|"answering"|ResearchProgressPhase; progress_label?:string; created_at:string; updated_at:string }
 export interface ConversationDetail { conversation:Conversation; scopes:ConversationScope[]; messages:ChatMessage[] }
 export interface ConversationStreamEvent { id:number; type:string; conversation_id:string; message_id:string|null; payload:Record<string,unknown>; created_at:string }

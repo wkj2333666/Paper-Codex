@@ -39,9 +39,15 @@ describe("CodexComposer", () => {
         controlledResearchAvailable={false}
         researchMode="auto"
         capabilities={capabilities}
+        integrations={null}
+        integrationsLoading={false}
         settings={capabilities.default}
         selectedSkill={null}
+        selectedTools={[]}
+        onSelectSkill={() => {}}
         onClearSkill={() => {}}
+        onToggleTool={() => {}}
+        onRequestIntegrations={() => {}}
         onText={() => {}}
         onSubmit={() => {}}
         onCancel={() => {}}

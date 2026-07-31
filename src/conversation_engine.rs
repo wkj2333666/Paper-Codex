@@ -1,7 +1,7 @@
 use crate::{
     codex::{
         CodexCapabilities, CodexEvent, CodexIntegrations, CodexRunSettings, CodexRuntime,
-        CodexSkillSelection, CodexTurn,
+        CodexSkillSelection, CodexToolPreference, CodexTurn,
     },
     conversation_context::ConversationContextBuilder,
     conversations::{
@@ -261,8 +261,14 @@ impl ConversationEngine {
         question: &str,
         research_mode: ResearchMode,
     ) -> Result<ChatMessage> {
-        self.enqueue_message_with_options(conversation_id, question, research_mode, None)
-            .await
+        self.enqueue_message_with_options(
+            conversation_id,
+            question,
+            research_mode,
+            None,
+            Vec::new(),
+        )
+        .await
     }
 
     pub async fn enqueue_message_with_options(
@@ -271,6 +277,7 @@ impl ConversationEngine {
         question: &str,
         research_mode: ResearchMode,
         skill: Option<CodexSkillSelection>,
+        tool_preferences: Vec<CodexToolPreference>,
     ) -> Result<ChatMessage> {
         let question = question.trim();
         if question.is_empty() {
@@ -324,15 +331,20 @@ impl ConversationEngine {
                     .await?
             }
         };
+        let validated_tools = self
+            .codex
+            .validate_tool_preferences(self.contexts.workspace_root(), &tool_preferences)
+            .await?;
         let user = self
             .db
-            .append_chat_message_with_research_mode(
+            .append_chat_message_with_options(
                 conversation_id,
                 "user",
                 question,
                 "completed",
                 research_mode,
                 validated_skill.as_ref(),
+                &validated_tools,
             )
             .await?;
         let assistant = self
@@ -346,7 +358,8 @@ impl ConversationEngine {
             json!({
                 "role":"user",
                 "content":question,
-                "skill":validated_skill.as_ref().map(|skill| json!({"name":skill.name}))
+                "skill":validated_skill.as_ref().map(|skill| json!({"name":skill.name})),
+                "tool_preferences":validated_tools,
             }),
         )
         .await?;
@@ -530,6 +543,7 @@ impl ConversationEngine {
                     research_handler.is_some(),
                 ),
                 skill: selected_skill,
+                tool_preferences: question.tool_preferences.clone(),
                 output_schema: Some(conversation_answer_schema()),
                 settings: conversation
                     .model

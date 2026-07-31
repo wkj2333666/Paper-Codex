@@ -1,4 +1,4 @@
-use crate::codex::CodexRunSettings;
+use crate::codex::{CodexRunSettings, CodexToolPreference};
 use crate::db::Database;
 use crate::prompts::ConversationAnswer;
 use crate::research::ResearchMode;
@@ -49,6 +49,8 @@ pub struct ChatMessage {
     pub research_mode: ResearchMode,
     pub skill_name: Option<String>,
     pub skill_path: Option<String>,
+    #[sqlx(json)]
+    pub tool_preferences: Vec<CodexToolPreference>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -279,6 +281,28 @@ impl Database {
         research_mode: ResearchMode,
         skill: Option<&crate::codex::CodexSkillSelection>,
     ) -> Result<ChatMessage> {
+        self.append_chat_message_with_options(
+            conversation_id,
+            role,
+            content,
+            status,
+            research_mode,
+            skill,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn append_chat_message_with_options(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+        status: &str,
+        research_mode: ResearchMode,
+        skill: Option<&crate::codex::CodexSkillSelection>,
+        tool_preferences: &[CodexToolPreference],
+    ) -> Result<ChatMessage> {
         if !matches!(role, "user" | "assistant" | "system") {
             bail!("invalid chat message role");
         }
@@ -287,7 +311,7 @@ impl Database {
         }
         let id = Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO chat_messages(id,conversation_id,role,content,status,research_mode,skill_name,skill_path) VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO chat_messages(id,conversation_id,role,content,status,research_mode,skill_name,skill_path,tool_preferences_json) VALUES(?,?,?,?,?,?,?,?,?)",
         )
         .bind(&id)
         .bind(conversation_id)
@@ -297,9 +321,10 @@ impl Database {
         .bind(research_mode)
         .bind(skill.map(|value| value.name.as_str()))
         .bind(skill.map(|value| value.path.to_string_lossy().into_owned()))
+        .bind(serde_json::to_string(tool_preferences)?)
         .execute(self.pool())
         .await?;
-        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,created_at,updated_at FROM chat_messages WHERE id=?")
+        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,tool_preferences_json AS tool_preferences,created_at,updated_at FROM chat_messages WHERE id=?")
             .bind(id)
             .fetch_one(self.pool())
             .await?)
@@ -337,7 +362,7 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<ChatMessage>> {
-        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,created_at,updated_at FROM chat_messages WHERE conversation_id=? ORDER BY created_at,rowid LIMIT ? OFFSET ?")
+        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,tool_preferences_json AS tool_preferences,created_at,updated_at FROM chat_messages WHERE conversation_id=? ORDER BY created_at,rowid LIMIT ? OFFSET ?")
             .bind(conversation_id)
             .bind(limit.clamp(1, 500))
             .bind(offset.max(0))
@@ -346,13 +371,13 @@ impl Database {
     }
 
     pub async fn list_conversation_messages(&self) -> Result<Vec<ChatMessage>> {
-        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,created_at,updated_at FROM chat_messages ORDER BY created_at,rowid")
+        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,tool_preferences_json AS tool_preferences,created_at,updated_at FROM chat_messages ORDER BY created_at,rowid")
             .fetch_all(self.pool())
             .await?)
     }
 
     pub async fn get_chat_message(&self, id: &str) -> Result<Option<ChatMessage>> {
-        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,created_at,updated_at FROM chat_messages WHERE id=?")
+        Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,tool_preferences_json AS tool_preferences,created_at,updated_at FROM chat_messages WHERE id=?")
             .bind(id)
             .fetch_optional(self.pool())
             .await?)
@@ -392,7 +417,7 @@ impl Database {
 
     pub async fn previous_user_message(&self, assistant_id: &str) -> Result<Option<ChatMessage>> {
         Ok(sqlx::query_as(
-            r#"SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,created_at,updated_at
+            r#"SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,tool_preferences_json AS tool_preferences,created_at,updated_at
                FROM chat_messages
                WHERE role='user'
                  AND conversation_id=(SELECT conversation_id FROM chat_messages WHERE id=?1)

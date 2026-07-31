@@ -1,7 +1,17 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { FormEvent } from "react"
-import { Gauge, LoaderCircle, Search, Send, Settings2, Sparkles, Square, X } from "lucide-react"
-import type { CodexCapabilities, CodexRunSettings, CodexSkill, ResearchMode } from "./types"
+import { Gauge, LoaderCircle, Search, Send, Settings2, Sparkles, Square, Wrench, X } from "lucide-react"
+import { CodexToolPicker } from "./CodexToolPicker"
+import {
+  applyCompletion,
+  buildCodexToolCatalog,
+  completionAtCursor,
+  filterCodexToolCatalog,
+  toolPickerKeyIntent,
+  type CodexToolCatalogItem,
+  type CompletionRange,
+} from "./codex-tool-picker"
+import type { CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkill, CodexToolPreference, ResearchMode } from "./types"
 
 export type ComposerKeyIntent = "submit" | "newline" | "ignore"
 
@@ -64,9 +74,15 @@ interface CodexComposerProps {
   controlledResearchAvailable: boolean
   researchMode: ResearchMode
   capabilities: CodexCapabilities
+  integrations: CodexIntegrations | null
+  integrationsLoading: boolean
   settings: CodexRunSettings
   selectedSkill: CodexSkill | null
+  selectedTools: CodexToolPreference[]
+  onSelectSkill: (skill: CodexSkill) => void
   onClearSkill: () => void
+  onToggleTool: (preference: CodexToolPreference) => void
+  onRequestIntegrations: () => void
   onText: (value: string) => void
   onSubmit: (event: FormEvent) => void
   onCancel: () => void
@@ -83,9 +99,15 @@ export function CodexComposer({
   controlledResearchAvailable,
   researchMode,
   capabilities,
+  integrations,
+  integrationsLoading,
   settings,
   selectedSkill,
+  selectedTools,
+  onSelectSkill,
   onClearSkill,
+  onToggleTool,
+  onRequestIntegrations,
   onText,
   onSubmit,
   onCancel,
@@ -93,10 +115,81 @@ export function CodexComposer({
   onSettings,
 }: CodexComposerProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [toolPickerOpen, setToolPickerOpen] = useState(false)
+  const [toolPickerMode, setToolPickerMode] = useState<"button" | "completion">("button")
+  const [toolQuery, setToolQuery] = useState("")
+  const [toolActiveIndex, setToolActiveIndex] = useState(0)
   const settingsRef = useRef<HTMLDetailsElement | null>(null)
   const settingsSummaryRef = useRef<HTMLElement | null>(null)
+  const formRef = useRef<HTMLFormElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const completionRef = useRef<CompletionRange | null>(null)
   const selectedModel = capabilities.models.find((item) => item.id === settings.model) ?? capabilities.models[0]
   const speed = settings.service_tier === "priority" ? "快速" : "标准"
+  const toolCatalog = useMemo(() => buildCodexToolCatalog(integrations), [integrations])
+  const visibleTools = useMemo(
+    () => filterCodexToolCatalog(toolCatalog, toolQuery),
+    [toolCatalog, toolQuery],
+  )
+
+  const closeToolPicker = () => {
+    setToolPickerOpen(false)
+    completionRef.current = null
+  }
+  const requestToolCatalog = () => {
+    onRequestIntegrations()
+    setSettingsOpen(false)
+  }
+  const openToolPicker = () => {
+    requestToolCatalog()
+    completionRef.current = null
+    setToolPickerMode("button")
+    setToolQuery("")
+    setToolActiveIndex(0)
+    setToolPickerOpen((open) => !open || toolPickerMode !== "button")
+  }
+  const syncCompletion = (value: string, cursor: number) => {
+    const range = completionAtCursor(value, cursor)
+    completionRef.current = range
+    if (!range) {
+      if (toolPickerMode === "completion") setToolPickerOpen(false)
+      return
+    }
+    requestToolCatalog()
+    setToolPickerMode("completion")
+    setToolQuery(range.query)
+    setToolActiveIndex(0)
+    setToolPickerOpen(true)
+  }
+  const restoreTextarea = (cursor?: number) => {
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      if (cursor !== undefined) textareaRef.current?.setSelectionRange(cursor, cursor)
+    })
+  }
+  const chooseTool = (item: CodexToolCatalogItem) => {
+    let nextCursor: number | undefined
+    const range = completionRef.current
+    if (item.kind === "skill") {
+      onSelectSkill(item.skill)
+      if (range) {
+        const leaf = item.skill.name.split(":").at(-1) ?? item.skill.name
+        const mention = `$${leaf}${range.end === text.length ? " " : ""}`
+        const next = applyCompletion(text, range, mention)
+        onText(next.text)
+        nextCursor = next.cursor
+      }
+    } else {
+      onToggleTool(item.preference)
+      if (range) {
+        const next = applyCompletion(text, range, "")
+        onText(next.text)
+        nextCursor = next.cursor
+      }
+    }
+    closeToolPicker()
+    restoreTextarea(nextCursor)
+  }
 
   useEffect(() => {
     if (!settingsOpen) return
@@ -107,27 +200,119 @@ export function CodexComposer({
     return () => document.removeEventListener("pointerdown", closeOnOutsidePointer)
   }, [settingsOpen])
 
+  useEffect(() => {
+    if (!toolPickerOpen) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (settingsTargetIsOutside(formRef.current, event.target)) closeToolPicker()
+    }
+    document.addEventListener("pointerdown", closeOnOutsidePointer)
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer)
+  }, [toolPickerOpen])
+
+  useEffect(() => {
+    if (toolActiveIndex < visibleTools.length) return
+    setToolActiveIndex(Math.max(0, visibleTools.length - 1))
+  }, [toolActiveIndex, visibleTools.length])
+
   return (
     <form
+      ref={formRef}
       className={`conversation-composer codex-composer${researchMode === "explicit" ? " research-explicit" : ""}`}
       onSubmit={onSubmit}
+      onBlur={(event) => {
+        if (toolPickerOpen && settingsTargetIsOutside(event.currentTarget, event.relatedTarget))
+          closeToolPicker()
+      }}
     >
-      {selectedSkill && (
-        <div className="codex-selected-skill" aria-label={`已选择 Skill：${selectedSkill.display_name}`}>
-          <Sparkles />
-          <span>
-            <small>Skill</small>
-            <strong>{selectedSkill.display_name}</strong>
-          </span>
-          <button type="button" aria-label="取消选择 Skill" onClick={onClearSkill}>
-            <X />
-          </button>
+      <CodexToolPicker
+        open={toolPickerOpen}
+        items={toolCatalog}
+        query={toolQuery}
+        activeIndex={toolActiveIndex}
+        loading={integrationsLoading}
+        onQuery={(query) => {
+          completionRef.current = null
+          setToolPickerMode("button")
+          setToolQuery(query)
+          setToolActiveIndex(0)
+        }}
+        onActiveIndex={setToolActiveIndex}
+        onSelect={chooseTool}
+        onClose={() => {
+          closeToolPicker()
+          restoreTextarea()
+        }}
+      />
+      {(selectedSkill || selectedTools.length > 0) && (
+        <div className="codex-tool-chips" aria-label="本轮选择的 Skills 和工具">
+          {selectedSkill && (
+            <div className="codex-selected-skill" aria-label={`已选择 Skill：${selectedSkill.display_name}`}>
+              <Sparkles />
+              <span>
+                <small>Skill</small>
+                <strong>{selectedSkill.display_name}</strong>
+              </span>
+              <button type="button" aria-label="取消选择 Skill" onClick={onClearSkill}>
+                <X />
+              </button>
+            </div>
+          )}
+          {selectedTools.map((preference) => (
+            <div
+              className="codex-selected-tool"
+              key={`${preference.server}:${preference.tool}`}
+              aria-label={`已选择工具：${preference.server}/${preference.tool}`}
+            >
+              <Wrench />
+              <span>
+                <small>{preference.server}</small>
+                <strong>{preference.tool}</strong>
+              </span>
+              <button
+                type="button"
+                aria-label={`取消选择工具 ${preference.server}/${preference.tool}`}
+                onClick={() => onToggleTool(preference)}
+              >
+                <X />
+              </button>
+            </div>
+          ))}
         </div>
       )}
       <textarea
+        ref={textareaRef}
         value={text}
-        onChange={(event) => onText(event.target.value)}
+        onChange={(event) => {
+          onText(event.target.value)
+          syncCompletion(event.target.value, event.target.selectionStart)
+        }}
+        onClick={(event) => syncCompletion(event.currentTarget.value, event.currentTarget.selectionStart)}
+        onKeyUp={(event) => {
+          if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+            syncCompletion(event.currentTarget.value, event.currentTarget.selectionStart)
+        }}
         onKeyDown={(event) => {
+          if (toolPickerOpen) {
+            const pickerIntent = toolPickerKeyIntent(event.key, event.shiftKey)
+            if (pickerIntent !== "ignore") {
+              event.preventDefault()
+              if (pickerIntent === "close") {
+                closeToolPicker()
+                return
+              }
+              if (!visibleTools.length) return
+              if (pickerIntent === "next") {
+                setToolActiveIndex((toolActiveIndex + 1) % visibleTools.length)
+                return
+              }
+              if (pickerIntent === "previous") {
+                setToolActiveIndex((toolActiveIndex - 1 + visibleTools.length) % visibleTools.length)
+                return
+              }
+              chooseTool(visibleTools[toolActiveIndex] ?? visibleTools[0])
+              return
+            }
+          }
           const intent = composerKeyIntent({
             key: event.key,
             shiftKey: event.shiftKey,
@@ -143,11 +328,24 @@ export function CodexComposer({
       />
       <div className="codex-composer-context">
         <div className="codex-context-controls">
+          <button
+            type="button"
+            className="codex-tool-toggle"
+            aria-label="选择 Skills 和工具"
+            aria-expanded={toolPickerOpen}
+            onClick={openToolPicker}
+          >
+            <Wrench />
+            <span>工具</span>
+          </button>
           <details
             ref={settingsRef}
             className="codex-settings-popover"
             open={settingsOpen}
-            onToggle={(event) => setSettingsOpen(event.currentTarget.open)}
+            onToggle={(event) => {
+              setSettingsOpen(event.currentTarget.open)
+              if (event.currentTarget.open) closeToolPicker()
+            }}
             onBlur={(event) => {
               if (settingsTargetIsOutside(event.currentTarget, event.relatedTarget)) setSettingsOpen(false)
             }}

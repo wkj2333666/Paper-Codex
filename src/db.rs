@@ -311,6 +311,13 @@ impl Database {
                 .await?;
             }
         }
+        if !has_column(pool, "chat_messages", "tool_preferences_json").await? {
+            sqlx::query(
+                "ALTER TABLE chat_messages ADD COLUMN tool_preferences_json TEXT NOT NULL DEFAULT '[]'",
+            )
+            .execute(pool)
+            .await?;
+        }
         for (column, definition) in [
             ("model", "TEXT"),
             ("reasoning_effort", "TEXT"),
@@ -351,6 +358,7 @@ impl Database {
                 status TEXT NOT NULL DEFAULT 'completed', error TEXT,
                 research_mode TEXT NOT NULL DEFAULT 'auto',
                 skill_name TEXT, skill_path TEXT,
+                tool_preferences_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )"#,
