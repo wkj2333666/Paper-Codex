@@ -8,6 +8,7 @@ WorkingDirectory=%h/projects/paper-codex
 EnvironmentFile=%h/projects/paper-codex/.runtime/paper-codex.env
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=TMPDIR=%h/projects/paper-codex/.runtime/tmp
+ExecStartPre=/usr/bin/install -d -m 0700 %h/projects/paper-codex/.runtime/codex-home
 ExecStartPre=/usr/bin/install -d -m 0700 %h/projects/paper-codex/.runtime/tmp
 ExecStartPre=/usr/bin/install -d -m 0700 %h/projects/paper-codex/.runtime/tmp/codex-bwrap-synthetic-mount-targets-%U
 ExecStart=%h/projects/paper-codex/.runtime/current/paper-codex
@@ -19,7 +20,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/projects/paper-codex/.runtime %h/projects/paper-codex/paper-workspace %h/.codex
+ReadWritePaths=%h/projects/paper-codex/.runtime %h/projects/paper-codex/paper-workspace
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 LockPersonality=true
 RestrictSUIDSGID=true
