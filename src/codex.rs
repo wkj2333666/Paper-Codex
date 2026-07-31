@@ -1180,6 +1180,26 @@ mod integration_tests {
     use super::*;
     use serde_json::json;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn app_server_prepares_private_codex_home() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let codex_home = root.path().join("codex-home");
+        let command = CodexCommand::app_server(
+            PathBuf::from("codex"),
+            Some(codex_home.clone()),
+            None,
+        );
+
+        command.prepare_runtime_tmp().await.unwrap();
+
+        let metadata = std::fs::metadata(codex_home).unwrap();
+        assert!(metadata.is_dir());
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+    }
+
     #[test]
     fn parses_skills_without_exposing_dependency_configuration() {
         let response = json!({

@@ -106,3 +106,44 @@ impl Config {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn codex_home_defaults_inside_project_runtime() {
+        let root = Path::new("/srv/paper-codex");
+        assert_eq!(
+            resolve_project_path(root, None, ".runtime/codex-home"),
+            root.join(".runtime/codex-home")
+        );
+    }
+
+    #[test]
+    fn codex_home_resolves_relative_override_inside_project() {
+        let root = Path::new("/srv/paper-codex");
+        assert_eq!(
+            resolve_project_path(
+                root,
+                Some(PathBuf::from("private/codex")),
+                ".runtime/codex-home",
+            ),
+            root.join("private/codex")
+        );
+    }
+
+    #[test]
+    fn codex_home_preserves_absolute_override() {
+        let root = Path::new("/srv/paper-codex");
+        assert_eq!(
+            resolve_project_path(
+                root,
+                Some(PathBuf::from("/var/lib/paper-codex/codex-home")),
+                ".runtime/codex-home",
+            ),
+            PathBuf::from("/var/lib/paper-codex/codex-home")
+        );
+    }
+}
