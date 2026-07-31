@@ -58,6 +58,7 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
   const scopeKey=conversationStorageKey(selection)
   const effectiveCapabilities=capabilities??fallbackCapabilities
   const projectResearchScope=Boolean(selection.kind==="project"?selection.id:selection.projectId)
+  const projectContextId=selection.kind==="project"?selection.id:selection.projectId
   const controlledResearchAvailable=projectResearchScope&&effectiveCapabilities.supports_dynamic_tools
   const effectiveSettings=normalizeCodexSettings(effectiveCapabilities,state.activeSettings??draftSettings)
   const rememberConversation=(id:string)=>{try{localStorage.setItem(scopeKey,id)}catch{}}
@@ -83,7 +84,7 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
   useEffect(()=>{if(providedCapabilities){setCapabilities(providedCapabilities);return}void api.codexCapabilities().then(setCapabilities).catch(value=>setError(value instanceof Error?value.message:"加载 Codex 能力失败"))},[providedCapabilities])
   useEffect(()=>{if(state.activeSettings)setDraftSettings(state.activeSettings)},[state.activeSettings])
   useEffect(()=>setResearchMode("auto"),[selection.kind,selection.id])
-  useEffect(()=>{setSelectedSkill(null);setIntegrations(null);if(integrationsOpen)void loadIntegrations(true)},[selection.kind,selection.id])
+  useEffect(()=>{setSelectedSkill(null);setIntegrations(null);if(integrationsOpen)void loadIntegrations(true)},[projectContextId])
   useEffect(()=>{if(state.activeConversationId)void loadDetail(state.activeConversationId)},[state.activeConversationId,loadDetail])
   useEffect(()=>{if(state.activeConversationId&&state.scopes.length&&!scopesMatchSelection(state.scopes,selection)){if(preserveConversationForCitation.current){preserveConversationForCitation.current=false;return}dispatch({type:"active",id:null})}},[selection.kind,selection.id,state.activeConversationId,state.scopes])
   useEffect(()=>onCitations(latestAnswerCitations(state.messages,state.messageOrder)),[onCitations,state.messages,state.messageOrder])

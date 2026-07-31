@@ -225,7 +225,24 @@ impl ProjectResearchToolHandler {
             .filter(|scope| scope.scope_type == "project")
             .filter_map(|scope| scope.scope_id.as_deref())
             .collect::<Vec<_>>();
-        let allowed = projects.len() == 1 && projects[0] == self.project_id;
+        let allowed = if projects.len() == 1 {
+            projects[0] == self.project_id
+        } else if projects.is_empty() && scopes.len() == 1 && scopes[0].scope_type == "paper" {
+            match scopes[0].scope_id.as_deref() {
+                Some(paper_id) => {
+                    let memberships = self
+                        .research
+                        .store()
+                        .database()
+                        .paper_project_ids(paper_id)
+                        .await?;
+                    memberships.len() == 1 && memberships[0] == self.project_id
+                }
+                None => false,
+            }
+        } else {
+            false
+        };
         if !allowed {
             bail!("研究工具只允许用于唯一且匹配的项目作用域");
         }

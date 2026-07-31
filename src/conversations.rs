@@ -222,13 +222,8 @@ impl Database {
             }
             unique.insert((scope.scope_type.clone(), scope.scope_id.clone()));
         }
-        let project_count = unique.iter().filter(|(kind, _)| kind == "project").count();
-        let paper_count = unique.iter().filter(|(kind, _)| kind == "paper").count();
-        if project_count != 1 {
-            bail!("conversation context must contain exactly one project");
-        }
-        if paper_count > 1 || unique.iter().any(|(kind, _)| kind == "global") {
-            bail!("conversation context may contain at most one open paper and no global scope");
+        if unique.iter().any(|(kind, _)| kind == "global") && unique.len() > 1 {
+            bail!("global scope cannot be combined with paper or project scopes");
         }
 
         let mut tx = self.pool().begin().await?;
@@ -664,12 +659,40 @@ impl Database {
     }
 }
 
+fn valid_message_status(status: &str) -> bool {
+    matches!(
+        status,
+        "queued" | "running" | "streaming" | "completed" | "failed" | "cancelled" | "interrupted"
+    )
+}
+
+fn event_from_row(
+    (id, conversation_id, message_id, event_type, payload_json, created_at): (
+        i64,
+        String,
+        Option<String>,
+        String,
+        String,
+        String,
+    ),
+) -> Result<ConversationEvent> {
+    Ok(ConversationEvent {
+        id,
+        conversation_id,
+        message_id,
+        event_type,
+        payload: serde_json::from_str(&payload_json)
+            .context("decode conversation event payload")?,
+        created_at,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ConversationScopeInput, Database};
 
     #[tokio::test]
-    async fn conversation_context_requires_one_project_and_accepts_one_open_paper() {
+    async fn conversation_context_accepts_one_project_and_one_open_paper() {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         let conversation = db.create_conversation("研究会话").await.unwrap();
         let project = db.create_project("systems", "推理系统", "").await.unwrap();
@@ -699,45 +722,5 @@ mod tests {
             .iter()
             .any(|scope| scope.scope_type == "paper"
                 && scope.scope_id.as_deref() == Some("paper:one")));
-
-        let error = db
-            .replace_conversation_scopes(
-                &conversation.id,
-                &[ConversationScopeInput {
-                    scope_type: "paper".into(),
-                    scope_id: Some("paper:one".into()),
-                }],
-            )
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("exactly one project"));
     }
-}
-
-fn valid_message_status(status: &str) -> bool {
-    matches!(
-        status,
-        "queued" | "running" | "streaming" | "completed" | "failed" | "cancelled" | "interrupted"
-    )
-}
-
-fn event_from_row(
-    (id, conversation_id, message_id, event_type, payload_json, created_at): (
-        i64,
-        String,
-        Option<String>,
-        String,
-        String,
-        String,
-    ),
-) -> Result<ConversationEvent> {
-    Ok(ConversationEvent {
-        id,
-        conversation_id,
-        message_id,
-        event_type,
-        payload: serde_json::from_str(&payload_json)
-            .context("decode conversation event payload")?,
-        created_at,
-    })
 }

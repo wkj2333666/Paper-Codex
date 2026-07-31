@@ -14,10 +14,10 @@ export function withProjectContext(
   if (selection.kind === "project" && selection.id) {
     return { ...selection, projectId: selection.id }
   }
+  const known=(projectId:string|undefined)=>projectId&&dashboard.projects.some(project=>project.id===projectId)?projectId:undefined
   const projectId =
-    selection.projectId ??
-    currentProjectId ??
+    known(selection.projectId) ??
+    known(currentProjectId) ??
     dashboard.projects[0]?.id
   return projectId ? { ...selection, projectId } : selection
 }
-
