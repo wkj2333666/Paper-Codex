@@ -332,7 +332,7 @@ pub fn conversation_question_prompt_with_research(
 - 凡写入 candidate_citations 的候选，必须先在本轮 research_inspect；仅由 Web 或 MCP 找到且未经本轮 research_inspect 查证的资料，只能在 answer_markdown 中写成普通 Markdown 链接，candidate_citations 必须为空。
 - 候选证据必须标明 metadata、abstract 或 fulltext；不得为外部候选捏造页码。
 - 只有真正相关的结果才调用 research_save，不要把每个检索命中都保存成候选。
-- 使用外部候选证据时写入 candidate_citations；正式论文证据继续写入 citations。
+- 使用本轮 research_inspect 查证的外部候选证据时写入 candidate_citations；正式论文证据继续写入 citations。
 "#
         )
     } else {
