@@ -58,8 +58,8 @@ for raw in sys.stdin:
             "description": "paper analysis primary", "hidden": False, "isDefault": False,
             "defaultReasoningEffort": "high",
             "supportedReasoningEfforts": [
-                {"effort": "medium", "description": "balanced"},
-                {"effort": "high", "description": "deep"}
+                {"reasoningEffort": "medium", "description": "balanced"},
+                {"reasoningEffort": "high", "description": "deep"}
             ],
             "serviceTiers": [{"id": "priority", "name": "Fast", "description": "fast"}]
         }, {
@@ -67,8 +67,8 @@ for raw in sys.stdin:
             "description": "paper analysis fallback", "hidden": False, "isDefault": False,
             "defaultReasoningEffort": "medium",
             "supportedReasoningEfforts": [
-                {"effort": "low", "description": "fast"},
-                {"effort": "medium", "description": "balanced"}
+                {"reasoningEffort": "low", "description": "fast"},
+                {"reasoningEffort": "medium", "description": "balanced"}
             ],
             "serviceTiers": []
         }, {
@@ -76,8 +76,8 @@ for raw in sys.stdin:
             "description": "paper analysis fallback", "hidden": False, "isDefault": False,
             "defaultReasoningEffort": "low",
             "supportedReasoningEfforts": [
-                {"effort": "low", "description": "fast"},
-                {"effort": "medium", "description": "balanced"}
+                {"reasoningEffort": "low", "description": "fast"},
+                {"reasoningEffort": "medium", "description": "balanced"}
             ],
             "serviceTiers": []
         }]}})
