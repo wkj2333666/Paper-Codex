@@ -1187,11 +1187,8 @@ mod integration_tests {
 
         let root = tempfile::tempdir().unwrap();
         let codex_home = root.path().join("codex-home");
-        let command = CodexCommand::app_server(
-            PathBuf::from("codex"),
-            Some(codex_home.clone()),
-            None,
-        );
+        let command =
+            CodexCommand::app_server(PathBuf::from("codex"), Some(codex_home.clone()), None);
 
         command.prepare_runtime_tmp().await.unwrap();
 
