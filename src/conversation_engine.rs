@@ -296,8 +296,8 @@ impl ConversationEngine {
             bail!("conversation has no context scope");
         }
         if research_mode == ResearchMode::Explicit {
-            if exact_project_id(&scopes).is_none() {
-                bail!("显式文献检索需要唯一的项目作用域");
+            if research_project_id(&self.db, &scopes).await?.is_none() {
+                bail!("显式文献检索需要唯一的项目作用域，或唯一归属于一个项目的论文作用域");
             }
             if self.research.is_none() {
                 bail!("项目文献检索服务不可用");
@@ -481,7 +481,7 @@ impl ConversationEngine {
         )
         .await?;
         let (turn_event_tx, mut turn_event_rx) = mpsc::unbounded_channel();
-        let project_id = exact_project_id(&scopes);
+        let project_id = research_project_id(&self.db, &scopes).await?;
         let research_handler = match (project_id.as_deref(), self.research.as_ref()) {
             (Some(project_id), Some(research))
                 if self.codex.capabilities().supports_dynamic_tools =>
@@ -716,6 +716,23 @@ fn exact_project_id(scopes: &[ConversationScope]) -> Option<String> {
     (scopes.len() == 1 && scopes[0].scope_type == "project")
         .then(|| scopes[0].scope_id.clone())
         .flatten()
+}
+
+async fn research_project_id(
+    db: &Database,
+    scopes: &[ConversationScope],
+) -> Result<Option<String>> {
+    if let Some(project_id) = exact_project_id(scopes) {
+        return Ok(Some(project_id));
+    }
+    if scopes.len() != 1 || scopes[0].scope_type != "paper" {
+        return Ok(None);
+    }
+    let Some(paper_id) = scopes[0].scope_id.as_deref() else {
+        return Ok(None);
+    };
+    let project_ids = db.paper_project_ids(paper_id).await?;
+    Ok((project_ids.len() == 1).then(|| project_ids[0].clone()))
 }
 
 fn research_progress_label(kind: &str) -> Option<&'static str> {

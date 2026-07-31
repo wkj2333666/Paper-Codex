@@ -213,18 +213,35 @@ impl ProjectResearchToolHandler {
         self.evidence.lock().await.clone()
     }
 
-    async fn require_exact_project_scope(&self) -> Result<()> {
+    async fn require_research_scope(&self) -> Result<()> {
         let scopes = self
             .research
             .store()
             .database()
             .conversation_scopes(&self.conversation_id)
             .await?;
-        if scopes.len() != 1
-            || scopes[0].scope_type != "project"
-            || scopes[0].scope_id.as_deref() != Some(self.project_id.as_str())
-        {
-            bail!("研究工具只允许用于唯一且匹配的项目作用域");
+        let allowed = if scopes.len() != 1 {
+            false
+        } else if scopes[0].scope_type == "project" {
+            scopes[0].scope_id.as_deref() == Some(self.project_id.as_str())
+        } else if scopes[0].scope_type == "paper" {
+            match scopes[0].scope_id.as_deref() {
+                Some(paper_id) => {
+                    let projects = self
+                        .research
+                        .store()
+                        .database()
+                        .paper_project_ids(paper_id)
+                        .await?;
+                    projects.len() == 1 && projects[0] == self.project_id
+                }
+                None => false,
+            }
+        } else {
+            false
+        };
+        if !allowed {
+            bail!("研究工具只允许用于唯一且匹配的项目作用域，或唯一归属于该项目的论文作用域");
         }
         Ok(())
     }
@@ -288,7 +305,7 @@ struct ResearchSaveArguments {
 #[async_trait]
 impl DynamicToolHandler for ProjectResearchToolHandler {
     async fn call(&self, call: DynamicToolCall) -> Result<Vec<Value>> {
-        self.require_exact_project_scope().await?;
+        self.require_research_scope().await?;
         match call.tool.as_str() {
             "research_search" => {
                 let arguments: ResearchSearchArguments =
