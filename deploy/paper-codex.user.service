@@ -8,6 +8,7 @@ WorkingDirectory=%h/projects/paper-codex
 EnvironmentFile=%h/projects/paper-codex/.runtime/paper-codex.env
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=TMPDIR=%h/projects/paper-codex/.runtime/tmp
+ExecStartPre=+/usr/bin/install -d -m 0700 /tmp/codex-ssh-bridge-%U
 ExecStartPre=/usr/bin/install -d -m 0700 %h/projects/paper-codex/.runtime/codex-home
 ExecStartPre=/usr/bin/install -d -m 0700 %h/projects/paper-codex/.runtime/tmp
 ExecStartPre=/usr/bin/install -d -m 0700 %h/projects/paper-codex/.runtime/tmp/codex-bwrap-synthetic-mount-targets-%U
@@ -17,10 +18,10 @@ RestartSec=3
 TimeoutStopSec=30
 KillMode=mixed
 NoNewPrivileges=true
-PrivateTmp=true
+PrivateTmp=false
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/projects/paper-codex/.runtime %h/projects/paper-codex/paper-workspace
+ReadWritePaths=%h/projects/paper-codex/.runtime %h/projects/paper-codex/paper-workspace /tmp/codex-ssh-bridge-%U
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 LockPersonality=true
 RestrictSUIDSGID=true
