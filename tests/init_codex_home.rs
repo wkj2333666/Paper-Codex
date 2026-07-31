@@ -101,9 +101,9 @@ fn user_service_blocks_main_codex_home() {
         "ExecStartPre=/usr/bin/install -d -m 0700 %h/projects/paper-codex/.runtime/codex-home"
     ));
     assert!(service.contains("InaccessiblePaths=-%h/.codex"));
-    assert!(!service.lines().any(|line| {
-        line.starts_with("ReadWritePaths=") && line.contains("%h/.codex")
-    }));
+    assert!(!service
+        .lines()
+        .any(|line| { line.starts_with("ReadWritePaths=") && line.contains("%h/.codex") }));
 }
 
 #[test]
@@ -120,7 +120,6 @@ fn environment_examples_select_project_local_codex_home() {
 #[test]
 fn release_archive_includes_codex_home_initializer() {
     let workflow = repository_file(".github/workflows/release.yml");
-    assert!(workflow.contains(
-        "install -m 0755 scripts/init-codex-home.sh \"${package}/init-codex-home.sh\""
-    ));
+    assert!(workflow
+        .contains("install -m 0755 scripts/init-codex-home.sh \"${package}/init-codex-home.sh\""));
 }
