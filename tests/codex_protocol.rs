@@ -165,6 +165,31 @@ async fn lists_safe_skill_and_mcp_capabilities_from_app_server() {
 }
 
 #[tokio::test]
+async fn archives_unarchives_and_deletes_persisted_threads() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let mut events = runtime.subscribe();
+
+    runtime.archive_thread("thread-fake").await.unwrap();
+    runtime.unarchive_thread("thread-fake").await.unwrap();
+    runtime.delete_thread("thread-fake").await.unwrap();
+
+    let mut methods = Vec::new();
+    while methods.len() < 3 {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if event.kind == "thread-lifecycle" {
+            methods.push(event.payload["method"].as_str().unwrap().to_owned());
+        }
+    }
+    assert_eq!(
+        methods,
+        vec!["thread/archive", "thread/unarchive", "thread/delete"]
+    );
+}
+
+#[tokio::test]
 async fn sends_selected_skill_as_a_structured_turn_input() {
     let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
     let root = tempfile::tempdir().unwrap();

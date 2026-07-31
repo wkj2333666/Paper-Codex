@@ -220,7 +220,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/conversations/{id}",
-            get(get_conversation).patch(update_conversation),
+            get(get_conversation)
+                .patch(update_conversation)
+                .delete(delete_conversation),
         )
         .route(
             "/api/conversations/{id}/scopes",
@@ -1203,13 +1205,42 @@ async fn update_conversation(
             .await?
             .ok_or_else(|| ApiError::not_found("对话不存在"))?;
     }
-    let conversation = state
+    state
         .db
-        .update_conversation(&id, request.title.as_deref(), request.archived)
+        .update_conversation(&id, request.title.as_deref(), None)
         .await
         .map_err(conversation_api_error)?
         .ok_or_else(|| ApiError::not_found("对话不存在"))?;
+    let conversation = match request.archived {
+        Some(true) => engine
+            .archive_conversation(&id)
+            .await
+            .map_err(conversation_api_error)?,
+        Some(false) => engine
+            .restore_conversation(&id)
+            .await
+            .map_err(conversation_api_error)?,
+        None => state
+            .db
+            .get_conversation(&id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("对话不存在"))?,
+    };
     Ok(Json(json!(conversation)))
+}
+
+async fn delete_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
+        .delete_conversation(&id)
+        .await
+        .map_err(conversation_api_error)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -1336,8 +1367,8 @@ fn conversation_api_error(error: anyhow::Error) -> ApiError {
     let message = error.to_string();
     if message.contains("does not exist") || message.contains("不存在") {
         ApiError::not_found("对话或上下文不存在")
-    } else if message.contains("busy") {
-        ApiError::conflict("当前对话正在生成回答")
+    } else if message.contains("busy") || message.contains("must be archived") {
+        ApiError::conflict("当前对话状态不允许此操作")
     } else if message.contains("selected Skill") {
         ApiError::conflict("Skill 已变化，请刷新能力列表")
     } else if message.contains("selected MCP tool") {

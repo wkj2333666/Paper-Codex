@@ -313,7 +313,18 @@ async fn conversation_api_supports_crud_scopes_and_messages() {
     assert_eq!(legacy.status(), StatusCode::ACCEPTED);
     assert!(json_response(legacy).await["conversation_id"].is_string());
 
+    assert_eq!(
+        db.get_conversation(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .thread_id
+            .as_deref(),
+        Some("thread-fake")
+    );
+
     let archived = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("PATCH")
@@ -327,6 +338,91 @@ async fn conversation_api_supports_crud_scopes_and_messages() {
         .unwrap();
     assert_eq!(archived.status(), StatusCode::OK);
     assert!(json_response(archived).await["archived_at"].is_string());
+
+    let archived_list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/conversations?archived=true")
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(archived_list.status(), StatusCode::OK);
+    assert_eq!(json_response(archived_list).await[0]["id"], id);
+
+    let restored = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/conversations/{id}"))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(r#"{"archived":false}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(restored.status(), StatusCode::OK);
+    assert!(json_response(restored).await["archived_at"].is_null());
+
+    let active_delete = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/conversations/{id}"))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(active_delete.status(), StatusCode::CONFLICT);
+
+    let archived_again = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/conversations/{id}"))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(r#"{"archived":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(archived_again.status(), StatusCode::OK);
+
+    let deleted = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/conversations/{id}"))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+
+    let missing = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/conversations/{id}"))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

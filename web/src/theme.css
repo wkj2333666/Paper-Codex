@@ -38,7 +38,7 @@
 
 [data-theme="dark"] .nav-row.active,
 [data-theme="dark"] .project-row.active,
-[data-theme="dark"] .conversation-list button.active {
+[data-theme="dark"] .conversation-row.active {
   background: var(--green-soft);
   color: var(--green);
 }

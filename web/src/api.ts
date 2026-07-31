@@ -58,6 +58,7 @@ export const api = {
   createConversation:(title:string,scopes:ConversationScope[],settings?:CodexRunSettings)=>request<Conversation>("/api/conversations",{method:"POST",body:JSON.stringify({title,scopes,...(settings?{settings}:{})})}),
   conversation:(id:string)=>request<ConversationDetail>(`/api/conversations/${encodeURIComponent(id)}`),
   updateConversation:(id:string,value:{title?:string;archived?:boolean;settings?:CodexRunSettings})=>request<Conversation>(`/api/conversations/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(value)}),
+  deleteConversation:(id:string)=>request<void>(`/api/conversations/${encodeURIComponent(id)}`,{method:"DELETE"}),
   replaceConversationScopes:(id:string,scopes:ConversationScope[])=>request<ConversationScope[]>(`/api/conversations/${encodeURIComponent(id)}/scopes`,{method:"PUT",body:JSON.stringify({scopes})}),
   sendConversationMessage:(id:string,content:string,researchMode:ResearchMode="auto",skill?:CodexSkillSelection|null,toolPreferences:CodexToolPreference[]=[])=>request<{message_id:string;status:string}>(`/api/conversations/${encodeURIComponent(id)}/messages`,{method:"POST",body:JSON.stringify({content,research_mode:researchMode,...(skill?{skill}:{}),...(toolPreferences.length?{tool_preferences:toolPreferences}:{})})}),
   cancelConversation:(id:string)=>request<void>(`/api/conversations/${encodeURIComponent(id)}/cancel`,{method:"POST"}),

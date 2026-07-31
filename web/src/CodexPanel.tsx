@@ -3,13 +3,14 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react"
 import { Activity, Archive, Blocks, Bot, History, MessageSquarePlus, Pencil, Sparkles, X } from "lucide-react"
 import { ApiError, api, streamConversationEvents } from "./api"
 import { CodexComposer, normalizeCodexSettings } from "./CodexComposer"
+import { ConversationHistory, type ConversationHistoryView } from "./ConversationHistory"
 import { CodexIntegrationsDrawer } from "./CodexIntegrationsDrawer"
 import { CodexMessage } from "./CodexMessage"
 import { conversationInitialState, conversationReducer } from "./conversation-store"
 import { selectionsEqual, selectionForScopes, shouldClearConversationForSelection, type CodexSelection } from "./conversation-scope"
 import { latestAnswerCitations } from "./citation-overlay"
 import { PanelCollapseButton } from "./PanelControls"
-import type { Activity as TaskActivity, CandidateCitation, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkill, CodexToolPreference, ConversationScope, MessageCitation, ResearchMode } from "./types"
+import type { Activity as TaskActivity, CandidateCitation, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkill, CodexToolPreference, Conversation, ConversationScope, MessageCitation, ResearchMode } from "./types"
 
 export { ConversationProgress } from "./CodexMessage"
 
@@ -55,6 +56,9 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
   const [integrationsLoading,setIntegrationsLoading]=useState(false)
   const [selectedSkill,setSelectedSkill]=useState<CodexSkill|null>(null)
   const [selectedTools,setSelectedTools]=useState<CodexToolPreference[]>([])
+  const [historyView,setHistoryView]=useState<ConversationHistoryView>("active")
+  const [archivedConversations,setArchivedConversations]=useState<Conversation[]>([])
+  const [historyBusyId,setHistoryBusyId]=useState<string|null>(null)
   const preserveConversationForCitation=useRef(false)
   const historySwitchRequest=useRef(0)
   const scopeKey=conversationStorageKey(selection)
@@ -72,6 +76,7 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
     if(scopeKeyRef.current!==requestedScopeKey)return
     try { const stored=localStorage.getItem(requestedScopeKey);if(stored&&items.some(item=>item.id===stored))dispatch({type:"active",id:stored}) } catch {}
   },[scopeKey])
+  const refreshArchived=useCallback(async()=>setArchivedConversations(await api.conversations(true)),[])
   const loadIntegrations=useCallback(async(refresh=false)=>{
     setIntegrationsLoading(true)
     try{
@@ -129,7 +134,10 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
   const toggleTool=(preference:CodexToolPreference)=>setSelectedTools(current=>current.some(item=>item.server===preference.server&&item.tool===preference.tool)?current.filter(item=>item.server!==preference.server||item.tool!==preference.tool):[...current,preference])
   const openIntegrations=()=>{dispatch({type:"drawer",open:false});setIntegrationsOpen(true);if(!integrations)void loadIntegrations(false)}
   const rename=async()=>{if(!state.activeConversationId)return;const current=state.conversations.find(item=>item.id===state.activeConversationId);const title=window.prompt("对话名称",current?.title??"")?.trim();if(title){await api.updateConversation(state.activeConversationId,{title});await refreshList()}}
-  const archive=async()=>{if(!state.activeConversationId)return;await api.updateConversation(state.activeConversationId,{archived:true});try{localStorage.removeItem(scopeKey)}catch{};dispatch({type:"active",id:null});await refreshList()}
+  const selectHistoryView=(view:ConversationHistoryView)=>{setHistoryView(view);if(view==="archived")void refreshArchived().catch(value=>setError(value instanceof Error?value.message:"加载已归档对话失败"))}
+  const archiveConversation=async(id:string,keepDrawer:boolean)=>{setHistoryBusyId(id);setError("");try{await api.updateConversation(id,{archived:true});if(id===state.activeConversationId){try{localStorage.removeItem(scopeKey)}catch{};dispatch({type:"active",id:null})}await Promise.all([refreshList(),refreshArchived()]);if(keepDrawer)dispatch({type:"drawer",open:true,view:"history"})}catch(value){setError(value instanceof Error?value.message:"归档对话失败")}finally{setHistoryBusyId(null)}}
+  const restoreConversation=async(id:string)=>{setHistoryBusyId(id);setError("");try{await api.updateConversation(id,{archived:false});await Promise.all([refreshList(),refreshArchived()])}catch(value){setError(value instanceof Error?value.message:"恢复对话失败")}finally{setHistoryBusyId(null)}}
+  const deleteConversation=async(id:string)=>{const item=archivedConversations.find(conversation=>conversation.id===id);if(!item||!window.confirm(`永久删除“${item.title}”？此操作无法撤销。`))return;setHistoryBusyId(id);setError("");try{await api.deleteConversation(id);await refreshArchived()}catch(value){setError(value instanceof Error?value.message:"删除对话失败")}finally{setHistoryBusyId(null)}}
   const updateSettings=async(next:CodexRunSettings)=>{setDraftSettings(next);if(!state.activeConversationId)return;try{await api.updateConversation(state.activeConversationId,{settings:next});await loadDetail(state.activeConversationId);await refreshList()}catch(value){setError(value instanceof Error?value.message:"保存运行设置失败")}}
   const active=state.conversations.find(item=>item.id===state.activeConversationId)
   const answerRunning=state.messageOrder.some(id=>{const message=state.messages[id];return message.role==="assistant"&&["queued","running","streaming"].includes(message.status)})
@@ -158,10 +166,10 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
       <div className="codex-actions">
         <button className="codex-new-task" aria-label="新建对话" title="新建对话" onClick={()=>void create()}><MessageSquarePlus/><span>新对话</span></button>
         <button aria-label="Codex 能力" title="Codex 能力" onClick={openIntegrations}><Blocks/></button>
-        <button aria-label="对话历史" title="对话历史" onClick={()=>{setIntegrationsOpen(false);dispatch({type:"drawer",open:true,view:"history"})}}><History/></button>
+        <button aria-label="对话历史" title="对话历史" onClick={()=>{setIntegrationsOpen(false);setHistoryView("active");dispatch({type:"drawer",open:true,view:"history"});void refreshArchived().catch(value=>setError(value instanceof Error?value.message:"加载已归档对话失败"))}}><History/></button>
         <button aria-label="活动记录" title="活动记录" onClick={()=>{setIntegrationsOpen(false);dispatch({type:"drawer",open:true,view:"activity"})}}><Activity/></button>
         <button aria-label="重命名对话" title="重命名对话" onClick={()=>void rename()}><Pencil/></button>
-        <button aria-label="归档对话" title="归档对话" onClick={()=>void archive()}><Archive/></button>
+        <button aria-label="归档对话" title="归档对话" disabled={!state.activeConversationId||answerRunning} onClick={()=>{if(state.activeConversationId)void archiveConversation(state.activeConversationId,false)}}><Archive/></button>
         <PanelCollapseButton label="Codex" direction="right" onCollapse={onCollapse}/>
       </div>
     </header>
@@ -169,6 +177,6 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
     {error&&<p className="codex-error">{error}</p>}
     <CodexComposer text={text} placeholder={placeholder} busy={busy} answerRunning={answerRunning&&Boolean(state.activeConversationId)} projectResearchScope={projectResearchScope} controlledResearchAvailable={controlledResearchAvailable} researchMode={researchMode} capabilities={effectiveCapabilities} integrations={integrations} integrationsLoading={integrationsLoading} settings={effectiveSettings} selectedSkill={selectedSkill} selectedTools={selectedTools} onSelectSkill={setSelectedSkill} onClearSkill={()=>setSelectedSkill(null)} onToggleTool={toggleTool} onRequestIntegrations={requestIntegrations} onText={setText} onSubmit={submit} onCancel={()=>{if(state.activeConversationId)void api.cancelConversation(state.activeConversationId)}} onResearchMode={setResearchMode} onSettings={next=>void updateSettings(next)}/>
     <CodexIntegrationsDrawer open={integrationsOpen} integrations={integrations} loading={integrationsLoading} selectedSkill={selectedSkill} onClose={()=>setIntegrationsOpen(false)} onRefresh={()=>void loadIntegrations(true)} onSelectSkill={setSelectedSkill}/>
-    {state.drawerOpen&&<div className="conversation-drawer"><header><strong>{state.drawerView==="history"?"对话历史":"活动记录"}</strong><button aria-label="关闭抽屉" onClick={()=>dispatch({type:"drawer",open:false})}><X/></button></header>{state.drawerView==="history"?<div className="conversation-list">{state.conversations.map(item=><button className={item.id===state.activeConversationId?"active":""} key={item.id} onClick={()=>void openConversation(item.id)}><strong>{item.title}</strong><span>{new Date(item.updated_at).toLocaleString()}</span></button>)}</div>:<div className="activity-feed">{activities.map(item=><div className="activity-item" key={item.id}><Activity/><div><p>{item.label}</p><span>{item.createdAt?new Date(item.createdAt).toLocaleTimeString():"刚刚"}</span></div></div>)}</div>}</div>}
+    {state.drawerOpen&&<div className="conversation-drawer"><header><strong>{state.drawerView==="history"?"对话历史":"活动记录"}</strong><button aria-label="关闭抽屉" onClick={()=>dispatch({type:"drawer",open:false})}><X/></button></header>{state.drawerView==="history"?<ConversationHistory view={historyView} active={state.conversations} archived={archivedConversations} activeConversationId={state.activeConversationId} busyId={historyBusyId} onView={selectHistoryView} onOpen={id=>void openConversation(id)} onArchive={id=>void archiveConversation(id,true)} onRestore={id=>void restoreConversation(id)} onDelete={id=>void deleteConversation(id)}/>:<div className="activity-feed">{activities.map(item=><div className="activity-item" key={item.id}><Activity/><div><p>{item.label}</p><span>{item.createdAt?new Date(item.createdAt).toLocaleTimeString():"刚刚"}</span></div></div>)}</div>}</div>}
   </aside>
 }
