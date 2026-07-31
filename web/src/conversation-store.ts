@@ -41,6 +41,7 @@ const researchProgressPhases:ResearchProgressPhase[]=["research-planning","resea
 function progressPhase(value:unknown):ChatMessage["progress_phase"]{return value==="reading"||value==="reasoning"||value==="tool"||value==="answering"||researchProgressPhases.includes(value as ResearchProgressPhase)?value as ChatMessage["progress_phase"]:undefined}
 
 export function reduceConversationEvent(state:ConversationState,event:ConversationStreamEvent):ConversationState{
+  if(state.activeConversationId&&event.conversation_id!==state.activeConversationId)return state
   if(event.id<=state.lastEventId)return state
   const messageId=event.message_id
   if(!messageId)return {...state,lastEventId:event.id}
@@ -77,7 +78,7 @@ export function conversationReducer(state:ConversationState,action:ConversationA
   }
   if(action.type==="switch-start")return {...state,pendingSwitch:{requestId:action.requestId,conversationId:action.conversationId,targetSelection:null,status:"loading"}}
   if(action.type==="switch-resolved"){
-    if(state.pendingSwitch?.requestId!==action.requestId)return state
+    if(state.pendingSwitch?.requestId!==action.requestId||state.pendingSwitch.conversationId!==action.detail.conversation.id)return state
     const installed=installDetail(state,action.detail)
     return {...installed,drawerOpen:false,pendingSwitch:{requestId:action.requestId,conversationId:action.detail.conversation.id,targetSelection:action.targetSelection,status:"resolved"}}
   }

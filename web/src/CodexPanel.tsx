@@ -115,13 +115,10 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
       const detail=await api.conversation(id)
       if(historySwitchRequest.current!==requestId)return
       const target=selectionForScopes(detail.scopes)
+      if(!target)throw new Error("该对话缺少有效的项目或论文作用域")
       dispatch({type:"switch-resolved",requestId,detail,targetSelection:target})
-      if(target){
-        try{localStorage.setItem(conversationStorageKey(target),id)}catch{}
-        onSelect(target)
-      }else{
-        dispatch({type:"switch-complete",requestId})
-      }
+      try{localStorage.setItem(conversationStorageKey(target),id)}catch{}
+      onSelect(target)
     }catch(value){
       if(historySwitchRequest.current!==requestId)return
       dispatch({type:"switch-failed",requestId})
