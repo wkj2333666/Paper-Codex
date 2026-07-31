@@ -248,6 +248,7 @@ impl ConversationEngine {
     }
 
     pub async fn archive_conversation(&self, conversation_id: &str) -> Result<Conversation> {
+        let _guard = self.enqueue_lock.lock().await;
         let conversation = self
             .db
             .get_conversation(conversation_id)
@@ -288,6 +289,7 @@ impl ConversationEngine {
     }
 
     pub async fn restore_conversation(&self, conversation_id: &str) -> Result<Conversation> {
+        let _guard = self.enqueue_lock.lock().await;
         let conversation = self
             .db
             .get_conversation(conversation_id)
@@ -328,6 +330,7 @@ impl ConversationEngine {
     }
 
     pub async fn delete_conversation(&self, conversation_id: &str) -> Result<()> {
+        let _guard = self.enqueue_lock.lock().await;
         let conversation = self
             .db
             .get_conversation(conversation_id)

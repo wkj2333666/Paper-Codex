@@ -185,6 +185,40 @@ async fn rejects_a_second_turn_while_the_first_is_pending() {
 }
 
 #[tokio::test]
+async fn rejects_lifecycle_changes_while_a_turn_is_pending() {
+    let (engine, _temp) = harness().await;
+    let conversation = engine
+        .create_conversation(
+            "待处理",
+            vec![ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            }],
+        )
+        .await
+        .unwrap();
+    engine
+        .db
+        .append_chat_message(&conversation.id, "assistant", "", "queued")
+        .await
+        .unwrap();
+
+    let error = engine
+        .archive_conversation(&conversation.id)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("busy"));
+    assert!(engine
+        .db
+        .get_conversation(&conversation.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .archived_at
+        .is_none());
+}
+
+#[tokio::test]
 async fn publishes_semantic_progress_and_final_answer() {
     let (engine, _temp) = harness().await;
     let conversation = engine
