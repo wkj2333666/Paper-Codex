@@ -186,7 +186,11 @@ async fn conversation_delete_requires_archive_and_cascades_messages() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("archived"));
-    assert!(db.get_conversation(&conversation.id).await.unwrap().is_some());
+    assert!(db
+        .get_conversation(&conversation.id)
+        .await
+        .unwrap()
+        .is_some());
 
     db.update_conversation(&conversation.id, None, Some(true))
         .await
@@ -195,7 +199,11 @@ async fn conversation_delete_requires_archive_and_cascades_messages() {
         .await
         .unwrap();
 
-    assert!(db.get_conversation(&conversation.id).await.unwrap().is_none());
+    assert!(db
+        .get_conversation(&conversation.id)
+        .await
+        .unwrap()
+        .is_none());
     assert!(db.get_chat_message(&message.id).await.unwrap().is_none());
 }
 
