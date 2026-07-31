@@ -80,6 +80,7 @@ async fn conversation_test_app() -> (axum::Router, Database) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.keep();
     let workspace = Workspace::initialize(&root).await.unwrap();
+    db.create_project("default", "默认项目", "").await.unwrap();
     db.insert_paper("paper:one", "第一篇论文").await.unwrap();
     sqlx::query("UPDATE papers SET canonical_sha256='revision-one' WHERE id='paper:one'")
         .execute(db.pool())

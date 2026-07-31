@@ -1,6 +1,6 @@
 import type { ConversationScope } from "./types"
 
-export interface CodexSelection { kind: "workbench"|"inbox"|"paper"|"project"|"search"|"graph"|"trash"; id?: string }
+export interface CodexSelection { kind: "workbench"|"inbox"|"paper"|"project"|"search"|"graph"|"trash"; id?: string; projectId?: string }
 
 function scopeKey(scope: ConversationScope): string | null {
   if (scope.scope_type === "global") return "global"
@@ -8,22 +8,29 @@ function scopeKey(scope: ConversationScope): string | null {
   return `${scope.scope_type}:${scope.scope_id}`
 }
 
-function selectionKey(selection: CodexSelection): string {
-  if (selection.kind === "paper" && selection.id) return `paper:${selection.id}`
-  if (selection.kind === "project" && selection.id) return `project:${selection.id}`
-  return "global"
+function projectIdForSelection(selection: CodexSelection): string | undefined {
+  if (selection.kind === "project" && selection.id) return selection.id
+  return selection.projectId
 }
 
 export function selectionForScopes(scopes: ConversationScope[]): CodexSelection | null {
-  for (const scope of scopes) {
-    if (scope.scope_type === "paper" && scope.scope_id) return { kind: "paper", id: scope.scope_id }
-    if (scope.scope_type === "project" && scope.scope_id) return { kind: "project", id: scope.scope_id }
-    if (scope.scope_type === "global") return { kind: "workbench" }
-  }
+  const projectId=scopes.find(scope=>scope.scope_type==="project")?.scope_id??undefined
+  const paperId=scopes.find(scope=>scope.scope_type==="paper")?.scope_id??undefined
+  if(paperId)return {kind:"paper",id:paperId,...(projectId?{projectId}:{})}
+  if(projectId)return {kind:"project",id:projectId,projectId}
+  if(scopes.some(scope=>scope.scope_type==="global"))return {kind:"workbench"}
   return null
 }
 
 export function scopesMatchSelection(scopes: ConversationScope[], selection: CodexSelection): boolean {
-  const current = selectionKey(selection)
-  return scopes.some(scope => scopeKey(scope) === current)
+  const projectId=projectIdForSelection(selection)
+  const openPaperId=selection.kind==="paper"?selection.id:undefined
+  const savedProjectIds=scopes.filter(scope=>scope.scope_type==="project"&&scope.scope_id).map(scope=>scope.scope_id)
+  const savedPaperIds=scopes.filter(scope=>scope.scope_type==="paper"&&scope.scope_id).map(scope=>scope.scope_id)
+  if(projectId){
+    return savedProjectIds.length===1&&savedProjectIds[0]===projectId&&
+      (openPaperId?savedPaperIds.length===1&&savedPaperIds[0]===openPaperId:savedPaperIds.length===0)
+  }
+  const current=selection.kind==="paper"&&selection.id?`paper:${selection.id}`:"global"
+  return scopes.some(scope=>scopeKey(scope)===current)
 }

@@ -114,15 +114,15 @@ describe("CodexPanel", () => {
     expect(live).toContain("正在核对实验设置")
   })
 
-  it("offers controlled literature search only in project scope", () => {
+  it("offers controlled literature search throughout a project-scoped conversation", () => {
     const project=renderToStaticMarkup(
       <CodexPanel selection={{kind:"project",id:"project-a"}} scopeLabel="规则复杂度" activities={[]} drawerOpen={false} onCollapse={()=>{}} onCitation={()=>{}} onCandidate={()=>{}} onCitations={()=>{}} onSelect={()=>{}} codexCapabilities={capabilities}/>,
     )
     const paper=renderToStaticMarkup(
-      <CodexPanel selection={{kind:"paper",id:"paper-a"}} scopeLabel="论文" activities={[]} drawerOpen={false} onCollapse={()=>{}} onCitation={()=>{}} onCandidate={()=>{}} onCitations={()=>{}} onSelect={()=>{}} codexCapabilities={capabilities}/>,
+      <CodexPanel selection={{kind:"paper",id:"paper-a",projectId:"project-a"}} scopeLabel="规则复杂度 · 论文" activities={[]} drawerOpen={false} onCollapse={()=>{}} onCitation={()=>{}} onCandidate={()=>{}} onCitations={()=>{}} onSelect={()=>{}} codexCapabilities={capabilities}/>,
     )
     expect(project).toContain('aria-label="检索论文"')
-    expect(paper).not.toContain('aria-label="检索论文"')
+    expect(paper).toContain('aria-label="检索论文"')
   })
 
   it("explains when controlled search is unavailable", () => {

@@ -223,6 +223,7 @@ impl ConversationEngine {
         scopes: Vec<ConversationScopeInput>,
         settings: Option<CodexRunSettings>,
     ) -> Result<Conversation> {
+        let scopes = normalize_new_conversation_scopes(&self.db, &scopes).await?;
         let settings = settings
             .map(|settings| self.validate_settings(&settings))
             .transpose()?
@@ -317,7 +318,11 @@ impl ConversationEngine {
                     path: skill.path,
                 })
             }
-            None => None,
+            None => {
+                self.codex
+                    .infer_skill(self.contexts.workspace_root(), question)
+                    .await?
+            }
         };
         let user = self
             .db
@@ -713,9 +718,62 @@ impl ConversationEngine {
 }
 
 fn exact_project_id(scopes: &[ConversationScope]) -> Option<String> {
-    (scopes.len() == 1 && scopes[0].scope_type == "project")
-        .then(|| scopes[0].scope_id.clone())
-        .flatten()
+    let projects = scopes
+        .iter()
+        .filter(|scope| scope.scope_type == "project")
+        .filter_map(|scope| scope.scope_id.as_ref())
+        .collect::<Vec<_>>();
+    (projects.len() == 1).then(|| (*projects[0]).clone())
+}
+
+async fn normalize_new_conversation_scopes(
+    db: &Database,
+    scopes: &[ConversationScopeInput],
+) -> Result<Vec<ConversationScopeInput>> {
+    let projects = scopes
+        .iter()
+        .filter(|scope| scope.scope_type == "project")
+        .filter_map(|scope| scope.scope_id.clone())
+        .collect::<Vec<_>>();
+    let papers = scopes
+        .iter()
+        .filter(|scope| scope.scope_type == "paper")
+        .filter_map(|scope| scope.scope_id.clone())
+        .collect::<Vec<_>>();
+    if projects.len() > 1
+        || papers.len() > 1
+        || scopes.iter().any(|scope| scope.scope_type == "global")
+    {
+        bail!("conversation context requires exactly one project and at most one open paper");
+    }
+    let project_id = if let Some(project_id) = projects.first() {
+        project_id.clone()
+    } else if let Some(paper_id) = papers.first() {
+        let direct = db.paper_project_ids(paper_id).await?;
+        if direct.len() == 1 {
+            direct[0].clone()
+        } else {
+            let available = db.list_projects().await?;
+            if available.len() == 1 {
+                available[0].id.clone()
+            } else {
+                bail!("conversation context requires an explicit project");
+            }
+        }
+    } else {
+        bail!("conversation context requires an explicit project");
+    };
+    let mut normalized = vec![ConversationScopeInput {
+        scope_type: "project".into(),
+        scope_id: Some(project_id),
+    }];
+    if let Some(paper_id) = papers.first() {
+        normalized.push(ConversationScopeInput {
+            scope_type: "paper".into(),
+            scope_id: Some(paper_id.clone()),
+        });
+    }
+    Ok(normalized)
 }
 
 async fn research_project_id(
@@ -725,7 +783,10 @@ async fn research_project_id(
     if let Some(project_id) = exact_project_id(scopes) {
         return Ok(Some(project_id));
     }
-    if scopes.len() != 1 || scopes[0].scope_type != "paper" {
+    if scopes.iter().any(|scope| scope.scope_type == "project")
+        || scopes.len() != 1
+        || scopes[0].scope_type != "paper"
+    {
         return Ok(None);
     }
     let Some(paper_id) = scopes[0].scope_id.as_deref() else {
@@ -751,10 +812,13 @@ fn research_progress_label(kind: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_json_string_prefix, research_project_id, should_generate_conversation_title,
-        AnswerPreview,
+        extract_json_string_prefix, normalize_new_conversation_scopes, research_project_id,
+        should_generate_conversation_title, AnswerPreview,
     };
-    use crate::{conversations::ConversationScope, db::Database};
+    use crate::{
+        conversations::{ConversationScope, ConversationScopeInput},
+        db::Database,
+    };
 
     #[test]
     fn only_placeholder_titles_are_generated() {
@@ -796,9 +860,12 @@ mod tests {
         };
 
         assert_eq!(
-            research_project_id(&db, &[scope("project", &second)])
-                .await
-                .unwrap(),
+            research_project_id(
+                &db,
+                &[scope("project", &second), scope("paper", "paper:many")]
+            )
+            .await
+            .unwrap(),
             Some(second)
         );
         assert_eq!(
@@ -818,6 +885,35 @@ mod tests {
                 .await
                 .unwrap(),
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn new_conversation_normalizes_legacy_paper_scope_to_project_and_open_paper() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let project = db.create_project("systems", "推理系统", "").await.unwrap();
+        db.insert_paper("paper:one", "论文").await.unwrap();
+        let normalized = normalize_new_conversation_scopes(
+            &db,
+            &[ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            }],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            normalized,
+            vec![
+                ConversationScopeInput {
+                    scope_type: "project".into(),
+                    scope_id: Some(project),
+                },
+                ConversationScopeInput {
+                    scope_type: "paper".into(),
+                    scope_id: Some("paper:one".into()),
+                }
+            ]
         );
     }
 }

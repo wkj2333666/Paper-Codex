@@ -530,6 +530,9 @@ impl CodexRuntime {
         } else {
             Session::spawn(&self.command).await?.0
         };
+        if force_reload {
+            let _ = session.request("config/mcpServer/reload", json!({})).await;
+        }
 
         let skills_response = session
             .request(
@@ -634,6 +637,39 @@ impl CodexRuntime {
                 skill.enabled && skill.name == selection.name && skill.path == selection.path
             })
             .context("selected Skill is unavailable or changed")
+    }
+
+    pub async fn infer_skill(
+        &self,
+        cwd: &Path,
+        prompt: &str,
+    ) -> Result<Option<CodexSkillSelection>> {
+        let Some(request) = automatic_skill_request(prompt) else {
+            return Ok(None);
+        };
+        let skills = self.integrations(cwd, false).await?.skills;
+        let selected = match request {
+            AutomaticSkillRequest::Named(name) => skills.into_iter().find(|skill| {
+                skill.enabled
+                    && (skill.name == name
+                        || skill
+                            .name
+                            .rsplit(':')
+                            .next()
+                            .is_some_and(|leaf| leaf == name))
+            }),
+            AutomaticSkillRequest::RemoteSsh => skills.into_iter().find(|skill| {
+                skill.enabled
+                    && skill
+                        .dependencies
+                        .iter()
+                        .any(|dependency| dependency == "mcp:ssh-bridge")
+            }),
+        };
+        Ok(selected.map(|skill| CodexSkillSelection {
+            name: skill.name,
+            path: skill.path,
+        }))
     }
 
     pub async fn run_turn(
@@ -1036,7 +1072,18 @@ fn parse_mcp_status_response(response: &Value) -> Result<Vec<CodexMcpServer>> {
 }
 
 fn turn_input(prompt: &str, skill: Option<&CodexSkillSelection>) -> Value {
-    let mut input = vec![json!({"type":"text","text":prompt})];
+    let text = skill
+        .map(|skill| {
+            let name = skill.name.rsplit(':').next().unwrap_or(&skill.name);
+            let marker = format!("${name}");
+            if prompt.split_whitespace().any(|word| word == marker) {
+                prompt.to_owned()
+            } else {
+                format!("{marker}\n\n{prompt}")
+            }
+        })
+        .unwrap_or_else(|| prompt.to_owned());
+    let mut input = vec![json!({"type":"text","text":text})];
     if let Some(skill) = skill {
         input.push(json!({
             "type":"skill",
@@ -1045,6 +1092,33 @@ fn turn_input(prompt: &str, skill: Option<&CodexSkillSelection>) -> Value {
         }));
     }
     Value::Array(input)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AutomaticSkillRequest {
+    Named(String),
+    RemoteSsh,
+}
+
+fn automatic_skill_request(prompt: &str) -> Option<AutomaticSkillRequest> {
+    if let Some(name) = prompt
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix('$'))
+        .map(|name| {
+            name.trim_matches(|character: char| {
+                !character.is_ascii_alphanumeric() && !matches!(character, '-' | '_' | ':')
+            })
+        })
+        .filter(|name| !name.is_empty())
+    {
+        return Some(AutomaticSkillRequest::Named(name.to_owned()));
+    }
+    let lower = prompt.to_ascii_lowercase();
+    let remote_path = prompt
+        .split_whitespace()
+        .any(|word| word.contains(":~/") || word.contains(":/home/"));
+    (remote_path || lower.contains(" ssh ") || lower.starts_with("ssh "))
+        .then_some(AutomaticSkillRequest::RemoteSsh)
 }
 
 #[cfg(test)]
@@ -1177,7 +1251,7 @@ mod integration_tests {
         assert_eq!(
             input,
             json!([
-                {"type": "text", "text": "分析实验设计"},
+                {"type": "text", "text": "$paper-research\n\n分析实验设计"},
                 {
                     "type": "skill",
                     "name": "paper-research",
@@ -1185,5 +1259,18 @@ mod integration_tests {
                 }
             ])
         );
+    }
+
+    #[test]
+    fn detects_explicit_and_remote_ssh_skill_requests() {
+        assert_eq!(
+            automatic_skill_request("$paper-research 帮我比较论文"),
+            Some(AutomaticSkillRequest::Named("paper-research".into()))
+        );
+        assert_eq!(
+            automatic_skill_request("看看 nkai:~/qwen-infra 能否采用这个方法"),
+            Some(AutomaticSkillRequest::RemoteSsh)
+        );
+        assert_eq!(automatic_skill_request("帮我找找别的论文"), None);
     }
 }

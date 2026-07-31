@@ -6,16 +6,21 @@ const scope = (scope_type: ConversationScope["scope_type"], scope_id: string | n
 
 describe("conversation scope", () => {
   it("maps saved scopes back to workspace navigation", () => {
+    expect(selectionForScopes([
+      scope("project", "project-one"),
+      scope("paper", "paper:one"),
+    ])).toEqual({ kind: "paper", id: "paper:one", projectId: "project-one" })
     expect(selectionForScopes([scope("paper", "paper:one")])).toEqual({ kind: "paper", id: "paper:one" })
-    expect(selectionForScopes([scope("project", "project-one")])).toEqual({ kind: "project", id: "project-one" })
+    expect(selectionForScopes([scope("project", "project-one")])).toEqual({ kind: "project", id: "project-one", projectId: "project-one" })
     expect(selectionForScopes([scope("global", null)])).toEqual({ kind: "workbench" })
     expect(selectionForScopes([scope("paper", null)])).toBeNull()
   })
 
   it("detects when ordinary page navigation leaves the active conversation scope", () => {
-    const paper = [scope("paper", "paper:one")]
-    expect(scopesMatchSelection(paper, { kind: "paper", id: "paper:one" })).toBe(true)
-    expect(scopesMatchSelection(paper, { kind: "paper", id: "paper:two" })).toBe(false)
+    const paper = [scope("project", "project-one"), scope("paper", "paper:one")]
+    expect(scopesMatchSelection(paper, { kind: "paper", id: "paper:one", projectId: "project-one" })).toBe(true)
+    expect(scopesMatchSelection(paper, { kind: "paper", id: "paper:two", projectId: "project-one" })).toBe(false)
+    expect(scopesMatchSelection(paper, { kind: "paper", id: "paper:one", projectId: "project-two" })).toBe(false)
     expect(scopesMatchSelection(paper, { kind: "project", id: "project-one" })).toBe(false)
     expect(scopesMatchSelection([scope("global", null)], { kind: "workbench" })).toBe(true)
     expect(scopesMatchSelection([], { kind: "workbench" })).toBe(false)
