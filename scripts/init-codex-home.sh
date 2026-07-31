@@ -8,6 +8,17 @@ usage() {
   echo "usage: $0 [--target PATH] [--import-from CODEX_HOME]"
 }
 
+config_uses_file_credentials() {
+  awk '
+    BEGIN { top_level = 1; isolated = 0 }
+    /^[[:space:]]*\[/ { top_level = 0 }
+    top_level && /^[[:space:]]*cli_auth_credentials_store[[:space:]]*=/ {
+      isolated = ($0 ~ /^[[:space:]]*cli_auth_credentials_store[[:space:]]*=[[:space:]]*"file"[[:space:]]*(#.*)?$/)
+    }
+    END { exit(isolated ? 0 : 1) }
+  ' "$1"
+}
+
 while (($#)); do
   case "$1" in
     --target)
@@ -55,6 +66,11 @@ if [[ ! -e "$target/config.toml" ]]; then
   chmod 0600 "$temporary"
   mv "$temporary" "$target/config.toml"
   trap - EXIT
+fi
+
+if ! config_uses_file_credentials "$target/config.toml"; then
+  echo "existing config.toml must set cli_auth_credentials_store to file" >&2
+  exit 1
 fi
 
 if [[ -n "$source_home" && -d "$source_home/skills" ]]; then
