@@ -659,6 +659,54 @@ impl Database {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{ConversationScopeInput, Database};
+
+    #[tokio::test]
+    async fn conversation_context_requires_one_project_and_accepts_one_open_paper() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let conversation = db.create_conversation("研究会话").await.unwrap();
+        let project = db.create_project("systems", "推理系统", "").await.unwrap();
+        db.insert_paper("paper:one", "论文一").await.unwrap();
+        db.replace_conversation_scopes(
+            &conversation.id,
+            &[
+                ConversationScopeInput {
+                    scope_type: "project".into(),
+                    scope_id: Some(project.clone()),
+                },
+                ConversationScopeInput {
+                    scope_type: "paper".into(),
+                    scope_id: Some("paper:one".into()),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+        let scopes = db.conversation_scopes(&conversation.id).await.unwrap();
+        assert_eq!(scopes.len(), 2);
+        assert!(scopes
+            .iter()
+            .any(|scope| scope.scope_type == "project" && scope.scope_id.as_deref() == Some(&project)));
+        assert!(scopes
+            .iter()
+            .any(|scope| scope.scope_type == "paper" && scope.scope_id.as_deref() == Some("paper:one")));
+
+        let error = db
+            .replace_conversation_scopes(
+                &conversation.id,
+                &[ConversationScopeInput {
+                    scope_type: "paper".into(),
+                    scope_id: Some("paper:one".into()),
+                }],
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("exactly one project"));
+    }
+}
+
 fn valid_message_status(status: &str) -> bool {
     matches!(
         status,

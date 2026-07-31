@@ -796,7 +796,10 @@ mod tests {
         };
 
         assert_eq!(
-            research_project_id(&db, &[scope("project", &second)])
+            research_project_id(
+                &db,
+                &[scope("project", &second), scope("paper", "paper:many")]
+            )
                 .await
                 .unwrap(),
             Some(second)
@@ -820,4 +823,5 @@ mod tests {
             None
         );
     }
+
 }

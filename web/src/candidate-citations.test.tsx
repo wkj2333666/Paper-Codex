@@ -16,10 +16,28 @@ describe("candidate citations",()=>{
       explanation:"直接支持规则描述长度的讨论",
     }
     const open=vi.fn()
-    const html=renderToStaticMarkup(<CandidateCitationList projectId="project-a" citations={[citation]} onCandidate={open}/>)
+    const html=renderToStaticMarkup(<CandidateCitationList citations={[citation]} onCandidate={open}/>)
     expect(html).toContain('aria-label="候选论文：Rule Complexity"')
     expect(html).toContain("已核验摘要")
     expect(html).toContain("直接支持规则描述长度的讨论")
     expect(html).not.toContain("第 0 页")
+  })
+
+  it("uses the persisted project even while a paper is open",()=>{
+    const citation:CandidateCitation={
+      id:"candidate-2",
+      project_id:"project-from-conversation",
+      work_id:"work-2",
+      title:"Prefix Sharing",
+      source_url:"https://example.test/prefix",
+      evidence_level:"metadata",
+      quote:"Shared prefixes reduce repeated work.",
+      explanation:"属于会话的项目候选文献",
+    }
+    const open=vi.fn()
+    const element=CandidateCitationList({citations:[citation],onCandidate:open})
+    const button=(element.props.children as React.ReactElement[])[0]
+    button.props.onClick()
+    expect(open).toHaveBeenCalledWith("project-from-conversation","work-2")
   })
 })
