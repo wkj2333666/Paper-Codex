@@ -7,6 +7,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::Path,
 };
+use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ConversationAnswer {
@@ -118,6 +119,7 @@ pub fn validate_conversation_answer_with_candidates(
     {
         bail!("conversation title is too long");
     }
+    demote_uninspected_candidate_citations(&mut answer, candidate_sources);
     let allowed = sources
         .iter()
         .map(|source| {
@@ -198,6 +200,51 @@ pub fn validate_conversation_answer_with_candidates(
     }
     answer.answer_markdown = clean_control_characters(&answer.answer_markdown);
     Ok(answer)
+}
+
+fn demote_uninspected_candidate_citations(
+    answer: &mut ConversationAnswer,
+    candidate_sources: &HashMap<String, CandidateSource>,
+) {
+    let mut inspected = Vec::with_capacity(answer.candidate_citations.len());
+    for citation in answer.candidate_citations.drain(..) {
+        if candidate_sources.contains_key(&citation.work_id) {
+            inspected.push(citation);
+            continue;
+        }
+        let id = citation.id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        let title = clean_control_characters(&citation.title);
+        let title = title.trim();
+        let title = if title.is_empty() {
+            "外部来源"
+        } else {
+            title
+        };
+        let label = escape_markdown_link_text(title);
+        let replacement = external_http_url(&citation.source_url)
+            .map(|url| format!("[{label}]({url})"))
+            .unwrap_or(label);
+        answer.answer_markdown = answer
+            .answer_markdown
+            .replace(&format!("[{id}]"), &replacement);
+    }
+    answer.candidate_citations = inspected;
+}
+
+fn external_http_url(value: &str) -> Option<String> {
+    let value = clean_control_characters(value);
+    let url = Url::parse(value.trim()).ok()?;
+    matches!(url.scheme(), "http" | "https").then(|| url.to_string())
+}
+
+fn escape_markdown_link_text(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
 }
 
 fn strictify_schema(value: &mut Value) {
@@ -282,6 +329,7 @@ pub fn conversation_question_prompt_with_research(
             r#"
 - 当前对话允许使用项目研究工具 research_search、research_inspect 和 research_save。{mode_instruction}
 - 本地正式论文问题仍优先读取当前目录文件；外部候选论文必须先检索，再按需查证。
+- 凡写入 candidate_citations 的候选，必须先在本轮 research_inspect；仅由 Web 或 MCP 找到且未经本轮 research_inspect 查证的资料，只能在 answer_markdown 中写成普通 Markdown 链接，candidate_citations 必须为空。
 - 候选证据必须标明 metadata、abstract 或 fulltext；不得为外部候选捏造页码。
 - 只有真正相关的结果才调用 research_save，不要把每个检索命中都保存成候选。
 - 使用外部候选证据时写入 candidate_citations；正式论文证据继续写入 citations。
