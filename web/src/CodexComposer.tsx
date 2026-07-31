@@ -1,6 +1,33 @@
+import { useEffect, useRef, useState } from "react"
 import type { FormEvent } from "react"
 import { Gauge, LoaderCircle, Search, Send, Settings2, Sparkles, Square, X } from "lucide-react"
 import type { CodexCapabilities, CodexRunSettings, CodexSkill, ResearchMode } from "./types"
+
+export type ComposerKeyIntent = "submit" | "newline" | "ignore"
+
+export function composerKeyIntent({
+  key,
+  shiftKey,
+  isComposing,
+  canSubmit,
+}: {
+  key: string
+  shiftKey: boolean
+  isComposing: boolean
+  canSubmit: boolean
+}): ComposerKeyIntent {
+  if (key !== "Enter") return "ignore"
+  if (shiftKey) return "newline"
+  if (isComposing || !canSubmit) return "ignore"
+  return "submit"
+}
+
+export function settingsTargetIsOutside(
+  container: { contains: (target: Node | null) => boolean } | null,
+  target: EventTarget | null,
+): boolean {
+  return !container || !target || !container.contains(target as Node)
+}
 
 export function normalizeCodexSettings(
   capabilities: CodexCapabilities,
@@ -65,8 +92,21 @@ export function CodexComposer({
   onResearchMode,
   onSettings,
 }: CodexComposerProps) {
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsRef = useRef<HTMLDetailsElement | null>(null)
+  const settingsSummaryRef = useRef<HTMLElement | null>(null)
   const selectedModel = capabilities.models.find((item) => item.id === settings.model) ?? capabilities.models[0]
   const speed = settings.service_tier === "priority" ? "快速" : "标准"
+
+  useEffect(() => {
+    if (!settingsOpen) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (settingsTargetIsOutside(settingsRef.current, event.target)) setSettingsOpen(false)
+    }
+    document.addEventListener("pointerdown", closeOnOutsidePointer)
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer)
+  }, [settingsOpen])
+
   return (
     <form
       className={`conversation-composer codex-composer${researchMode === "explicit" ? " research-explicit" : ""}`}
@@ -84,11 +124,41 @@ export function CodexComposer({
           </button>
         </div>
       )}
-      <textarea value={text} onChange={(event) => onText(event.target.value)} placeholder={placeholder} />
+      <textarea
+        value={text}
+        onChange={(event) => onText(event.target.value)}
+        onKeyDown={(event) => {
+          const intent = composerKeyIntent({
+            key: event.key,
+            shiftKey: event.shiftKey,
+            isComposing: event.nativeEvent.isComposing,
+            canSubmit: !busy && !answerRunning && Boolean(text.trim()),
+          })
+          if (intent === "submit") {
+            event.preventDefault()
+            event.currentTarget.form?.requestSubmit()
+          }
+        }}
+        placeholder={placeholder}
+      />
       <div className="codex-composer-context">
         <div className="codex-context-controls">
-          <details className="codex-settings-popover">
-            <summary aria-label="Codex 运行设置" title="Codex 运行设置">
+          <details
+            ref={settingsRef}
+            className="codex-settings-popover"
+            open={settingsOpen}
+            onToggle={(event) => setSettingsOpen(event.currentTarget.open)}
+            onBlur={(event) => {
+              if (settingsTargetIsOutside(event.currentTarget, event.relatedTarget)) setSettingsOpen(false)
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return
+              event.preventDefault()
+              setSettingsOpen(false)
+              settingsSummaryRef.current?.focus()
+            }}
+          >
+            <summary ref={settingsSummaryRef} aria-label="Codex 运行设置" title="Codex 运行设置">
               <Settings2 />
               <span>{selectedModel?.display_name ?? settings.model}</span>
             </summary>

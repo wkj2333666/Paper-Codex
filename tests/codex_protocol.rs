@@ -127,6 +127,28 @@ async fn advertises_model_effort_and_speed_capabilities() {
 }
 
 #[tokio::test]
+async fn accepts_current_reasoning_effort_fields_without_dropping_models() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let capabilities = runtime.capabilities();
+
+    assert_eq!(
+        capabilities
+            .models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["gpt-test", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+    );
+    let sol = capabilities
+        .models
+        .iter()
+        .find(|model| model.id == "gpt-5.6-sol")
+        .unwrap();
+    assert_eq!(sol.supported_reasoning_efforts, vec!["medium", "high"]);
+    assert!(sol.supports_fast);
+}
+
+#[tokio::test]
 async fn lists_safe_skill_and_mcp_capabilities_from_app_server() {
     let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
     let root = tempfile::tempdir().unwrap();

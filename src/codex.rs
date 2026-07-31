@@ -104,7 +104,12 @@ impl CodexCapabilities {
                 .map(|values| {
                     values
                         .iter()
-                        .filter_map(|value| value.get("effort").and_then(Value::as_str))
+                        .filter_map(|value| {
+                            value
+                                .get("reasoningEffort")
+                                .or_else(|| value.get("effort"))
+                                .and_then(Value::as_str)
+                        })
                         .map(str::to_owned)
                         .collect::<Vec<_>>()
                 })
