@@ -1177,7 +1177,7 @@ mod integration_tests {
         assert_eq!(
             input,
             json!([
-                {"type": "text", "text": "分析实验设计"},
+                {"type": "text", "text": "$paper-research\n\n分析实验设计"},
                 {
                     "type": "skill",
                     "name": "paper-research",
