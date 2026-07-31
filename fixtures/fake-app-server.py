@@ -132,6 +132,9 @@ for raw in sys.stdin:
             continue
         active_dynamic_tools = msg["params"].get("dynamicTools", [])
         send({"id": msg["id"], "result": {"thread": {"id": msg["params"]["threadId"]}}})
+    elif method in ["thread/archive", "thread/unarchive", "thread/delete"]:
+        result = {"thread": {"id": msg["params"]["threadId"]}} if method == "thread/unarchive" else {}
+        send({"id": msg["id"], "result": result})
     elif method == "turn/start":
         turn_counter += 1
         pending_turn = f"turn-fake-{turn_counter}"

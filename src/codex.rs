@@ -528,6 +528,54 @@ impl CodexRuntime {
         self.events.subscribe()
     }
 
+    pub async fn archive_thread(&self, thread_id: &str) -> Result<()> {
+        self.thread_lifecycle_request("thread/archive", thread_id, true)
+            .await
+    }
+
+    pub async fn unarchive_thread(&self, thread_id: &str) -> Result<()> {
+        self.thread_lifecycle_request("thread/unarchive", thread_id, false)
+            .await
+    }
+
+    pub async fn delete_thread(&self, thread_id: &str) -> Result<()> {
+        self.thread_lifecycle_request("thread/delete", thread_id, false)
+            .await
+    }
+
+    async fn thread_lifecycle_request(
+        &self,
+        method: &str,
+        thread_id: &str,
+        missing_rollout_is_success: bool,
+    ) -> Result<()> {
+        self.command.prepare_runtime_tmp().await?;
+        let _turn_guard = self.turn_lock.lock().await;
+        let existing_session = self.session.lock().await.take();
+        let mut session = if let Some(session) = existing_session {
+            session
+        } else {
+            Session::spawn(&self.command).await?.0
+        };
+        let response = session.request(method, json!({"threadId":thread_id})).await;
+        *self.session.lock().await = Some(session);
+        let response = response?;
+        if let Some(error) = response.get("error") {
+            if !(missing_rollout_is_success && missing_rollout(&response)) {
+                bail!("Codex {method} failed: {error}");
+            }
+        }
+        self.publish(
+            CodexEvent {
+                kind: "thread-lifecycle".into(),
+                text: None,
+                payload: json!({"method":method,"thread_id":thread_id}),
+            },
+            None,
+        );
+        Ok(())
+    }
+
     pub async fn integrations(&self, cwd: &Path, force_reload: bool) -> Result<CodexIntegrations> {
         self.command.prepare_runtime_tmp().await?;
         let cwd = tokio::fs::canonicalize(cwd)
@@ -978,6 +1026,17 @@ fn rpc_method_unsupported(response: &Value) -> bool {
         response.pointer("/error/code").and_then(Value::as_i64),
         Some(-32601 | -32602)
     )
+}
+
+fn missing_rollout(response: &Value) -> bool {
+    response
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .is_some_and(|message| {
+            message
+                .to_ascii_lowercase()
+                .contains("no rollout found for thread id")
+        })
 }
 
 fn parse_skills_response(response: &Value) -> Result<Vec<CodexSkill>> {

@@ -179,13 +179,8 @@ async fn archives_unarchives_and_deletes_persisted_threads() {
             .await
             .unwrap()
             .unwrap();
-        if event.kind == "test/thread-lifecycle" {
-            methods.push(
-                event.payload["params"]["method"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned(),
-            );
+        if event.kind == "thread-lifecycle" {
+            methods.push(event.payload["method"].as_str().unwrap().to_owned());
         }
     }
     assert_eq!(
