@@ -1,4 +1,12 @@
 import type { CandidateCitation, ChatMessage, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexRunSettings, MessageCitation, ResearchProgressPhase } from "./types"
+import type { CodexSelection } from "./conversation-scope"
+
+export interface PendingConversationSwitch {
+  requestId: number
+  conversationId: string
+  targetSelection: CodexSelection|null
+  status: "loading"|"resolved"
+}
 
 export interface ConversationState {
   conversations: Conversation[]
@@ -10,14 +18,20 @@ export interface ConversationState {
   drawerOpen: boolean
   drawerView: "history"|"activity"
   lastEventId: number
+  pendingSwitch: PendingConversationSwitch|null
 }
 
-export const conversationInitialState:ConversationState={conversations:[],activeConversationId:null,activeSettings:null,scopes:[],messages:{},messageOrder:[],drawerOpen:false,drawerView:"history",lastEventId:0}
+export const conversationInitialState:ConversationState={conversations:[],activeConversationId:null,activeSettings:null,scopes:[],messages:{},messageOrder:[],drawerOpen:false,drawerView:"history",lastEventId:0,pendingSwitch:null}
 
 export type ConversationAction=
   |{type:"conversations";items:Conversation[]}
   |{type:"active";id:string|null}
   |{type:"detail";detail:ConversationDetail}
+  |{type:"hydrate-detail";expectedConversationId:string;detail:ConversationDetail}
+  |{type:"switch-start";requestId:number;conversationId:string}
+  |{type:"switch-resolved";requestId:number;detail:ConversationDetail;targetSelection:CodexSelection|null}
+  |{type:"switch-failed";requestId:number}
+  |{type:"switch-complete";requestId:number}
   |{type:"drawer";open:boolean;view?:"history"|"activity"}
   |{type:"event";event:ConversationStreamEvent}
 
@@ -27,6 +41,7 @@ const researchProgressPhases:ResearchProgressPhase[]=["research-planning","resea
 function progressPhase(value:unknown):ChatMessage["progress_phase"]{return value==="reading"||value==="reasoning"||value==="tool"||value==="answering"||researchProgressPhases.includes(value as ResearchProgressPhase)?value as ChatMessage["progress_phase"]:undefined}
 
 export function reduceConversationEvent(state:ConversationState,event:ConversationStreamEvent):ConversationState{
+  if(state.activeConversationId&&event.conversation_id!==state.activeConversationId)return state
   if(event.id<=state.lastEventId)return state
   const messageId=event.message_id
   if(!messageId)return {...state,lastEventId:event.id}
@@ -47,16 +62,39 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
   return {...state,lastEventId:event.id,messages:{...state.messages,[messageId]:next},messageOrder:exists?state.messageOrder:[...state.messageOrder,messageId]}
 }
 
+function installDetail(state:ConversationState,detail:ConversationDetail):ConversationState{
+  const messages=Object.fromEntries(detail.messages.map(message=>[message.id,message]))
+  const {model,reasoning_effort,service_tier}=detail.conversation
+  const activeSettings=model&&reasoning_effort?{model,reasoning_effort,service_tier}:null
+  const lastEventId=state.activeConversationId===detail.conversation.id?state.lastEventId:0
+  return {...state,activeConversationId:detail.conversation.id,activeSettings,scopes:detail.scopes,messages,messageOrder:detail.messages.map(message=>message.id),lastEventId}
+}
+
 export function conversationReducer(state:ConversationState,action:ConversationAction):ConversationState{
   if(action.type==="conversations")return {...state,conversations:action.items}
   if(action.type==="active"){
     if(action.id===state.activeConversationId)return state
-    return {...state,activeConversationId:action.id,activeSettings:null,scopes:[],messages:{},messageOrder:[],lastEventId:0,drawerOpen:false}
+    return {...state,activeConversationId:action.id,activeSettings:null,scopes:[],messages:{},messageOrder:[],lastEventId:0,drawerOpen:false,pendingSwitch:null}
+  }
+  if(action.type==="switch-start")return {...state,pendingSwitch:{requestId:action.requestId,conversationId:action.conversationId,targetSelection:null,status:"loading"}}
+  if(action.type==="switch-resolved"){
+    if(state.pendingSwitch?.requestId!==action.requestId||state.pendingSwitch.conversationId!==action.detail.conversation.id)return state
+    const installed=installDetail(state,action.detail)
+    return {...installed,drawerOpen:false,pendingSwitch:{requestId:action.requestId,conversationId:action.detail.conversation.id,targetSelection:action.targetSelection,status:"resolved"}}
+  }
+  if(action.type==="switch-failed"){
+    if(state.pendingSwitch?.requestId!==action.requestId)return state
+    return {...state,pendingSwitch:null}
+  }
+  if(action.type==="switch-complete"){
+    if(state.pendingSwitch?.requestId!==action.requestId)return state
+    return {...state,pendingSwitch:null}
+  }
+  if(action.type==="hydrate-detail"){
+    if(state.activeConversationId!==action.expectedConversationId||action.detail.conversation.id!==action.expectedConversationId)return state
+    return installDetail(state,action.detail)
   }
   if(action.type==="drawer")return {...state,drawerOpen:action.open,drawerView:action.view??state.drawerView}
   if(action.type==="event")return reduceConversationEvent(state,action.event)
-  const messages=Object.fromEntries(action.detail.messages.map(message=>[message.id,message]))
-  const {model,reasoning_effort,service_tier}=action.detail.conversation
-  const activeSettings=model&&reasoning_effort?{model,reasoning_effort,service_tier}:null
-  return {...state,activeConversationId:action.detail.conversation.id,activeSettings,scopes:action.detail.scopes,messages,messageOrder:action.detail.messages.map(message=>message.id)}
+  return {...installDetail(state,action.detail),pendingSwitch:null}
 }

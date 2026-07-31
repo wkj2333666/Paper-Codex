@@ -6,7 +6,7 @@ import { CodexComposer, normalizeCodexSettings } from "./CodexComposer"
 import { CodexIntegrationsDrawer } from "./CodexIntegrationsDrawer"
 import { CodexMessage } from "./CodexMessage"
 import { conversationInitialState, conversationReducer } from "./conversation-store"
-import { scopesMatchSelection, selectionForScopes, type CodexSelection } from "./conversation-scope"
+import { selectionsEqual, selectionForScopes, shouldClearConversationForSelection, type CodexSelection } from "./conversation-scope"
 import { latestAnswerCitations } from "./citation-overlay"
 import { PanelCollapseButton } from "./PanelControls"
 import type { Activity as TaskActivity, CandidateCitation, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkill, CodexToolPreference, ConversationScope, MessageCitation, ResearchMode } from "./types"
@@ -56,7 +56,10 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
   const [selectedSkill,setSelectedSkill]=useState<CodexSkill|null>(null)
   const [selectedTools,setSelectedTools]=useState<CodexToolPreference[]>([])
   const preserveConversationForCitation=useRef(false)
+  const historySwitchRequest=useRef(0)
   const scopeKey=conversationStorageKey(selection)
+  const scopeKeyRef=useRef(scopeKey)
+  scopeKeyRef.current=scopeKey
   const effectiveCapabilities=capabilities??fallbackCapabilities
   const projectResearchScope=Boolean(selection.kind==="project"?selection.id:selection.projectId)
   const projectContextId=selection.kind==="project"?selection.id:selection.projectId
@@ -64,8 +67,10 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
   const effectiveSettings=normalizeCodexSettings(effectiveCapabilities,state.activeSettings??draftSettings)
   const rememberConversation=(id:string)=>{try{localStorage.setItem(scopeKey,id)}catch{}}
   const refreshList=useCallback(async()=>{
+    const requestedScopeKey=scopeKey
     const items=await api.conversations();dispatch({type:"conversations",items})
-    try { const stored=localStorage.getItem(scopeKey);if(stored&&items.some(item=>item.id===stored))dispatch({type:"active",id:stored}) } catch {}
+    if(scopeKeyRef.current!==requestedScopeKey)return
+    try { const stored=localStorage.getItem(requestedScopeKey);if(stored&&items.some(item=>item.id===stored))dispatch({type:"active",id:stored}) } catch {}
   },[scopeKey])
   const loadIntegrations=useCallback(async(refresh=false)=>{
     setIntegrationsLoading(true)
@@ -80,19 +85,46 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
     catch(value){setError(value instanceof Error?value.message:"加载 Codex 能力失败")}
     finally{setIntegrationsLoading(false)}
   },[])
-  const loadDetail=useCallback(async(id:string)=>dispatch({type:"detail",detail:await api.conversation(id)}),[])
+  const loadDetail=useCallback(async(id:string)=>dispatch({type:"hydrate-detail",expectedConversationId:id,detail:await api.conversation(id)}),[])
   const requestIntegrations=()=>{if(!integrations&&!integrationsLoading)void loadIntegrations(false)}
   useEffect(()=>{void refreshList().catch(value=>setError(value instanceof Error?value.message:"加载对话失败"))},[refreshList])
   useEffect(()=>{if(providedCapabilities){setCapabilities(providedCapabilities);return}void api.codexCapabilities().then(setCapabilities).catch(value=>setError(value instanceof Error?value.message:"加载 Codex 能力失败"))},[providedCapabilities])
   useEffect(()=>{if(state.activeSettings)setDraftSettings(state.activeSettings)},[state.activeSettings])
   useEffect(()=>setResearchMode("auto"),[selection.kind,selection.id])
   useEffect(()=>{setSelectedSkill(null);setSelectedTools([]);setIntegrations(null);if(integrationsOpen)void loadIntegrations(true)},[projectContextId])
-  useEffect(()=>{if(state.activeConversationId)void loadDetail(state.activeConversationId)},[state.activeConversationId,loadDetail])
-  useEffect(()=>{if(state.activeConversationId&&state.scopes.length&&!scopesMatchSelection(state.scopes,selection)){if(preserveConversationForCitation.current){preserveConversationForCitation.current=false;return}dispatch({type:"active",id:null})}},[selection.kind,selection.id,selection.projectId,state.activeConversationId,state.scopes])
+  useEffect(()=>{if(state.activeConversationId&&!state.scopes.length)void loadDetail(state.activeConversationId)},[state.activeConversationId,loadDetail])
+  useEffect(()=>{
+    const pendingTarget=state.pendingSwitch?state.pendingSwitch.targetSelection:undefined
+    if(state.pendingSwitch?.status==="resolved"&&pendingTarget&&selectionsEqual(pendingTarget,selection)){
+      dispatch({type:"switch-complete",requestId:state.pendingSwitch.requestId})
+      return
+    }
+    if(state.activeConversationId&&shouldClearConversationForSelection(state.scopes,selection,pendingTarget)){
+      if(preserveConversationForCitation.current){preserveConversationForCitation.current=false;return}
+      dispatch({type:"active",id:null})
+    }
+  },[selection.kind,selection.id,selection.projectId,state.activeConversationId,state.scopes,state.pendingSwitch])
   useEffect(()=>onCitations(latestAnswerCitations(state.messages,state.messageOrder)),[onCitations,state.messages,state.messageOrder])
   useEffect(()=>{if(!state.activeConversationId)return;const conversationId=state.activeConversationId;const controller=new AbortController();void streamConversationEvents(conversationId,state.lastEventId,event=>{dispatch({type:"event",event});if(["answer-completed","answer-failed","answer-cancelled"].includes(event.type)){void loadDetail(conversationId);if(event.type==="answer-completed")void refreshList()}},controller.signal).catch(()=>{});return()=>controller.abort()},[state.activeConversationId,loadDetail,refreshList])
   const create=async()=>{const scopes=scopeFor(selection);if(!scopes.length)throw new Error("请先创建或进入一个研究项目");const item=await api.createConversation("新对话",scopes,normalizeCodexSettings(effectiveCapabilities,null));rememberConversation(item.id);await refreshList();dispatch({type:"active",id:item.id});return item.id}
-  const openConversation=async(id:string)=>{const detail=await api.conversation(id);const target=selectionForScopes(detail.scopes);if(target){try{localStorage.setItem(conversationStorageKey(target),id)}catch{};onSelect(target)}dispatch({type:"detail",detail})}
+  const openConversation=async(id:string)=>{
+    const requestId=++historySwitchRequest.current
+    dispatch({type:"switch-start",requestId,conversationId:id})
+    setError("")
+    try{
+      const detail=await api.conversation(id)
+      if(historySwitchRequest.current!==requestId)return
+      const target=selectionForScopes(detail.scopes)
+      if(!target)throw new Error("该对话缺少有效的项目或论文作用域")
+      dispatch({type:"switch-resolved",requestId,detail,targetSelection:target})
+      try{localStorage.setItem(conversationStorageKey(target),id)}catch{}
+      onSelect(target)
+    }catch(value){
+      if(historySwitchRequest.current!==requestId)return
+      dispatch({type:"switch-failed",requestId})
+      setError(value instanceof Error?value.message:"加载对话失败")
+    }
+  }
   const submit=async(event:FormEvent)=>{event.preventDefault();const content=text.trim();if(!content)return;setBusy(true);setError("");try{const id=state.activeConversationId??await create();await api.sendConversationMessage(id,content,researchMode,selectedSkill?{name:selectedSkill.name,path:selectedSkill.path}:null,selectedTools);setText("");setSelectedSkill(null);setSelectedTools([]);setResearchMode("auto");await loadDetail(id)}catch(value){if(value instanceof ApiError&&value.status===409)void loadIntegrations(true);setError(value instanceof Error?value.message:"发送失败")}finally{setBusy(false)}}
   const toggleTool=(preference:CodexToolPreference)=>setSelectedTools(current=>current.some(item=>item.server===preference.server&&item.tool===preference.tool)?current.filter(item=>item.server!==preference.server||item.tool!==preference.tool):[...current,preference])
   const openIntegrations=()=>{dispatch({type:"drawer",open:false});setIntegrationsOpen(true);if(!integrations)void loadIntegrations(false)}

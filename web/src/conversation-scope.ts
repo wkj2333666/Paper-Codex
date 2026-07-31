@@ -34,3 +34,16 @@ export function scopesMatchSelection(scopes: ConversationScope[], selection: Cod
   const current=selection.kind==="paper"&&selection.id?`paper:${selection.id}`:"global"
   return scopes.some(scope=>scopeKey(scope)===current)
 }
+
+export function selectionsEqual(left:CodexSelection,right:CodexSelection):boolean{
+  return left.kind===right.kind&&left.id===right.id&&left.projectId===right.projectId
+}
+
+export function shouldClearConversationForSelection(
+  scopes:ConversationScope[],
+  selection:CodexSelection,
+  pendingTarget:CodexSelection|null|undefined,
+):boolean{
+  if(pendingTarget!==undefined)return false
+  return scopes.length>0&&!scopesMatchSelection(scopes,selection)
+}

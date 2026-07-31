@@ -15,6 +15,42 @@ const event = (id: number, type: string, payload: Record<string, unknown>) => ({
   created_at: "2026-01-01T00:00:00Z",
 })
 
+const detail = (id: string, content: string) => ({
+  conversation: {
+    id,
+    title: `对话 ${id}`,
+    thread_id: null,
+    status: "idle",
+    model: "gpt-test",
+    reasoning_effort: "medium",
+    service_tier: null,
+    archived_at: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  },
+  scopes: [{
+    conversation_id: id,
+    scope_type: "project" as const,
+    scope_id: "project-one",
+    added_at: "2026-01-01T00:00:00Z",
+  }],
+  messages: [{
+    id: `message-${id}`,
+    conversation_id: id,
+    role: "assistant" as const,
+    content,
+    turn_id: null,
+    status: "completed" as const,
+    error: null,
+    research_mode: "auto" as const,
+    tool_preferences: [],
+    citations: [],
+    candidate_citations: [],
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  }],
+})
+
 describe("conversation store", () => {
   it("keeps the active conversation's Codex settings when loading details", () => {
     const detail = {
@@ -172,5 +208,138 @@ describe("conversation store", () => {
     expect(next.messages).toEqual({})
     expect(next.messageOrder).toEqual([])
     expect(next.lastEventId).toBe(0)
+  })
+
+  it("keeps the visible conversation while a history switch is loading", () => {
+    const seed = conversationReducer(conversationInitialState, {
+      type: "detail",
+      detail: detail("conversation-1", "当前仍应可见"),
+    })
+
+    const next = conversationReducer(seed, {
+      type: "switch-start",
+      requestId: 1,
+      conversationId: "conversation-2",
+    })
+
+    expect(next.activeConversationId).toBe("conversation-1")
+    expect(next.messageOrder).toEqual(seed.messageOrder)
+    expect(next.messages["message-conversation-1"].content).toBe("当前仍应可见")
+    expect(next.pendingSwitch).toMatchObject({
+      requestId: 1,
+      conversationId: "conversation-2",
+      status: "loading",
+    })
+  })
+
+  it("ignores a stale history response and atomically installs the latest one", () => {
+    const seed = conversationReducer(conversationInitialState, {
+      type: "detail",
+      detail: detail("conversation-1", "原对话"),
+    })
+    const first = conversationReducer(seed, {
+      type: "switch-start",
+      requestId: 1,
+      conversationId: "conversation-2",
+    })
+    const second = conversationReducer(first, {
+      type: "switch-start",
+      requestId: 2,
+      conversationId: "conversation-3",
+    })
+
+    const stale = conversationReducer(second, {
+      type: "switch-resolved",
+      requestId: 1,
+      detail: detail("conversation-2", "不应出现"),
+      targetSelection: { kind: "project" as const, id: "project-one" },
+    })
+    expect(stale).toBe(second)
+
+    const resolved = conversationReducer(stale, {
+      type: "switch-resolved",
+      requestId: 2,
+      detail: detail("conversation-3", "目标对话"),
+      targetSelection: { kind: "project" as const, id: "project-one" },
+    })
+    expect(resolved.activeConversationId).toBe("conversation-3")
+    expect(resolved.messageOrder).toEqual(["message-conversation-3"])
+    expect(resolved.messages["message-conversation-3"].content).toBe("目标对话")
+    expect(resolved.pendingSwitch).toMatchObject({
+      requestId: 2,
+      conversationId: "conversation-3",
+      status: "resolved",
+    })
+  })
+
+  it("keeps the original conversation when the latest history load fails", () => {
+    const seed = conversationReducer(conversationInitialState, {
+      type: "detail",
+      detail: detail("conversation-1", "加载失败后保留"),
+    })
+    const started = conversationReducer(seed, {
+      type: "switch-start",
+      requestId: 4,
+      conversationId: "conversation-2",
+    })
+    const failed = conversationReducer(started, {
+      type: "switch-failed",
+      requestId: 4,
+    })
+
+    expect(failed.pendingSwitch).toBeNull()
+    expect(failed.activeConversationId).toBe("conversation-1")
+    expect(failed.messages["message-conversation-1"].content).toBe("加载失败后保留")
+  })
+
+  it("does not let an ordinary stale detail response overwrite the active conversation", () => {
+    const seed = conversationReducer(conversationInitialState, {
+      type: "detail",
+      detail: detail("conversation-2", "新对话"),
+    })
+    const next = conversationReducer(seed, {
+      type: "hydrate-detail",
+      expectedConversationId: "conversation-1",
+      detail: detail("conversation-1", "过期响应"),
+    })
+
+    expect(next).toBe(seed)
+    expect(next.messages["message-conversation-2"].content).toBe("新对话")
+  })
+
+  it("ignores a late stream event from the conversation that was switched away", () => {
+    const seed = conversationReducer(conversationInitialState, {
+      type: "detail",
+      detail: detail("conversation-2", "当前对话"),
+    })
+
+    const next = reduceConversationEvent(
+      seed,
+      event(9, "answer-delta", { text: "旧对话迟到内容" }),
+    )
+
+    expect(next).toBe(seed)
+    expect(next.messages.a).toBeUndefined()
+  })
+
+  it("rejects a switch response whose detail belongs to another conversation", () => {
+    const seed = conversationReducer(conversationInitialState, {
+      type: "detail",
+      detail: detail("conversation-1", "原对话"),
+    })
+    const started = conversationReducer(seed, {
+      type: "switch-start",
+      requestId: 8,
+      conversationId: "conversation-2",
+    })
+    const mismatched = conversationReducer(started, {
+      type: "switch-resolved",
+      requestId: 8,
+      detail: detail("conversation-3", "错误目标"),
+      targetSelection: { kind: "project" as const, id: "project-one" },
+    })
+
+    expect(mismatched).toBe(started)
+    expect(mismatched.activeConversationId).toBe("conversation-1")
   })
 })
