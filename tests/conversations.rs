@@ -1,6 +1,6 @@
 use paper_codex::{
     codex::{CodexSkillSelection, CodexToolPreference},
-    conversations::{AnnotationAnchor, ConversationScopeInput},
+    conversations::{AnnotationAnchor, ChatMessageOptions, ConversationScopeInput},
     db::Database,
     prompts::{ConversationAnswer, ConversationCitation},
 };
@@ -226,9 +226,11 @@ async fn selected_mcp_tools_survive_queue_and_database_reload() {
             "user",
             "查找相关工作",
             "completed",
-            paper_codex::research::ResearchMode::Auto,
-            None,
-            &preferences,
+            ChatMessageOptions {
+                research_mode: paper_codex::research::ResearchMode::Auto,
+                skill: None,
+                tool_preferences: &preferences,
+            },
         )
         .await
         .unwrap();

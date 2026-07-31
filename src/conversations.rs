@@ -1,4 +1,4 @@
-use crate::codex::{CodexRunSettings, CodexToolPreference};
+use crate::codex::{CodexRunSettings, CodexSkillSelection, CodexToolPreference};
 use crate::db::Database;
 use crate::prompts::ConversationAnswer;
 use crate::research::ResearchMode;
@@ -53,6 +53,13 @@ pub struct ChatMessage {
     pub tool_preferences: Vec<CodexToolPreference>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ChatMessageOptions<'a> {
+    pub research_mode: ResearchMode,
+    pub skill: Option<&'a CodexSkillSelection>,
+    pub tool_preferences: &'a [CodexToolPreference],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromRow)]
@@ -286,9 +293,11 @@ impl Database {
             role,
             content,
             status,
-            research_mode,
-            skill,
-            &[],
+            ChatMessageOptions {
+                research_mode,
+                skill,
+                tool_preferences: &[],
+            },
         )
         .await
     }
@@ -299,9 +308,7 @@ impl Database {
         role: &str,
         content: &str,
         status: &str,
-        research_mode: ResearchMode,
-        skill: Option<&crate::codex::CodexSkillSelection>,
-        tool_preferences: &[CodexToolPreference],
+        options: ChatMessageOptions<'_>,
     ) -> Result<ChatMessage> {
         if !matches!(role, "user" | "assistant" | "system") {
             bail!("invalid chat message role");
@@ -318,10 +325,14 @@ impl Database {
         .bind(role)
         .bind(content)
         .bind(status)
-        .bind(research_mode)
-        .bind(skill.map(|value| value.name.as_str()))
-        .bind(skill.map(|value| value.path.to_string_lossy().into_owned()))
-        .bind(serde_json::to_string(tool_preferences)?)
+        .bind(options.research_mode)
+        .bind(options.skill.map(|value| value.name.as_str()))
+        .bind(
+            options
+                .skill
+                .map(|value| value.path.to_string_lossy().into_owned()),
+        )
+        .bind(serde_json::to_string(options.tool_preferences)?)
         .execute(self.pool())
         .await?;
         Ok(sqlx::query_as("SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,tool_preferences_json AS tool_preferences,created_at,updated_at FROM chat_messages WHERE id=?")

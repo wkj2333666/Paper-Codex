@@ -5,7 +5,8 @@ use crate::{
     },
     conversation_context::ConversationContextBuilder,
     conversations::{
-        ChatMessage, Conversation, ConversationEvent, ConversationScope, ConversationScopeInput,
+        ChatMessage, ChatMessageOptions, Conversation, ConversationEvent, ConversationScope,
+        ConversationScopeInput,
     },
     db::Database,
     prompts::{
@@ -342,9 +343,11 @@ impl ConversationEngine {
                 "user",
                 question,
                 "completed",
-                research_mode,
-                validated_skill.as_ref(),
-                &validated_tools,
+                ChatMessageOptions {
+                    research_mode,
+                    skill: validated_skill.as_ref(),
+                    tool_preferences: &validated_tools,
+                },
             )
             .await?;
         let assistant = self
