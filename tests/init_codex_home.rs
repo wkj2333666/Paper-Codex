@@ -85,13 +85,32 @@ fn initializes_empty_home_and_preserves_existing_config() {
         "cli_auth_credentials_store = \"file\"\n"
     );
 
-    fs::write(target.join("config.toml"), "model = \"kept\"\n").unwrap();
+    fs::write(
+        target.join("config.toml"),
+        "cli_auth_credentials_store = \"file\"\nmodel = \"kept\"\n",
+    )
+    .unwrap();
     let second = run_initializer(temp.path(), &["--target", target.to_str().unwrap()]);
     assert!(second.status.success());
     assert_eq!(
         fs::read_to_string(target.join("config.toml")).unwrap(),
-        "model = \"kept\"\n"
+        "cli_auth_credentials_store = \"file\"\nmodel = \"kept\"\n"
     );
+}
+
+#[test]
+fn rejects_existing_config_that_can_use_shared_keyring() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("config.toml"), "model = \"unsafe\"\n").unwrap();
+
+    let output = run_initializer(temp.path(), &["--target", target.to_str().unwrap()]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected = "existing config.toml must set cli_auth_credentials_store to file";
+    assert!(stderr.contains(expected));
 }
 
 #[test]
