@@ -13,6 +13,10 @@ fn run_initializer(root: &Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
+fn repository_file(path: &str) -> String {
+    fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path)).unwrap()
+}
+
 #[test]
 fn imports_config_and_personal_skills_without_auth_or_runtime_state() {
     let temp = tempfile::tempdir().unwrap();
@@ -88,4 +92,35 @@ fn initializes_empty_home_and_preserves_existing_config() {
         fs::read_to_string(target.join("config.toml")).unwrap(),
         "model = \"kept\"\n"
     );
+}
+
+#[test]
+fn user_service_blocks_main_codex_home() {
+    let service = repository_file("deploy/paper-codex.user.service");
+    assert!(service.contains(
+        "ExecStartPre=/usr/bin/install -d -m 0700 %h/projects/paper-codex/.runtime/codex-home"
+    ));
+    assert!(service.contains("InaccessiblePaths=-%h/.codex"));
+    assert!(!service.lines().any(|line| {
+        line.starts_with("ReadWritePaths=") && line.contains("%h/.codex")
+    }));
+}
+
+#[test]
+fn environment_examples_select_project_local_codex_home() {
+    for path in [
+        "paper-codex.env.example",
+        "deploy/paper-codex.user.env.example",
+    ] {
+        let content = repository_file(path);
+        assert!(content.contains("PAPER_CODEX_CODEX_HOME=./.runtime/codex-home"));
+    }
+}
+
+#[test]
+fn release_archive_includes_codex_home_initializer() {
+    let workflow = repository_file(".github/workflows/release.yml");
+    assert!(workflow.contains(
+        "install -m 0755 scripts/init-codex-home.sh \"${package}/init-codex-home.sh\""
+    ));
 }
