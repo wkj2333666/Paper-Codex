@@ -357,9 +357,13 @@ mod tests {
             annotation_intents: vec![],
         };
 
-        let normalized =
-            validate_conversation_answer_with_candidates(answer, "找相关论文", &[], &HashMap::new())
-                .unwrap();
+        let normalized = validate_conversation_answer_with_candidates(
+            answer,
+            "找相关论文",
+            &[],
+            &HashMap::new(),
+        )
+        .unwrap();
 
         assert_eq!(
             normalized.answer_markdown,
@@ -386,9 +390,13 @@ mod tests {
             annotation_intents: vec![],
         };
 
-        let normalized =
-            validate_conversation_answer_with_candidates(answer, "找相关论文", &[], &HashMap::new())
-                .unwrap();
+        let normalized = validate_conversation_answer_with_candidates(
+            answer,
+            "找相关论文",
+            &[],
+            &HashMap::new(),
+        )
+        .unwrap();
 
         assert_eq!(normalized.answer_markdown, "可以参考 外部候选。");
         assert!(normalized.candidate_citations.is_empty());
