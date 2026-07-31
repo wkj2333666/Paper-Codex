@@ -129,9 +129,7 @@ fn user_service_cannot_write_main_codex_home() {
 fn user_service_allows_only_the_ssh_bridge_control_directory_in_tmp() {
     let service = repository_file("deploy/paper-codex.user.service");
     assert!(service.contains("PrivateTmp=false"));
-    assert!(service.contains(
-        "ExecStartPre=+/usr/bin/install -d -m 0700 /tmp/codex-ssh-bridge-%U"
-    ));
+    assert!(service.contains("ExecStartPre=+/usr/bin/install -d -m 0700 /tmp/codex-ssh-bridge-%U"));
     assert!(service.lines().any(|line| {
         line.starts_with("ReadWritePaths=") && line.contains("/tmp/codex-ssh-bridge-%U")
     }));
