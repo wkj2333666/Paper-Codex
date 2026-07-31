@@ -767,7 +767,9 @@ mod tests {
         db.insert_paper("paper:many", "多重归属论文").await.unwrap();
         db.add_paper_to_project("paper:one", &first).await.unwrap();
         db.add_paper_to_project("paper:many", &first).await.unwrap();
-        db.add_paper_to_project("paper:many", &second).await.unwrap();
+        db.add_paper_to_project("paper:many", &second)
+            .await
+            .unwrap();
 
         let scope = |scope_type: &str, scope_id: &str| ConversationScope {
             conversation_id: "conversation".into(),

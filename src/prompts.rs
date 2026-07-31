@@ -345,8 +345,11 @@ mod tests {
 
     #[test]
     fn unmanaged_external_research_can_use_available_web_or_mcp_tools() {
-        let prompt =
-            conversation_question_prompt_with_research("帮我找找别的论文", ResearchMode::Auto, false);
+        let prompt = conversation_question_prompt_with_research(
+            "帮我找找别的论文",
+            ResearchMode::Auto,
+            false,
+        );
         assert!(prompt.contains("Web 或 MCP"));
         assert!(prompt.contains("Markdown 链接"));
         assert!(!prompt.contains("只使用当前上下文中的论文"));

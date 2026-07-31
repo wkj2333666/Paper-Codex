@@ -511,7 +511,9 @@ async fn research_tools_accept_a_paper_in_the_handlers_only_project() {
     let project = db.create_project("rules", "规则", "").await.unwrap();
     let conversation = db.create_conversation("论文范围").await.unwrap();
     db.insert_paper("paper:one", "论文").await.unwrap();
-    db.add_paper_to_project("paper:one", &project).await.unwrap();
+    db.add_paper_to_project("paper:one", &project)
+        .await
+        .unwrap();
     db.replace_conversation_scopes(
         &conversation.id,
         &[ConversationScopeInput {
@@ -566,5 +568,8 @@ async fn research_tools_accept_a_paper_in_the_handlers_only_project() {
         .await
         .unwrap();
 
-    assert_eq!(search[0]["works"][0]["title"], "Kolmogorov Complexity of Game Rules");
+    assert_eq!(
+        search[0]["works"][0]["title"],
+        "Kolmogorov Complexity of Game Rules"
+    );
 }
