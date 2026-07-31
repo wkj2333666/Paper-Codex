@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use paper_codex::codex::{
-    CodexCommand, CodexRunSettings, CodexRuntime, CodexSkillSelection, CodexTurn,
+    CodexCommand, CodexRunSettings, CodexRuntime, CodexSkillSelection, CodexToolPreference,
+    CodexTurn,
 };
 use paper_codex::codex_tools::{
     DynamicToolCall, DynamicToolDefinition, DynamicToolHandler, DynamicToolSession,
@@ -205,6 +206,46 @@ async fn sends_selected_skill_as_a_structured_turn_input() {
             .to_string_lossy()
             .as_ref()
     );
+}
+
+#[tokio::test]
+async fn sends_mcp_tool_preferences_as_internal_optional_guidance() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let events = next_test_turn_params(runtime.subscribe());
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+    runtime
+        .run_turn(
+            CodexTurn {
+                thread_id: None,
+                cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
+                prompt: "skill-turn".into(),
+                skill: None,
+                tool_preferences: vec![CodexToolPreference {
+                    server: "openalex".into(),
+                    tool: "works/search".into(),
+                }],
+                output_schema: None,
+                settings: standard_settings(),
+            },
+            cancel_rx,
+        )
+        .await
+        .unwrap();
+
+    let payload = tokio::time::timeout(std::time::Duration::from_secs(1), events)
+        .await
+        .unwrap();
+    assert_eq!(payload["input"][0]["text"], "skill-turn");
+    assert_eq!(payload["input"][1]["type"], "text");
+    assert!(payload["input"][1]["text"]
+        .as_str()
+        .unwrap()
+        .contains("openalex/works/search"));
+    assert!(payload["input"][1]["text"]
+        .as_str()
+        .unwrap()
+        .contains("不强制"));
 }
 
 #[tokio::test]
