@@ -340,6 +340,61 @@ mod tests {
     }
 
     #[test]
+    fn uninspected_candidate_citation_becomes_an_external_link() {
+        let answer = ConversationAnswer {
+            title: Some("相关工作".into()),
+            answer_markdown: "可以参考 [candidate-1]。".into(),
+            citations: vec![],
+            candidate_citations: vec![ConversationCandidateCitation {
+                id: "candidate-1".into(),
+                work_id: "arxiv:2402.15220".into(),
+                title: "ChunkAttention".into(),
+                source_url: "https://arxiv.org/abs/2402.15220".into(),
+                evidence_level: EvidenceLevel::Abstract,
+                quote: "Prefix-aware attention.".into(),
+                explanation: "相关工作".into(),
+            }],
+            annotation_intents: vec![],
+        };
+
+        let normalized =
+            validate_conversation_answer_with_candidates(answer, "找相关论文", &[], &HashMap::new())
+                .unwrap();
+
+        assert_eq!(
+            normalized.answer_markdown,
+            "可以参考 [ChunkAttention](https://arxiv.org/abs/2402.15220)。"
+        );
+        assert!(normalized.candidate_citations.is_empty());
+    }
+
+    #[test]
+    fn uninspected_candidate_with_unsafe_url_becomes_plain_text() {
+        let answer = ConversationAnswer {
+            title: Some("相关工作".into()),
+            answer_markdown: "可以参考 [candidate-1]。".into(),
+            citations: vec![],
+            candidate_citations: vec![ConversationCandidateCitation {
+                id: "candidate-1".into(),
+                work_id: "unknown".into(),
+                title: "外部候选".into(),
+                source_url: "file:///etc/passwd".into(),
+                evidence_level: EvidenceLevel::Metadata,
+                quote: "Unverified.".into(),
+                explanation: "未受控查证".into(),
+            }],
+            annotation_intents: vec![],
+        };
+
+        let normalized =
+            validate_conversation_answer_with_candidates(answer, "找相关论文", &[], &HashMap::new())
+                .unwrap();
+
+        assert_eq!(normalized.answer_markdown, "可以参考 外部候选。");
+        assert!(normalized.candidate_citations.is_empty());
+    }
+
+    #[test]
     fn automatic_research_requires_search_for_an_explicit_literature_request() {
         let prompt = conversation_question_prompt_with_research(
             "帮我找找别的论文",
@@ -348,6 +403,9 @@ mod tests {
         );
         assert!(prompt.contains("明确要求查找、搜索或推荐其他论文"));
         assert!(prompt.contains("必须调用 research_search"));
+        assert!(prompt.contains("本轮 research_inspect"));
+        assert!(prompt.contains("Web 或 MCP"));
+        assert!(prompt.contains("普通 Markdown 链接"));
     }
 
     #[test]
