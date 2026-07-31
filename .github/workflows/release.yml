@@ -203,11 +203,14 @@ jobs:
           cp -a web/dist/. "${package}/web/"
           cp deploy/paper-codex.user.service "${package}/"
           cp deploy/paper-codex.user.env.example "${package}/paper-codex.env.example"
+          install -m 0755 scripts/init-codex-home.sh "${package}/init-codex-home.sh"
           cat > "${package}/INSTALL.txt" <<EOF
           mkdir -p .runtime/releases/${RELEASE_TAG}
           tar -xzf ${package}.tar.gz -C .runtime/releases/${RELEASE_TAG} --strip-components=1
           ln -sfn releases/${RELEASE_TAG} .runtime/current
           if [ ! -e .runtime/paper-codex.env ]; then cp .runtime/current/paper-codex.env.example .runtime/paper-codex.env; fi
+          # Optional: import non-auth Codex configuration before signing in.
+          # .runtime/current/init-codex-home.sh --import-from "\$HOME/.codex"
           cp .runtime/current/paper-codex.user.service ~/.config/systemd/user/paper-codex.service
           systemctl --user daemon-reload
           systemctl --user enable --now paper-codex

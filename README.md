@@ -50,7 +50,7 @@ Search history and candidates are project-scoped. Knowing an identifier from ano
 - Rust stable
 - Node.js 20.19 or newer (Node.js 22 LTS recommended)
 - SQLite 3
-- A working Codex CLI installation, authenticated as the same operating-system user that runs Paper Codex
+- A working Codex CLI installation; Paper Codex authenticates through its own project-local Codex home
 - Outbound HTTPS access to OpenAlex, Crossref, arXiv, and paper sources used for optional open-full-text verification
 - `openssl` and `htpasswd` for generating local secrets
 
@@ -80,7 +80,54 @@ htpasswd -bnBC 12 "" 'replace-with-your-password' | tr -d ':\n'
 openssl rand -hex 32
 ```
 
-Put the two command outputs into `PAPER_CODEX_PASSWORD_HASH` and `PAPER_CODEX_JWT_SECRET` in `paper-codex.env`. Then build and start the service from the repository root:
+Put the two command outputs into `PAPER_CODEX_PASSWORD_HASH` and `PAPER_CODEX_JWT_SECRET` in `paper-codex.env`. Complete the isolated Codex setup below before starting the backend.
+
+## Codex setup
+
+Paper Codex uses `.runtime/codex-home` instead of the user's default `~/.codex`. Login, logout, token refresh, configuration, sessions, and caches therefore remain independent from Codex CLI or desktop usage outside Paper Codex.
+
+Initialize an empty isolated home:
+
+```bash
+./scripts/init-codex-home.sh
+```
+
+To preserve existing MCP definitions and personal Skills without copying credentials, import the non-authentication parts of another Codex home once:
+
+```bash
+./scripts/init-codex-home.sh --import-from "$HOME/.codex"
+```
+
+The initializer copies a sanitized `config.toml` and non-system personal Skills. It does not copy `auth.json`, sessions, history, packages, plugin caches, or other runtime state. Later changes in either Codex home are independent.
+
+Authenticate Paper Codex with an API key through standard input:
+
+```bash
+printenv OPENAI_API_KEY | \
+  CODEX_HOME="$PWD/.runtime/codex-home" \
+  codex login --with-api-key
+```
+
+Check or clear only the Paper Codex login with:
+
+```bash
+CODEX_HOME="$PWD/.runtime/codex-home" codex login status
+CODEX_HOME="$PWD/.runtime/codex-home" codex logout
+```
+
+API-key authentication uses OpenAI Platform billing. Features that require ChatGPT workspace or cloud access may be limited. Other supported Codex login methods can also be run with the same isolated `CODEX_HOME`.
+
+The Codex panel exposes conversation scope, model, reasoning effort, and service speed when the connected Codex runtime supports them. Credentials are stored only under the Git-ignored `.runtime/codex-home`; never commit or share that directory.
+
+The **Codex capabilities** drawer lists Skills discovered for the paper workspace and the safe status summary of MCP servers configured in Paper Codex's isolated home. The built-in `paper-research` Skill is installed inside each workspace; imported or separately configured personal Skills and MCP definitions belong only to Paper Codex.
+
+Selecting a Skill sends it to Codex as a structured app-server input for the next conversation turn. MCP configuration and authentication are managed by running Codex CLI with Paper Codex's `CODEX_HOME`. Paper Codex only displays server, authentication, and tool summaries: it does not expose server commands or environment variables, start OAuth flows, or provide direct MCP tool-call buttons. Already configured tools that do not require interactive approval remain available to Codex according to the isolated configuration's policy.
+
+Project literature discovery additionally requires Codex app-server dynamic tools. Paper Codex detects this capability at runtime: unsupported installations keep ordinary conversations available and clearly disable controlled paper search.
+
+## Start from source
+
+Build and start the service from the repository root after authenticating the isolated Codex home:
 
 ```bash
 cargo build --release --locked
@@ -92,22 +139,6 @@ set +a
 ```
 
 Open <http://127.0.0.1:3000>. The first run creates the Git-ignored `paper-workspace/` directory for PDFs, extracted text, indexes, notes, and the SQLite database. Codex sandbox temporary state uses the Git-ignored `.runtime/tmp/` directory by default.
-
-## Codex setup
-
-Make sure the Codex CLI is installed and authenticated for the same operating-system user that starts Paper Codex. If supported by your installation, the usual login command is:
-
-```bash
-codex login
-```
-
-The Codex panel exposes conversation scope, model, reasoning effort, and service speed when the connected Codex runtime supports them. Paper Codex does not store your Codex credentials in the repository.
-
-The **Codex capabilities** drawer lists Skills discovered for the paper workspace and the safe status summary of MCP servers configured for the operating-system user running Paper Codex. The built-in `paper-research` Skill is installed inside each workspace; personal Skills and MCP configuration come from that user's effective `CODEX_HOME`.
-
-Selecting a Skill sends it to Codex as a structured app-server input for the next conversation turn. MCP configuration and authentication still belong to Codex CLI or a supported Codex desktop client. Paper Codex only displays server, authentication, and tool summaries: it does not store MCP credentials, expose server commands or environment variables, start OAuth flows, or provide direct MCP tool-call buttons. Already configured tools that do not require interactive approval remain available to Codex according to the user's Codex policy.
-
-Project literature discovery additionally requires Codex app-server dynamic tools. Paper Codex detects this capability at runtime: unsupported installations keep ordinary conversations available and clearly disable controlled paper search.
 
 ## Research resource settings
 
