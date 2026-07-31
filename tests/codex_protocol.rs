@@ -137,12 +137,7 @@ async fn accepts_current_reasoning_effort_fields_without_dropping_models() {
             .iter()
             .map(|model| model.id.as_str())
             .collect::<Vec<_>>(),
-        vec![
-            "gpt-test",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna"
-        ]
+        vec!["gpt-test", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
     );
     let sol = capabilities
         .models
