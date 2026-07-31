@@ -247,6 +247,110 @@ impl ConversationEngine {
             .context("created conversation settings are missing")
     }
 
+    pub async fn archive_conversation(&self, conversation_id: &str) -> Result<Conversation> {
+        let conversation = self
+            .db
+            .get_conversation(conversation_id)
+            .await?
+            .context("conversation does not exist")?;
+        if conversation.archived_at.is_some() {
+            return Ok(conversation);
+        }
+        if self
+            .db
+            .conversation_has_pending_turn(conversation_id)
+            .await?
+        {
+            bail!("conversation is busy");
+        }
+        if let Some(thread_id) = conversation.thread_id.as_deref() {
+            self.codex.archive_thread(thread_id).await?;
+        }
+        match self
+            .db
+            .update_conversation(conversation_id, None, Some(true))
+            .await
+        {
+            Ok(Some(conversation)) => Ok(conversation),
+            Ok(None) => {
+                if let Some(thread_id) = conversation.thread_id.as_deref() {
+                    let _ = self.codex.unarchive_thread(thread_id).await;
+                }
+                bail!("conversation does not exist")
+            }
+            Err(error) => {
+                if let Some(thread_id) = conversation.thread_id.as_deref() {
+                    let _ = self.codex.unarchive_thread(thread_id).await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn restore_conversation(&self, conversation_id: &str) -> Result<Conversation> {
+        let conversation = self
+            .db
+            .get_conversation(conversation_id)
+            .await?
+            .context("conversation does not exist")?;
+        if conversation.archived_at.is_none() {
+            return Ok(conversation);
+        }
+        if self
+            .db
+            .conversation_has_pending_turn(conversation_id)
+            .await?
+        {
+            bail!("conversation is busy");
+        }
+        if let Some(thread_id) = conversation.thread_id.as_deref() {
+            self.codex.unarchive_thread(thread_id).await?;
+        }
+        match self
+            .db
+            .update_conversation(conversation_id, None, Some(false))
+            .await
+        {
+            Ok(Some(conversation)) => Ok(conversation),
+            Ok(None) => {
+                if let Some(thread_id) = conversation.thread_id.as_deref() {
+                    let _ = self.codex.archive_thread(thread_id).await;
+                }
+                bail!("conversation does not exist")
+            }
+            Err(error) => {
+                if let Some(thread_id) = conversation.thread_id.as_deref() {
+                    let _ = self.codex.archive_thread(thread_id).await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn delete_conversation(&self, conversation_id: &str) -> Result<()> {
+        let conversation = self
+            .db
+            .get_conversation(conversation_id)
+            .await?
+            .context("conversation does not exist")?;
+        if conversation.archived_at.is_none() {
+            bail!("conversation must be archived before deletion");
+        }
+        if self
+            .db
+            .conversation_has_pending_turn(conversation_id)
+            .await?
+        {
+            bail!("conversation is busy");
+        }
+        if let Some(thread_id) = conversation.thread_id.as_deref() {
+            self.codex.delete_thread(thread_id).await?;
+        }
+        self.db
+            .delete_archived_conversation(conversation_id)
+            .await
+    }
+
     pub async fn enqueue_message(
         &self,
         conversation_id: &str,

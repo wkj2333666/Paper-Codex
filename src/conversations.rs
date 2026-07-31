@@ -191,6 +191,34 @@ impl Database {
         self.get_conversation(id).await
     }
 
+    pub async fn delete_archived_conversation(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool().begin().await?;
+        let archived_at: Option<Option<String>> =
+            sqlx::query_scalar("SELECT archived_at FROM conversations WHERE id=?")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let archived_at = archived_at.context("conversation does not exist")?;
+        if archived_at.is_none() {
+            bail!("conversation must be archived before deletion");
+        }
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM chat_messages WHERE conversation_id=? AND role='assistant' AND status IN ('queued','running','streaming')",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if pending > 0 {
+            bail!("conversation is busy");
+        }
+        sqlx::query("DELETE FROM conversations WHERE id=?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn update_conversation_settings(
         &self,
         id: &str,
