@@ -173,6 +173,33 @@ async fn conversation_crud_separates_active_and_archived_lists() {
 }
 
 #[tokio::test]
+async fn conversation_delete_requires_archive_and_cascades_messages() {
+    let db = test_db().await;
+    let conversation = db.create_conversation("待删除对话").await.unwrap();
+    let message = db
+        .append_chat_message(&conversation.id, "user", "临时问题", "completed")
+        .await
+        .unwrap();
+
+    let error = db
+        .delete_archived_conversation(&conversation.id)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("archived"));
+    assert!(db.get_conversation(&conversation.id).await.unwrap().is_some());
+
+    db.update_conversation(&conversation.id, None, Some(true))
+        .await
+        .unwrap();
+    db.delete_archived_conversation(&conversation.id)
+        .await
+        .unwrap();
+
+    assert!(db.get_conversation(&conversation.id).await.unwrap().is_none());
+    assert!(db.get_chat_message(&message.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn selected_skill_survives_queue_and_database_reload() {
     let db = test_db().await;
     let conversation = db.create_conversation("Skill persistence").await.unwrap();
