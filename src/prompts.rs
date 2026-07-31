@@ -291,7 +291,7 @@ pub fn conversation_question_prompt_with_research(
         r#"
 - 本轮没有可写入项目候选库的受控研究工具，但仍可使用运行环境实际提供的 Web 或 MCP 工具检索外部资料。
 - 只有真正调用了外部工具才能声称完成检索；若运行环境没有可用工具，应直接说明。
-- 外部资料使用可核验的 Markdown 链接，不得把它伪造成带 paper_id、revision 或页码的本地正式论文引用。
+- 外部资料只写进 answer_markdown，使用可核验的 Markdown 链接；candidate_citations 必须为空，不得把外部资料伪造成带 paper_id、revision 或页码的本地正式论文引用。
 "#
         .to_owned()
     };
@@ -359,6 +359,7 @@ mod tests {
         );
         assert!(prompt.contains("Web 或 MCP"));
         assert!(prompt.contains("Markdown 链接"));
+        assert!(prompt.contains("candidate_citations 必须为空"));
         assert!(!prompt.contains("只使用当前上下文中的论文"));
         assert!(!prompt.contains("不得声称执行了外部论文检索"));
     }

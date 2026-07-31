@@ -143,4 +143,34 @@ describe("conversation store", () => {
     expect(next.activeSettings?.model).toBe("gpt-5.6-sol")
     expect(next.lastEventId).toBe(8)
   })
+
+  it("clears stale details when a different conversation is activated", () => {
+    const streamed = reduceConversationEvent(
+      conversationInitialState,
+      event(8, "answer-completed", {
+        answer_markdown: "旧对话回答",
+        citations: [],
+      }),
+    )
+    const seed: ConversationState = {
+      ...streamed,
+      activeConversationId: "conversation-1",
+      activeSettings: {
+        model: "gpt-5.6-sol",
+        reasoning_effort: "high",
+        service_tier: null,
+      },
+    }
+
+    const next = conversationReducer(seed, {
+      type: "active",
+      id: "conversation-2",
+    })
+
+    expect(next.activeConversationId).toBe("conversation-2")
+    expect(next.activeSettings).toBeNull()
+    expect(next.messages).toEqual({})
+    expect(next.messageOrder).toEqual([])
+    expect(next.lastEventId).toBe(0)
+  })
 })
