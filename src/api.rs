@@ -1241,6 +1241,8 @@ struct CreateMessageRequest {
     content: String,
     research_mode: Option<ResearchMode>,
     skill: Option<crate::codex::CodexSkillSelection>,
+    #[serde(default)]
+    tool_preferences: Vec<crate::codex::CodexToolPreference>,
 }
 
 async fn create_conversation_message(
@@ -1257,6 +1259,7 @@ async fn create_conversation_message(
             &request.content,
             request.research_mode.unwrap_or(ResearchMode::Auto),
             request.skill,
+            request.tool_preferences,
         )
         .await
         .map_err(conversation_api_error)?;
@@ -1337,6 +1340,8 @@ fn conversation_api_error(error: anyhow::Error) -> ApiError {
         ApiError::conflict("当前对话正在生成回答")
     } else if message.contains("selected Skill") {
         ApiError::conflict("Skill 已变化，请刷新能力列表")
+    } else if message.contains("selected MCP tool") {
+        ApiError::conflict("MCP 工具已变化，请刷新能力列表")
     } else {
         ApiError::bad_request(message)
     }

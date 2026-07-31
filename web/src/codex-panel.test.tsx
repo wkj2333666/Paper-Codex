@@ -19,6 +19,7 @@ const message = (overrides: Partial<ChatMessage>): ChatMessage => ({
   status: "completed",
   error: null,
   research_mode: "auto",
+  tool_preferences: [],
   citations: [],
   candidate_citations: [],
   created_at: "2026-07-30T00:00:00Z",

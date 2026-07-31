@@ -248,8 +248,15 @@ pub struct CodexTurn {
     pub cwd: PathBuf,
     pub prompt: String,
     pub skill: Option<CodexSkillSelection>,
+    pub tool_preferences: Vec<CodexToolPreference>,
     pub output_schema: Option<Value>,
     pub settings: CodexRunSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexToolPreference {
+    pub server: String,
+    pub tool: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -639,6 +646,36 @@ impl CodexRuntime {
             .context("selected Skill is unavailable or changed")
     }
 
+    pub async fn validate_tool_preferences(
+        &self,
+        cwd: &Path,
+        preferences: &[CodexToolPreference],
+    ) -> Result<Vec<CodexToolPreference>> {
+        if preferences.is_empty() {
+            return Ok(Vec::new());
+        }
+        let integrations = self.integrations(cwd, true).await?;
+        let mut seen = std::collections::HashSet::new();
+        let mut validated = Vec::with_capacity(preferences.len());
+        for preference in preferences {
+            if preference.server.trim().is_empty() || preference.tool.trim().is_empty() {
+                bail!("selected MCP tool is unavailable or changed");
+            }
+            if !seen.insert((preference.server.as_str(), preference.tool.as_str())) {
+                bail!("selected MCP tool is unavailable or changed");
+            }
+            let available = integrations.mcp_servers.iter().any(|server| {
+                server.name == preference.server
+                    && server.tools.iter().any(|tool| tool.name == preference.tool)
+            });
+            if !available {
+                bail!("selected MCP tool is unavailable or changed");
+            }
+            validated.push(preference.clone());
+        }
+        Ok(validated)
+    }
+
     pub async fn infer_skill(
         &self,
         cwd: &Path,
@@ -788,7 +825,7 @@ impl CodexRuntime {
             "threadId":thread_id,
             "cwd":turn.cwd,
             "approvalPolicy":"never",
-            "input":turn_input(&turn.prompt, turn.skill.as_ref())
+            "input":turn_input(&turn.prompt, turn.skill.as_ref(), &turn.tool_preferences)
         });
         if let Some(schema) = turn.output_schema {
             params["outputSchema"] = schema;
@@ -1071,7 +1108,11 @@ fn parse_mcp_status_response(response: &Value) -> Result<Vec<CodexMcpServer>> {
     Ok(servers)
 }
 
-fn turn_input(prompt: &str, skill: Option<&CodexSkillSelection>) -> Value {
+fn turn_input(
+    prompt: &str,
+    skill: Option<&CodexSkillSelection>,
+    tool_preferences: &[CodexToolPreference],
+) -> Value {
     let text = skill
         .map(|skill| {
             let name = skill.name.rsplit(':').next().unwrap_or(&skill.name);
@@ -1089,6 +1130,19 @@ fn turn_input(prompt: &str, skill: Option<&CodexSkillSelection>) -> Value {
             "type":"skill",
             "name":skill.name,
             "path":skill.path,
+        }));
+    }
+    if !tool_preferences.is_empty() {
+        let tools = tool_preferences
+            .iter()
+            .map(|preference| format!("{}/{}", preference.server, preference.tool))
+            .collect::<Vec<_>>()
+            .join("、");
+        input.push(json!({
+            "type":"text",
+            "text":format!(
+                "本轮用户在界面中优先选择了以下 MCP 工具：{tools}。如与任务相关，请优先考虑调用；这只是偏好提示，不强制调用，也不要为了调用而调用。"
+            )
         }));
     }
     Value::Array(input)
@@ -1246,6 +1300,7 @@ mod integration_tests {
                 name: "paper-research".into(),
                 path: PathBuf::from("/workspace/.codex/skills/paper-research/SKILL.md"),
             }),
+            &[],
         );
 
         assert_eq!(

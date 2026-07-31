@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use paper_codex::codex::{
-    CodexCommand, CodexRunSettings, CodexRuntime, CodexSkillSelection, CodexTurn,
+    CodexCommand, CodexRunSettings, CodexRuntime, CodexSkillSelection, CodexToolPreference,
+    CodexTurn,
 };
 use paper_codex::codex_tools::{
     DynamicToolCall, DynamicToolDefinition, DynamicToolHandler, DynamicToolSession,
@@ -42,6 +43,7 @@ fn research_turn(prompt: &str) -> CodexTurn {
         cwd: tempfile::tempdir().unwrap().keep(),
         prompt: prompt.to_owned(),
         skill: None,
+        tool_preferences: Vec::new(),
         output_schema: None,
         settings: standard_settings(),
     }
@@ -185,6 +187,7 @@ async fn sends_selected_skill_as_a_structured_turn_input() {
                 cwd: root.path().to_path_buf(),
                 prompt: "skill-turn".into(),
                 skill: Some(selection),
+                tool_preferences: Vec::new(),
                 output_schema: None,
                 settings: standard_settings(),
             },
@@ -205,6 +208,46 @@ async fn sends_selected_skill_as_a_structured_turn_input() {
             .to_string_lossy()
             .as_ref()
     );
+}
+
+#[tokio::test]
+async fn sends_mcp_tool_preferences_as_internal_optional_guidance() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let events = next_test_turn_params(runtime.subscribe());
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+    runtime
+        .run_turn(
+            CodexTurn {
+                thread_id: None,
+                cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
+                prompt: "skill-turn".into(),
+                skill: None,
+                tool_preferences: vec![CodexToolPreference {
+                    server: "openalex".into(),
+                    tool: "works/search".into(),
+                }],
+                output_schema: None,
+                settings: standard_settings(),
+            },
+            cancel_rx,
+        )
+        .await
+        .unwrap();
+
+    let payload = tokio::time::timeout(std::time::Duration::from_secs(1), events)
+        .await
+        .unwrap();
+    assert_eq!(payload["input"][0]["text"], "skill-turn");
+    assert_eq!(payload["input"][1]["type"], "text");
+    assert!(payload["input"][1]["text"]
+        .as_str()
+        .unwrap()
+        .contains("openalex/works/search"));
+    assert!(payload["input"][1]["text"]
+        .as_str()
+        .unwrap()
+        .contains("不强制"));
 }
 
 #[tokio::test]
@@ -309,6 +352,7 @@ async fn initializes_starts_thread_and_streams_final_agent_text() {
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "summarize".into(),
                 skill: None,
+                tool_preferences: Vec::new(),
                 output_schema: None,
                 settings: standard_settings(),
             },
@@ -334,6 +378,7 @@ async fn maps_cancellation_to_turn_interrupt() {
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "cancel-me".into(),
                 skill: None,
+                tool_preferences: Vec::new(),
                 output_schema: None,
                 settings: standard_settings(),
             },
@@ -355,6 +400,7 @@ async fn preserves_turn_failure_details() {
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "fail-me".into(),
                 skill: None,
+                tool_preferences: Vec::new(),
                 output_schema: None,
                 settings: standard_settings(),
             },
@@ -396,6 +442,7 @@ async fn identifies_explicit_model_capacity_without_treating_other_failures_as_c
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "capacity-me".into(),
                 skill: None,
+                tool_preferences: Vec::new(),
                 output_schema: None,
                 settings: standard_settings(),
             },
@@ -452,6 +499,7 @@ async fn resumes_thread_and_parses_two_structured_answers() {
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "structured-turn-one".into(),
                 skill: None,
+                tool_preferences: Vec::new(),
                 output_schema: Some(conversation_answer_schema()),
                 settings: standard_settings(),
             },
@@ -466,6 +514,7 @@ async fn resumes_thread_and_parses_two_structured_answers() {
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "structured-turn-two".into(),
                 skill: None,
+                tool_preferences: Vec::new(),
                 output_schema: Some(conversation_answer_schema()),
                 settings: standard_settings(),
             },
@@ -494,6 +543,7 @@ async fn rejects_invalid_structured_answer_json() {
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "invalid-structured".into(),
                 skill: None,
+                tool_preferences: Vec::new(),
                 output_schema: Some(conversation_answer_schema()),
                 settings: standard_settings(),
             },
@@ -520,6 +570,7 @@ async fn sends_per_turn_model_effort_and_fast_service_tier() {
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "settings".into(),
                 skill: None,
+                tool_preferences: Vec::new(),
                 output_schema: None,
                 settings: params,
             },
@@ -547,6 +598,7 @@ async fn omits_service_tier_for_standard_speed() {
                 cwd: tempfile::tempdir().unwrap().path().to_path_buf(),
                 prompt: "standard-settings".into(),
                 skill: None,
+                tool_preferences: Vec::new(),
                 output_schema: None,
                 settings: standard_settings(),
             },
@@ -581,6 +633,7 @@ async fn rebuilds_project_local_runtime_tmp_before_each_turn() {
                 cwd: root.path().to_path_buf(),
                 prompt: "runtime-tmp".into(),
                 skill: None,
+                tool_preferences: Vec::new(),
                 output_schema: None,
                 settings: standard_settings(),
             },

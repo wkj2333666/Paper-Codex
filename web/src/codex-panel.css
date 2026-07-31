@@ -680,6 +680,7 @@
 }
 
 .codex-context-chip,
+.codex-tool-toggle,
 .codex-settings-popover > summary,
 .codex-research-toggle {
   display: flex;
@@ -720,6 +721,7 @@
 }
 
 .codex-settings-popover > summary svg,
+.codex-tool-toggle svg,
 .codex-research-toggle svg {
   width: 12px;
   height: 12px;
@@ -728,11 +730,216 @@
 
 .codex-settings-popover > summary:hover,
 .codex-settings-popover > summary:focus-visible,
+.codex-tool-toggle:hover,
+.codex-tool-toggle:focus-visible,
 .codex-research-toggle:hover,
 .codex-research-toggle:focus-visible {
   outline: none;
   color: var(--green);
   background: var(--green-soft);
+}
+
+.codex-tool-toggle {
+  border: 0;
+  cursor: pointer;
+}
+
+.codex-tool-toggle[aria-expanded="true"] {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.codex-tool-picker {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 22;
+  display: grid;
+  max-height: min(440px, 62vh);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--green) 28%, var(--line));
+  border-radius: 13px;
+  color: var(--ink);
+  background: var(--paper-raised, var(--paper));
+  box-shadow: 0 18px 48px rgba(20, 30, 24, .22);
+}
+
+.codex-tool-picker > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 11px 8px;
+}
+
+.codex-tool-picker > header > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+}
+
+.codex-tool-picker > header svg {
+  width: 14px;
+  height: 14px;
+  color: var(--green);
+}
+
+.codex-tool-picker > header > button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.codex-tool-picker > header > button:hover,
+.codex-tool-picker > header > button:focus-visible {
+  outline: none;
+  color: var(--ink);
+  background: var(--codex-subtle);
+}
+
+.codex-tool-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 9px 8px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+
+.codex-tool-search > svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--muted);
+}
+
+.codex-tool-search > input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 0;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+}
+
+.codex-tool-options {
+  min-height: 74px;
+  overflow: auto;
+  padding: 0 7px 8px;
+}
+
+.codex-tool-options > section {
+  display: grid;
+  gap: 2px;
+}
+
+.codex-tool-options h4 {
+  margin: 7px 7px 3px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.codex-tool-options button {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.codex-tool-options button:hover,
+.codex-tool-options button.active {
+  outline: none;
+  background: var(--green-soft);
+}
+
+.codex-tool-option-icon {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  flex: none;
+  border-radius: 7px;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green-soft) 76%, transparent);
+}
+
+.codex-tool-option-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.codex-tool-option-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.codex-tool-option-copy > span:first-child {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  gap: 6px;
+}
+
+.codex-tool-option-copy strong,
+.codex-tool-option-copy > span:nth-child(2),
+.codex-tool-option-copy code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-tool-option-copy strong {
+  font-size: 10px;
+}
+
+.codex-tool-option-copy small,
+.codex-tool-option-copy > span:nth-child(2),
+.codex-tool-option-copy code {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.codex-tool-option-copy code {
+  color: color-mix(in srgb, var(--green) 80%, var(--muted));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.codex-tool-picker-state {
+  display: flex;
+  min-height: 74px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.codex-tool-picker-state svg {
+  width: 13px;
+  height: 13px;
 }
 
 .codex-research-toggle {
@@ -934,9 +1141,18 @@
   font-size: 8px;
 }
 
-.codex-selected-skill {
+.codex-tool-chips {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  padding-bottom: 1px;
+}
+
+.codex-selected-skill,
+.codex-selected-tool {
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: 7px;
   padding: 6px 7px;
   border: 1px solid color-mix(in srgb, var(--green) 30%, var(--line));
@@ -945,34 +1161,39 @@
   background: color-mix(in srgb, var(--green-soft) 72%, transparent);
 }
 
-.codex-selected-skill > svg {
+.codex-selected-skill > svg,
+.codex-selected-tool > svg {
   width: 14px;
   height: 14px;
   flex: none;
 }
 
-.codex-selected-skill > span {
+.codex-selected-skill > span,
+.codex-selected-tool > span {
   display: flex;
   align-items: baseline;
   min-width: 0;
   gap: 5px;
 }
 
-.codex-selected-skill small {
+.codex-selected-skill small,
+.codex-selected-tool small {
   color: var(--muted);
   font-size: 8px;
   letter-spacing: .06em;
   text-transform: uppercase;
 }
 
-.codex-selected-skill strong {
+.codex-selected-skill strong,
+.codex-selected-tool strong {
   overflow: hidden;
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.codex-selected-skill button {
+.codex-selected-skill button,
+.codex-selected-tool button {
   display: grid;
   place-items: center;
   width: 22px;
@@ -986,13 +1207,16 @@
 }
 
 .codex-selected-skill button:hover,
-.codex-selected-skill button:focus-visible {
+.codex-selected-skill button:focus-visible,
+.codex-selected-tool button:hover,
+.codex-selected-tool button:focus-visible {
   outline: none;
   color: var(--ink);
   background: var(--codex-subtle);
 }
 
-.codex-selected-skill button svg {
+.codex-selected-skill button svg,
+.codex-selected-tool button svg {
   width: 12px;
   height: 12px;
 }

@@ -21,7 +21,7 @@ export type ConversationAction=
   |{type:"drawer";open:boolean;view?:"history"|"activity"}
   |{type:"event";event:ConversationStreamEvent}
 
-function pendingMessage(id:string,conversationId:string):ChatMessage{return {id,conversation_id:conversationId,role:"assistant",content:"",live_content:"",turn_id:null,status:"streaming",error:null,research_mode:"auto",citations:[],candidate_citations:[],created_at:"",updated_at:""}}
+function pendingMessage(id:string,conversationId:string):ChatMessage{return {id,conversation_id:conversationId,role:"assistant",content:"",live_content:"",turn_id:null,status:"streaming",error:null,research_mode:"auto",tool_preferences:[],citations:[],candidate_citations:[],created_at:"",updated_at:""}}
 
 const researchProgressPhases:ResearchProgressPhase[]=["research-planning","research-searching","research-deduplicating","research-inspecting-abstract","research-fetching-fulltext","research-saving-candidates","research-partial"]
 function progressPhase(value:unknown):ChatMessage["progress_phase"]{return value==="reading"||value==="reasoning"||value==="tool"||value==="answering"||researchProgressPhases.includes(value as ResearchProgressPhase)?value as ChatMessage["progress_phase"]:undefined}
@@ -41,7 +41,7 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
   else if(event.type==="answer-cancelled")next={...current,status:"cancelled",live_content:undefined,progress_phase:undefined,progress_label:undefined}
   else if(event.type==="message-created"){
     const skill=event.payload.skill as {name?:unknown}|null|undefined
-    next={...current,role:(event.payload.role as ChatMessage["role"])??"user",content:String(event.payload.content??""),skill_name:typeof skill?.name==="string"?skill.name:null,status:"completed"}
+    next={...current,role:(event.payload.role as ChatMessage["role"])??"user",content:String(event.payload.content??""),skill_name:typeof skill?.name==="string"?skill.name:null,tool_preferences:(event.payload.tool_preferences as ChatMessage["tool_preferences"]|undefined)??[],status:"completed"}
   }
   const exists=state.messageOrder.includes(messageId)
   return {...state,lastEventId:event.id,messages:{...state.messages,[messageId]:next},messageOrder:exists?state.messageOrder:[...state.messageOrder,messageId]}

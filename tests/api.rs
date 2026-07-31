@@ -420,7 +420,7 @@ async fn conversation_api_exposes_and_persists_codex_run_settings() {
 }
 
 #[tokio::test]
-async fn codex_integrations_require_auth_and_selected_skill_is_persisted() {
+async fn codex_integrations_require_auth_and_selected_capabilities_are_persisted() {
     let (app, db) = conversation_test_app().await;
     let unauthorized = app
         .clone()
@@ -475,6 +475,27 @@ async fn codex_integrations_require_auth_and_selected_skill_is_persisted() {
         .unwrap()
         .to_owned();
     let selected_skill = integrations["skills"][0].clone();
+    let stale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/conversations/{conversation_id}/messages"))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "content":"使用不存在的工具",
+                        "tool_preferences":[{"server":"openalex","tool":"works/missing"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+
     let response = app
         .clone()
         .oneshot(
@@ -489,7 +510,8 @@ async fn codex_integrations_require_auth_and_selected_skill_is_persisted() {
                         "skill":{
                             "name":selected_skill["name"],
                             "path":selected_skill["path"]
-                        }
+                        },
+                        "tool_preferences":[{"server":"openalex","tool":"works/search"}]
                     })
                     .to_string(),
                 ))
@@ -508,6 +530,9 @@ async fn codex_integrations_require_auth_and_selected_skill_is_persisted() {
         .skill_path
         .as_deref()
         .is_some_and(|path| path.ends_with("/.codex/skills/paper-research/SKILL.md")));
+    assert_eq!(messages[0].tool_preferences.len(), 1);
+    assert_eq!(messages[0].tool_preferences[0].server, "openalex");
+    assert_eq!(messages[0].tool_preferences[0].tool, "works/search");
 }
 
 #[tokio::test]

@@ -10,7 +10,7 @@ const citation = (id: string, paper_id = "p1", page = 1): MessageCitation => ({
 
 const message = (id: string, role: ChatMessage["role"], citations: MessageCitation[]): ChatMessage => ({
   id, conversation_id: "c1", role, content: id, turn_id: null, status: "completed",
-  error: null, research_mode: "auto", citations, candidate_citations: [], created_at: id, updated_at: id,
+  error: null, research_mode: "auto", tool_preferences: [], citations, candidate_citations: [], created_at: id, updated_at: id,
 })
 
 describe("citation overlay selectors", () => {

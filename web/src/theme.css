@@ -170,6 +170,23 @@
   box-shadow: 0 16px 42px rgba(0, 0, 0, .42);
 }
 
+[data-theme="dark"] .codex-tool-picker {
+  background: #202722;
+  border-color: #435d4e;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .48);
+}
+
+[data-theme="dark"] .codex-tool-search {
+  background: #171b19;
+  border-color: var(--line);
+}
+
+[data-theme="dark"] .codex-tool-options button.active,
+[data-theme="dark"] .codex-tool-options button:hover,
+[data-theme="dark"] .codex-tool-option-icon {
+  background: var(--green-soft);
+}
+
 [data-theme="dark"] .codex-composer {
   background: #202722;
   border-color: #435047;

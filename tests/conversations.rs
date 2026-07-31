@@ -1,6 +1,6 @@
 use paper_codex::{
-    codex::CodexSkillSelection,
-    conversations::{AnnotationAnchor, ConversationScopeInput},
+    codex::{CodexSkillSelection, CodexToolPreference},
+    conversations::{AnnotationAnchor, ChatMessageOptions, ConversationScopeInput},
     db::Database,
     prompts::{ConversationAnswer, ConversationCitation},
 };
@@ -210,6 +210,44 @@ async fn selected_skill_survives_queue_and_database_reload() {
     );
     assert_eq!(previous.skill_name, reloaded.skill_name);
     assert_eq!(previous.skill_path, reloaded.skill_path);
+}
+
+#[tokio::test]
+async fn selected_mcp_tools_survive_queue_and_database_reload() {
+    let db = test_db().await;
+    let conversation = db.create_conversation("Tool persistence").await.unwrap();
+    let preferences = vec![CodexToolPreference {
+        server: "openalex".into(),
+        tool: "works/search".into(),
+    }];
+    let user = db
+        .append_chat_message_with_options(
+            &conversation.id,
+            "user",
+            "查找相关工作",
+            "completed",
+            ChatMessageOptions {
+                research_mode: paper_codex::research::ResearchMode::Auto,
+                skill: None,
+                tool_preferences: &preferences,
+            },
+        )
+        .await
+        .unwrap();
+    let assistant = db
+        .append_chat_message(&conversation.id, "assistant", "", "queued")
+        .await
+        .unwrap();
+
+    let reloaded = db.get_chat_message(&user.id).await.unwrap().unwrap();
+    let previous = db
+        .previous_user_message(&assistant.id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reloaded.tool_preferences, preferences);
+    assert_eq!(previous.tool_preferences, preferences);
 }
 
 #[tokio::test]
