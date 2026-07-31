@@ -1,5 +1,18 @@
 use anyhow::{bail, Context, Result};
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{
+    env,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
+
+fn resolve_project_path(root: &Path, configured: Option<PathBuf>, default: &str) -> PathBuf {
+    let path = configured.unwrap_or_else(|| PathBuf::from(default));
+    if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -67,7 +80,11 @@ impl Config {
             codex_bin: env::var_os("PAPER_CODEX_CODEX_BIN")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("codex")),
-            codex_home: env::var_os("PAPER_CODEX_CODEX_HOME").map(PathBuf::from),
+            codex_home: Some(resolve_project_path(
+                &root,
+                env::var_os("PAPER_CODEX_CODEX_HOME").map(PathBuf::from),
+                ".runtime/codex-home",
+            )),
             runtime_tmp: env::var_os("PAPER_CODEX_RUNTIME_TMP")
                 .map(PathBuf::from)
                 .map(|path| {

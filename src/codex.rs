@@ -213,6 +213,9 @@ impl CodexCommand {
     }
 
     async fn prepare_runtime_tmp(&self) -> Result<()> {
+        if let Some(codex_home) = &self.codex_home {
+            create_private_dir(codex_home).await?;
+        }
         let Some(runtime_tmp) = &self.runtime_tmp else {
             return Ok(());
         };
