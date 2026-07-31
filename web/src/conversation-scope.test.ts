@@ -11,7 +11,7 @@ describe("conversation scope", () => {
       scope("paper", "paper:one"),
     ])).toEqual({ kind: "paper", id: "paper:one", projectId: "project-one" })
     expect(selectionForScopes([scope("paper", "paper:one")])).toEqual({ kind: "paper", id: "paper:one" })
-    expect(selectionForScopes([scope("project", "project-one")])).toEqual({ kind: "project", id: "project-one" })
+    expect(selectionForScopes([scope("project", "project-one")])).toEqual({ kind: "project", id: "project-one", projectId: "project-one" })
     expect(selectionForScopes([scope("global", null)])).toEqual({ kind: "workbench" })
     expect(selectionForScopes([scope("paper", null)])).toBeNull()
   })

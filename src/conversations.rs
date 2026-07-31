@@ -222,8 +222,13 @@ impl Database {
             }
             unique.insert((scope.scope_type.clone(), scope.scope_id.clone()));
         }
-        if unique.iter().any(|(kind, _)| kind == "global") && unique.len() > 1 {
-            bail!("global scope cannot be combined with paper or project scopes");
+        let project_count = unique.iter().filter(|(kind, _)| kind == "project").count();
+        let paper_count = unique.iter().filter(|(kind, _)| kind == "paper").count();
+        if project_count != 1 {
+            bail!("conversation context must contain exactly one project");
+        }
+        if paper_count > 1 || unique.iter().any(|(kind, _)| kind == "global") {
+            bail!("conversation context may contain at most one open paper and no global scope");
         }
 
         let mut tx = self.pool().begin().await?;
@@ -688,10 +693,12 @@ mod tests {
         assert_eq!(scopes.len(), 2);
         assert!(scopes
             .iter()
-            .any(|scope| scope.scope_type == "project" && scope.scope_id.as_deref() == Some(&project)));
+            .any(|scope| scope.scope_type == "project"
+                && scope.scope_id.as_deref() == Some(&project)));
         assert!(scopes
             .iter()
-            .any(|scope| scope.scope_type == "paper" && scope.scope_id.as_deref() == Some("paper:one")));
+            .any(|scope| scope.scope_type == "paper"
+                && scope.scope_id.as_deref() == Some("paper:one")));
 
         let error = db
             .replace_conversation_scopes(

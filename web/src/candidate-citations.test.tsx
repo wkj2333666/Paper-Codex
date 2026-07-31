@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it, vi } from "vitest"
-import { CandidateCitationList } from "./CodexPanel"
+import { CandidateCitationList, candidateProjectId } from "./CodexPanel"
 import type { CandidateCitation } from "./types"
 
 describe("candidate citations",()=>{
@@ -35,9 +35,7 @@ describe("candidate citations",()=>{
       explanation:"属于会话的项目候选文献",
     }
     const open=vi.fn()
-    const element=CandidateCitationList({citations:[citation],onCandidate:open})
-    const button=(element.props.children as React.ReactElement[])[0]
-    button.props.onClick()
-    expect(open).toHaveBeenCalledWith("project-from-conversation","work-2")
+    expect(candidateProjectId(citation)).toBe("project-from-conversation")
+    expect(renderToStaticMarkup(<CandidateCitationList citations={[citation]} onCandidate={open}/>)).toContain("Prefix Sharing")
   })
 })

@@ -220,28 +220,14 @@ impl ProjectResearchToolHandler {
             .database()
             .conversation_scopes(&self.conversation_id)
             .await?;
-        let allowed = if scopes.len() != 1 {
-            false
-        } else if scopes[0].scope_type == "project" {
-            scopes[0].scope_id.as_deref() == Some(self.project_id.as_str())
-        } else if scopes[0].scope_type == "paper" {
-            match scopes[0].scope_id.as_deref() {
-                Some(paper_id) => {
-                    let projects = self
-                        .research
-                        .store()
-                        .database()
-                        .paper_project_ids(paper_id)
-                        .await?;
-                    projects.len() == 1 && projects[0] == self.project_id
-                }
-                None => false,
-            }
-        } else {
-            false
-        };
+        let projects = scopes
+            .iter()
+            .filter(|scope| scope.scope_type == "project")
+            .filter_map(|scope| scope.scope_id.as_deref())
+            .collect::<Vec<_>>();
+        let allowed = projects.len() == 1 && projects[0] == self.project_id;
         if !allowed {
-            bail!("研究工具只允许用于唯一且匹配的项目作用域，或唯一归属于该项目的论文作用域");
+            bail!("研究工具只允许用于唯一且匹配的项目作用域");
         }
         Ok(())
     }

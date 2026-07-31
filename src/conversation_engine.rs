@@ -713,9 +713,12 @@ impl ConversationEngine {
 }
 
 fn exact_project_id(scopes: &[ConversationScope]) -> Option<String> {
-    (scopes.len() == 1 && scopes[0].scope_type == "project")
-        .then(|| scopes[0].scope_id.clone())
-        .flatten()
+    let projects = scopes
+        .iter()
+        .filter(|scope| scope.scope_type == "project")
+        .filter_map(|scope| scope.scope_id.as_ref())
+        .collect::<Vec<_>>();
+    (projects.len() == 1).then(|| (*projects[0]).clone())
 }
 
 async fn research_project_id(
@@ -725,7 +728,10 @@ async fn research_project_id(
     if let Some(project_id) = exact_project_id(scopes) {
         return Ok(Some(project_id));
     }
-    if scopes.len() != 1 || scopes[0].scope_type != "paper" {
+    if scopes.iter().any(|scope| scope.scope_type == "project")
+        || scopes.len() != 1
+        || scopes[0].scope_type != "paper"
+    {
         return Ok(None);
     }
     let Some(paper_id) = scopes[0].scope_id.as_deref() else {
@@ -800,8 +806,8 @@ mod tests {
                 &db,
                 &[scope("project", &second), scope("paper", "paper:many")]
             )
-                .await
-                .unwrap(),
+            .await
+            .unwrap(),
             Some(second)
         );
         assert_eq!(
@@ -823,5 +829,4 @@ mod tests {
             None
         );
     }
-
 }

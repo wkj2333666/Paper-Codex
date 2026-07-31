@@ -254,10 +254,12 @@ impl ConversationContextBuilder {
 }
 
 fn exact_project_scope(scopes: &[ConversationScope]) -> Option<&str> {
-    if scopes.len() != 1 || scopes[0].scope_type != "project" {
-        return None;
-    }
-    scopes[0].scope_id.as_deref()
+    let mut projects = scopes
+        .iter()
+        .filter(|scope| scope.scope_type == "project")
+        .filter_map(|scope| scope.scope_id.as_deref());
+    let project = projects.next()?;
+    projects.next().is_none().then_some(project)
 }
 
 fn candidate_status_name(status: CandidateStatus) -> &'static str {

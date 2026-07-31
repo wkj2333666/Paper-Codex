@@ -17,6 +17,7 @@ import { MobilePanelRails, PanelCollapseButton, PanelRail } from "./PanelControl
 import { CodexPanel } from "./CodexPanel"
 import { citationsForPaper } from "./citation-overlay"
 import type { CodexSelection } from "./conversation-scope"
+import { projectIdForSelection, withProjectContext } from "./codex-context"
 import { ResizableDivider } from "./ResizableDivider"
 import { ThemeToggle } from "./ThemeToggle"
 import { ProjectResearch } from "./ProjectResearch"
@@ -81,6 +82,9 @@ export default function App(){
     catch(error){if(error instanceof ApiError&&error.status===401)setAuthenticated(false);else setError(error instanceof Error?error.message:"加载失败")}
   },[])
   useEffect(()=>{if(authenticated)void load()},[authenticated,load])
+  const select=useCallback((next:Selection)=>{
+    setSelection(current=>dashboard?withProjectContext(next,projectIdForSelection(current),dashboard):next)
+  },[dashboard])
   useEffect(()=>{document.documentElement.dataset.theme=resolvedTheme;document.documentElement.style.colorScheme=resolvedTheme},[resolvedTheme])
   useEffect(()=>{writeThemePreference(themePreference)},[themePreference])
   useEffect(()=>{
@@ -97,7 +101,15 @@ export default function App(){
   },[authenticated,load])
   useEffect(()=>savePanelLayout(panels),[panels])
   useEffect(()=>{try{localStorage.setItem("paper-codex.selection",JSON.stringify(selection))}catch{}},[selection])
-  useEffect(()=>{if(!dashboard)return;if(selection.kind==="paper"&&selection.id&&!dashboard.papers.some(paper=>paper.id===selection.id))setSelection({kind:"workbench"})},[dashboard,selection.kind,selection.id])
+  useEffect(()=>{
+    if(!dashboard)return
+    setSelection(current=>{
+      const next=current.kind==="paper"&&current.id&&!dashboard.papers.some(paper=>paper.id===current.id)
+        ?{kind:"workbench"} as Selection
+        :current
+      return withProjectContext(next,projectIdForSelection(current),dashboard)
+    })
+  },[dashboard])
   useEffect(()=>{
     const media=window.matchMedia("(max-width: 1050px)")
     const update=()=>{setIsNarrow(media.matches);if(!media.matches)setActiveDrawer(null)}
@@ -130,11 +142,11 @@ export default function App(){
   if(!dashboard)return <div className="boot"><LoaderCircle className="spin"/>正在打开研究工作区…</div>
   const logout=()=>{session.clear();setAuthenticated(false)}
   const graphMode=selection.kind==="graph"
+  const codexProjectId=projectIdForSelection(selection)
+  const codexProjectLabel=dashboard.projects.find(project=>project.id===codexProjectId)?.name??"未选择项目"
   const codexScopeLabel=selection.kind==="paper"&&selection.id
-    ?dashboard.papers.find(paper=>paper.id===selection.id)?.title??selection.id
-    :selection.kind==="project"&&selection.id
-      ?dashboard.projects.find(project=>project.id===selection.id)?.name??selection.id
-      :"全部论文"
+    ?`${codexProjectLabel} · ${dashboard.papers.find(paper=>paper.id===selection.id)?.title??selection.id}`
+    :codexProjectLabel
   const shellStyle={
     "--sidebar-width":`${panels.widths.sidebar}px`,
     "--paper-graph-width":`${panels.widths.paperGraph}px`,
@@ -145,20 +157,20 @@ export default function App(){
   const shellClass=["app-shell",graphMode&&"graph-mode",!isNarrow&&!panels.sidebarOpen&&"sidebar-collapsed",!isNarrow&&!panels.codexOpen&&"codex-collapsed",activeDrawer&&"drawer-active"].filter(Boolean).join(" ")
   return <div className={shellClass} style={shellStyle}>
     {(isNarrow||panels.sidebarOpen)
-      ?<Sidebar dashboard={dashboard} selection={selection} select={setSelection} refresh={load} logout={logout} drawerOpen={activeDrawer==="sidebar"} onCollapse={()=>collapsePanel("sidebar")} themePreference={themePreference} resolvedTheme={resolvedTheme} onCycleTheme={cycleTheme}/>
+      ?<Sidebar dashboard={dashboard} selection={selection} select={select} refresh={load} logout={logout} drawerOpen={activeDrawer==="sidebar"} onCollapse={()=>collapsePanel("sidebar")} themePreference={themePreference} resolvedTheme={resolvedTheme} onCycleTheme={cycleTheme}/>
       :<PanelRail panel="sidebar" label="文件树" side="left" onExpand={trigger=>openPanel("sidebar",trigger)}/>}
     {!isNarrow&&panels.sidebarOpen&&
       <ResizableDivider panel="sidebar" value={panels.widths.sidebar} min={PANEL_LIMITS.sidebar[0]} max={PANEL_LIMITS.sidebar[1]} onResize={delta=>resize("sidebar",delta)} onReset={()=>reset("sidebar")}/>
     }
     <main className="main-pane">
       {error&&<div className="error-banner"><CircleAlert size={17}/>{error}</div>}
-      <MainView dashboard={dashboard} selection={selection} select={setSelection} refresh={load} citationOverlay={citationOverlay} citationFocus={citationFocus} candidateFocus={candidateFocus} onCandidateFocusHandled={()=>setCandidateFocus(null)} paperGraphOpen={panels.paperGraphOpen} paperGraphWidth={panels.widths.paperGraph} isNarrow={isNarrow} activeDrawer={activeDrawer} openPanel={openPanel} collapsePanel={collapsePanel} resizePanel={resize} resetPanel={reset} theme={resolvedTheme}/>
+      <MainView dashboard={dashboard} selection={selection} select={select} refresh={load} citationOverlay={citationOverlay} citationFocus={citationFocus} candidateFocus={candidateFocus} onCandidateFocusHandled={()=>setCandidateFocus(null)} paperGraphOpen={panels.paperGraphOpen} paperGraphWidth={panels.widths.paperGraph} isNarrow={isNarrow} activeDrawer={activeDrawer} openPanel={openPanel} collapsePanel={collapsePanel} resizePanel={resize} resetPanel={reset} theme={resolvedTheme}/>
     </main>
     {!graphMode&&!isNarrow&&panels.codexOpen&&
       <ResizableDivider panel="codex" value={panels.widths.codex} min={PANEL_LIMITS.codex[0]} max={PANEL_LIMITS.codex[1]} onResize={delta=>resize("codex",delta)} onReset={()=>reset("codex")}/>
     }
     {!graphMode&&((isNarrow||panels.codexOpen)
-      ?<CodexPanel selection={selection} scopeLabel={codexScopeLabel} activities={stream.activities} drawerOpen={activeDrawer==="codex"} onCollapse={()=>collapsePanel("codex")} onCitation={citation=>{setCitationFocus(citation);setSelection({kind:"paper",id:citation.paper_id})}} onCandidate={(projectId,workId)=>{setCandidateFocus({projectId,workId});setSelection({kind:"project",id:projectId})}} onCitations={updateCitationOverlay} onSelect={setSelection}/>
+      ?<CodexPanel selection={selection} scopeLabel={codexScopeLabel} activities={stream.activities} drawerOpen={activeDrawer==="codex"} onCollapse={()=>collapsePanel("codex")} onCitation={citation=>{setCitationFocus(citation);select({kind:"paper",id:citation.paper_id,projectId:codexProjectId})}} onCandidate={(projectId,workId)=>{setCandidateFocus({projectId,workId});select({kind:"project",id:projectId})}} onCitations={updateCitationOverlay} onSelect={select}/>
       :<PanelRail panel="codex" label="Codex" side="right" onExpand={trigger=>openPanel("codex",trigger)}/>)}
     {isNarrow&&<MobilePanelRails showPaperGraph={selection.kind==="paper"} showCodex={!graphMode} onOpen={openPanel}/>}
     {activeDrawer&&<button type="button" className="drawer-backdrop" aria-label="关闭面板" onClick={closeDrawer}/>}
