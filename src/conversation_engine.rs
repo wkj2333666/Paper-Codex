@@ -346,9 +346,7 @@ impl ConversationEngine {
         if let Some(thread_id) = conversation.thread_id.as_deref() {
             self.codex.delete_thread(thread_id).await?;
         }
-        self.db
-            .delete_archived_conversation(conversation_id)
-            .await
+        self.db.delete_archived_conversation(conversation_id).await
     }
 
     pub async fn enqueue_message(
