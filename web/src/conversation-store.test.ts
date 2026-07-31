@@ -107,4 +107,70 @@ describe("conversation store", () => {
     expect(next.activeConversationId).toBe(seed.activeConversationId)
     expect(next.drawerOpen).toBe(true)
   })
+
+  it("keeps the displayed conversation when the same conversation is activated again", () => {
+    const streamed = reduceConversationEvent(
+      conversationInitialState,
+      event(8, "answer-completed", {
+        answer_markdown: "当前可见回答",
+        citations: [],
+      }),
+    )
+    const seed: ConversationState = {
+      ...streamed,
+      activeConversationId: "conversation-1",
+      activeSettings: {
+        model: "gpt-5.6-sol",
+        reasoning_effort: "high",
+        service_tier: "fast",
+      },
+      scopes: [{
+        conversation_id: "conversation-1",
+        scope_type: "paper",
+        scope_id: "arxiv:2402.05099",
+        added_at: "2026-01-01T00:00:00Z",
+      }],
+      drawerOpen: true,
+    }
+
+    const next = conversationReducer(seed, {
+      type: "active",
+      id: "conversation-1",
+    })
+
+    expect(next).toBe(seed)
+    expect(next.messages.a.content).toBe("当前可见回答")
+    expect(next.activeSettings?.model).toBe("gpt-5.6-sol")
+    expect(next.lastEventId).toBe(8)
+  })
+
+  it("clears stale details when a different conversation is activated", () => {
+    const streamed = reduceConversationEvent(
+      conversationInitialState,
+      event(8, "answer-completed", {
+        answer_markdown: "旧对话回答",
+        citations: [],
+      }),
+    )
+    const seed: ConversationState = {
+      ...streamed,
+      activeConversationId: "conversation-1",
+      activeSettings: {
+        model: "gpt-5.6-sol",
+        reasoning_effort: "high",
+        service_tier: null,
+      },
+    }
+
+    const next = conversationReducer(seed, {
+      type: "active",
+      id: "conversation-2",
+    })
+
+    expect(next.activeConversationId).toBe("conversation-2")
+    expect(next.activeSettings).toBeNull()
+    expect(next.messages).toEqual({})
+    expect(next.messageOrder).toEqual([])
+    expect(next.lastEventId).toBe(0)
+  })
 })

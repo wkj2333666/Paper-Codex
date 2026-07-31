@@ -49,7 +49,10 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
 
 export function conversationReducer(state:ConversationState,action:ConversationAction):ConversationState{
   if(action.type==="conversations")return {...state,conversations:action.items}
-  if(action.type==="active")return {...state,activeConversationId:action.id,activeSettings:null,scopes:[],messages:{},messageOrder:[],lastEventId:0,drawerOpen:false}
+  if(action.type==="active"){
+    if(action.id===state.activeConversationId)return state
+    return {...state,activeConversationId:action.id,activeSettings:null,scopes:[],messages:{},messageOrder:[],lastEventId:0,drawerOpen:false}
+  }
   if(action.type==="drawer")return {...state,drawerOpen:action.open,drawerView:action.view??state.drawerView}
   if(action.type==="event")return reduceConversationEvent(state,action.event)
   const messages=Object.fromEntries(action.detail.messages.map(message=>[message.id,message]))

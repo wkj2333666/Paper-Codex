@@ -296,8 +296,8 @@ impl ConversationEngine {
             bail!("conversation has no context scope");
         }
         if research_mode == ResearchMode::Explicit {
-            if exact_project_id(&scopes).is_none() {
-                bail!("显式文献检索需要唯一的项目作用域");
+            if research_project_id(&self.db, &scopes).await?.is_none() {
+                bail!("显式文献检索需要唯一的项目作用域，或唯一归属于一个项目的论文作用域");
             }
             if self.research.is_none() {
                 bail!("项目文献检索服务不可用");
@@ -481,7 +481,7 @@ impl ConversationEngine {
         )
         .await?;
         let (turn_event_tx, mut turn_event_rx) = mpsc::unbounded_channel();
-        let project_id = exact_project_id(&scopes);
+        let project_id = research_project_id(&self.db, &scopes).await?;
         let research_handler = match (project_id.as_deref(), self.research.as_ref()) {
             (Some(project_id), Some(research))
                 if self.codex.capabilities().supports_dynamic_tools =>
@@ -718,6 +718,23 @@ fn exact_project_id(scopes: &[ConversationScope]) -> Option<String> {
         .flatten()
 }
 
+async fn research_project_id(
+    db: &Database,
+    scopes: &[ConversationScope],
+) -> Result<Option<String>> {
+    if let Some(project_id) = exact_project_id(scopes) {
+        return Ok(Some(project_id));
+    }
+    if scopes.len() != 1 || scopes[0].scope_type != "paper" {
+        return Ok(None);
+    }
+    let Some(paper_id) = scopes[0].scope_id.as_deref() else {
+        return Ok(None);
+    };
+    let project_ids = db.paper_project_ids(paper_id).await?;
+    Ok((project_ids.len() == 1).then(|| project_ids[0].clone()))
+}
+
 fn research_progress_label(kind: &str) -> Option<&'static str> {
     match kind {
         "research-planning" => Some("Codex 正在规划论文检索…"),
@@ -733,7 +750,11 @@ fn research_progress_label(kind: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_json_string_prefix, should_generate_conversation_title, AnswerPreview};
+    use super::{
+        extract_json_string_prefix, research_project_id, should_generate_conversation_title,
+        AnswerPreview,
+    };
+    use crate::{conversations::ConversationScope, db::Database};
 
     #[test]
     fn only_placeholder_titles_are_generated() {
@@ -752,5 +773,51 @@ mod tests {
         assert_eq!(preview.push(r#"回答","#), Some("回答".into()));
         assert_eq!(preview.visible, "逐步回答");
         assert_eq!(extract_json_string_prefix(&preview.raw, "citations"), None);
+    }
+
+    #[tokio::test]
+    async fn research_project_resolves_only_an_unambiguous_scope() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let first = db.create_project("first", "第一个项目", "").await.unwrap();
+        let second = db.create_project("second", "第二个项目", "").await.unwrap();
+        db.insert_paper("paper:one", "唯一归属论文").await.unwrap();
+        db.insert_paper("paper:many", "多重归属论文").await.unwrap();
+        db.add_paper_to_project("paper:one", &first).await.unwrap();
+        db.add_paper_to_project("paper:many", &first).await.unwrap();
+        db.add_paper_to_project("paper:many", &second)
+            .await
+            .unwrap();
+
+        let scope = |scope_type: &str, scope_id: &str| ConversationScope {
+            conversation_id: "conversation".into(),
+            scope_type: scope_type.into(),
+            scope_id: Some(scope_id.into()),
+            added_at: String::new(),
+        };
+
+        assert_eq!(
+            research_project_id(&db, &[scope("project", &second)])
+                .await
+                .unwrap(),
+            Some(second)
+        );
+        assert_eq!(
+            research_project_id(&db, &[scope("paper", "paper:one")])
+                .await
+                .unwrap(),
+            Some(first)
+        );
+        assert_eq!(
+            research_project_id(&db, &[scope("paper", "paper:many")])
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            research_project_id(&db, &[scope("paper", "paper:none")])
+                .await
+                .unwrap(),
+            None
+        );
     }
 }
