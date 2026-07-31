@@ -65,7 +65,8 @@ function installDetail(state:ConversationState,detail:ConversationDetail):Conver
   const messages=Object.fromEntries(detail.messages.map(message=>[message.id,message]))
   const {model,reasoning_effort,service_tier}=detail.conversation
   const activeSettings=model&&reasoning_effort?{model,reasoning_effort,service_tier}:null
-  return {...state,activeConversationId:detail.conversation.id,activeSettings,scopes:detail.scopes,messages,messageOrder:detail.messages.map(message=>message.id)}
+  const lastEventId=state.activeConversationId===detail.conversation.id?state.lastEventId:0
+  return {...state,activeConversationId:detail.conversation.id,activeSettings,scopes:detail.scopes,messages,messageOrder:detail.messages.map(message=>message.id),lastEventId}
 }
 
 export function conversationReducer(state:ConversationState,action:ConversationAction):ConversationState{
