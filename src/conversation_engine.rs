@@ -1,7 +1,7 @@
 use crate::{
     codex::{
-        CodexCapabilities, CodexEvent, CodexIntegrations, CodexRunSettings, CodexRuntime,
-        CodexSkillSelection, CodexToolPreference, CodexTurn,
+        CodexCapabilities, CodexEvent, CodexGoal, CodexGoalRequest, CodexIntegrations,
+        CodexRunSettings, CodexRuntime, CodexSkillSelection, CodexToolPreference, CodexTurn,
     },
     conversation_context::ConversationContextBuilder,
     conversations::{
@@ -247,6 +247,68 @@ impl ConversationEngine {
         self.codex
             .integrations(self.contexts.workspace_root(), force_reload)
             .await
+    }
+
+    pub async fn conversation_goal(&self, conversation_id: &str) -> Result<Option<CodexGoal>> {
+        let conversation = self
+            .db
+            .get_conversation(conversation_id)
+            .await?
+            .context("conversation does not exist")?;
+        let Some(thread_id) = conversation.thread_id.as_deref() else {
+            return Ok(None);
+        };
+        self.codex.get_goal(thread_id).await
+    }
+
+    pub async fn set_conversation_goal(
+        &self,
+        conversation_id: &str,
+        request: CodexGoalRequest,
+    ) -> Result<CodexGoal> {
+        let conversation = self
+            .db
+            .get_conversation(conversation_id)
+            .await?
+            .context("conversation does not exist")?;
+        let thread_id = match conversation.thread_id {
+            Some(thread_id) => thread_id,
+            None => {
+                let thread_id = self.codex.create_thread(self.contexts.workspace_root()).await?;
+                self.db
+                    .set_conversation_runtime(conversation_id, Some(&thread_id), "idle")
+                    .await?;
+                thread_id
+            }
+        };
+        let goal = self.codex.set_goal(&thread_id, request).await?;
+        self.emit(
+            conversation_id,
+            None,
+            "goal-updated",
+            serde_json::to_value(&goal)?,
+        )
+        .await?;
+        Ok(goal)
+    }
+
+    pub async fn clear_conversation_goal(&self, conversation_id: &str) -> Result<()> {
+        let conversation = self
+            .db
+            .get_conversation(conversation_id)
+            .await?
+            .context("conversation does not exist")?;
+        if let Some(thread_id) = conversation.thread_id.as_deref() {
+            self.codex.clear_goal(thread_id).await?;
+            self.emit(
+                conversation_id,
+                None,
+                "goal-cleared",
+                json!({"thread_id":thread_id}),
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     pub fn validate_settings(&self, settings: &CodexRunSettings) -> Result<CodexRunSettings> {
@@ -874,6 +936,91 @@ impl ConversationEngine {
         preview: &mut AnswerPreview,
         event: CodexEvent,
     ) -> Result<()> {
+        match event.kind.as_str() {
+            "item/reasoning/summaryTextDelta" => {
+                self.emit(
+                    conversation_id,
+                    Some(message_id),
+                    "work-summary-delta",
+                    json!({
+                        "turn_id":event.payload.pointer("/params/turnId"),
+                        "item_id":event.payload.pointer("/params/itemId"),
+                        "summary_index":event.payload.pointer("/params/summaryIndex"),
+                        "text":event.text.as_deref().unwrap_or_default(),
+                    }),
+                )
+                .await?;
+            }
+            "item/reasoning/summaryPartAdded" => {
+                self.emit(
+                    conversation_id,
+                    Some(message_id),
+                    "work-summary-part",
+                    json!({
+                        "turn_id":event.payload.pointer("/params/turnId"),
+                        "item_id":event.payload.pointer("/params/itemId"),
+                        "summary_index":event.payload.pointer("/params/summaryIndex"),
+                    }),
+                )
+                .await?;
+            }
+            "turn/plan/updated" => {
+                self.emit(
+                    conversation_id,
+                    Some(message_id),
+                    "plan-updated",
+                    json!({
+                        "turn_id":event.payload.pointer("/params/turnId"),
+                        "explanation":event.payload.pointer("/params/explanation"),
+                        "plan":event.payload.pointer("/params/plan").cloned().unwrap_or_else(|| json!([])),
+                    }),
+                )
+                .await?;
+            }
+            "item/started" | "item/completed" => {
+                if let Some(item) = event.payload.pointer("/params/item") {
+                    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("work");
+                    if item_type != "agentMessage" && item_type != "reasoning" {
+                        self.emit(
+                            conversation_id,
+                            Some(message_id),
+                            "work-item-updated",
+                            json!({
+                                "turn_id":event.payload.pointer("/params/turnId"),
+                                "item_id":item.get("id"),
+                                "item_type":item_type,
+                                "label":work_item_label(item),
+                                "status":if event.kind == "item/completed" { "completed" } else { "inProgress" },
+                            }),
+                        )
+                        .await?;
+                    }
+                }
+            }
+            "thread/goal/updated" => {
+                if let Some(goal) = event.payload.pointer("/params/goal") {
+                    self.emit(
+                        conversation_id,
+                        None,
+                        "goal-updated",
+                        json!({
+                            "thread_id":goal.get("threadId"),
+                            "objective":goal.get("objective"),
+                            "status":goal.get("status"),
+                            "token_budget":goal.get("tokenBudget"),
+                            "tokens_used":goal.get("tokensUsed"),
+                            "time_used_seconds":goal.get("timeUsedSeconds"),
+                        }),
+                    )
+                    .await?;
+                }
+            }
+            "thread/goal/cleared" => {
+                self.emit(conversation_id, None, "goal-cleared", json!({}))
+                    .await?;
+            }
+            _ => {}
+        }
         if let Some(label) = research_progress_label(&event.kind) {
             self.emit(
                 conversation_id,
@@ -920,6 +1067,16 @@ impl ConversationEngine {
         let _ = self.events.send(event.clone());
         Ok(event)
     }
+}
+
+fn work_item_label(item: &Value) -> String {
+    item.get("title")
+        .or_else(|| item.get("query"))
+        .or_else(|| item.get("tool"))
+        .or_else(|| item.get("command"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| item.get("type").and_then(Value::as_str).unwrap_or("Codex 工作"))
+        .to_owned()
 }
 
 fn exact_project_id(scopes: &[ConversationScope]) -> Option<String> {

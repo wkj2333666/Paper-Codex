@@ -232,6 +232,12 @@ pub fn build_router(state: AppState) -> Router {
             "/api/conversations/{id}/messages",
             post(create_conversation_message),
         )
+        .route(
+            "/api/conversations/{id}/goal",
+            get(get_conversation_goal)
+                .put(set_conversation_goal)
+                .delete(clear_conversation_goal),
+        )
         .route("/api/conversations/{id}/cancel", post(cancel_conversation))
         .route("/api/conversations/{id}/events", get(conversation_events))
         .route("/api/citations/{id}/pin", post(pin_citation))
@@ -1298,6 +1304,64 @@ async fn create_conversation_message(
         StatusCode::ACCEPTED,
         Json(json!({"message_id":message.id,"status":message.status})),
     ))
+}
+
+async fn get_conversation_goal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let goal = state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
+        .conversation_goal(&id)
+        .await
+        .map_err(conversation_api_error)?;
+    Ok(Json(json!(goal)))
+}
+
+async fn set_conversation_goal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<crate::codex::CodexGoalRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if request
+        .objective
+        .as_deref()
+        .is_some_and(|objective| objective.trim().is_empty())
+    {
+        return Err(ApiError::bad_request("目标内容不能为空"));
+    }
+    if request.status.as_deref().is_some_and(|status| {
+        !matches!(status, "active" | "paused")
+    }) {
+        return Err(ApiError::bad_request("目标状态无效"));
+    }
+    if request.token_budget == Some(0) {
+        return Err(ApiError::bad_request("token 预算必须大于零"));
+    }
+    let goal = state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
+        .set_conversation_goal(&id, request)
+        .await
+        .map_err(conversation_api_error)?;
+    Ok(Json(json!(goal)))
+}
+
+async fn clear_conversation_goal(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
+        .clear_conversation_goal(&id)
+        .await
+        .map_err(conversation_api_error)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn cancel_conversation(

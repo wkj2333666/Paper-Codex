@@ -1,4 +1,4 @@
-import type { CandidateCitation, ChatMessage, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexRunSettings, MessageCitation, ResearchProgressPhase } from "./types"
+import type { CandidateCitation, ChatMessage, CodexGoal, CodexPlanStep, CodexRunSettings, CodexWorkItem, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, MessageCitation, ResearchProgressPhase } from "./types"
 import type { CodexSelection } from "./conversation-scope"
 
 export interface PendingConversationSwitch {
@@ -19,9 +19,10 @@ export interface ConversationState {
   drawerView: "history"|"activity"
   lastEventId: number
   pendingSwitch: PendingConversationSwitch|null
+  goal: CodexGoal|null
 }
 
-export const conversationInitialState:ConversationState={conversations:[],activeConversationId:null,activeSettings:null,scopes:[],messages:{},messageOrder:[],drawerOpen:false,drawerView:"history",lastEventId:0,pendingSwitch:null}
+export const conversationInitialState:ConversationState={conversations:[],activeConversationId:null,activeSettings:null,scopes:[],messages:{},messageOrder:[],drawerOpen:false,drawerView:"history",lastEventId:0,pendingSwitch:null,goal:null}
 
 export type ConversationAction=
   |{type:"conversations";items:Conversation[]}
@@ -33,6 +34,7 @@ export type ConversationAction=
   |{type:"switch-failed";requestId:number}
   |{type:"switch-complete";requestId:number}
   |{type:"drawer";open:boolean;view?:"history"|"activity"}
+  |{type:"goal-loaded";conversationId:string;goal:CodexGoal|null}
   |{type:"event";event:ConversationStreamEvent}
 
 function pendingMessage(id:string,conversationId:string):ChatMessage{return {id,conversation_id:conversationId,role:"assistant",content:"",live_content:"",turn_id:null,status:"streaming",error:null,research_mode:"auto",tool_preferences:[],citations:[],candidate_citations:[],created_at:"",updated_at:""}}
@@ -43,6 +45,8 @@ function progressPhase(value:unknown):ChatMessage["progress_phase"]{return value
 export function reduceConversationEvent(state:ConversationState,event:ConversationStreamEvent):ConversationState{
   if(state.activeConversationId&&event.conversation_id!==state.activeConversationId)return state
   if(event.id<=state.lastEventId)return state
+  if(event.type==="goal-updated")return {...state,lastEventId:event.id,goal:event.payload as unknown as CodexGoal}
+  if(event.type==="goal-cleared")return {...state,lastEventId:event.id,goal:null}
   const messageId=event.message_id
   if(!messageId)return {...state,lastEventId:event.id}
   const current=state.messages[messageId]??pendingMessage(messageId,event.conversation_id)
@@ -51,6 +55,26 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
   else if(event.type==="answer-started")next={...current,status:"running",progress_phase:"reasoning",progress_label:"Codex 已开始处理问题…"}
   else if(event.type==="answer-progress")next={...current,status:"streaming",progress_phase:progressPhase(event.payload.phase)??"reasoning",progress_label:String(event.payload.label??"")||undefined}
   else if(event.type==="answer-delta")next={...current,status:"streaming",live_content:`${current.live_content??""}${String(event.payload.text??"")}`,progress_phase:"answering",progress_label:"Codex 正在生成回答…"}
+  else if(event.type==="work-summary-delta"||event.type==="work-summary-part"){
+    const itemId=String(event.payload.item_id??"")
+    const summaryIndex=Number(event.payload.summary_index??0)
+    const summaries=[...(current.worklog?.summaries??[])]
+    const index=summaries.findIndex(item=>item.item_id===itemId&&item.summary_index===summaryIndex)
+    const text=event.type==="work-summary-delta"?String(event.payload.text??""):""
+    if(index>=0)summaries[index]={...summaries[index],text:`${summaries[index].text}${text}`}
+    else summaries.push({item_id:itemId,summary_index:summaryIndex,text})
+    next={...current,status:"streaming",worklog:{summaries,plan:current.worklog?.plan,items:current.worklog?.items??{}}}
+  }
+  else if(event.type==="plan-updated"){
+    const steps=(event.payload.plan as CodexPlanStep[]|undefined)??[]
+    const explanation=typeof event.payload.explanation==="string"?event.payload.explanation:current.worklog?.plan?.explanation
+    next={...current,status:"streaming",worklog:{summaries:current.worklog?.summaries??[],plan:{...(explanation?{explanation}:{}),steps},items:current.worklog?.items??{}}}
+  }
+  else if(event.type==="work-item-updated"){
+    const itemId=String(event.payload.item_id??"")
+    const item:CodexWorkItem={item_id:itemId,item_type:String(event.payload.item_type??"work"),label:String(event.payload.label??"Codex 工作"),status:String(event.payload.status??"inProgress")}
+    next={...current,status:"streaming",worklog:{summaries:current.worklog?.summaries??[],plan:current.worklog?.plan,items:{...(current.worklog?.items??{}),[itemId]:item}}}
+  }
   else if(event.type==="answer-completed")next={...current,status:"completed",content:String(event.payload.answer_markdown??""),live_content:undefined,citations:(event.payload.citations as MessageCitation[]|undefined)??[],candidate_citations:(event.payload.candidate_citations as CandidateCitation[]|undefined)??[],progress_phase:undefined,progress_label:undefined}
   else if(event.type==="answer-failed")next={...current,status:"failed",live_content:undefined,error:String(event.payload.message??"回答失败"),progress_phase:undefined,progress_label:undefined}
   else if(event.type==="answer-cancelled")next={...current,status:"cancelled",live_content:undefined,progress_phase:undefined,progress_label:undefined}
@@ -67,14 +91,15 @@ function installDetail(state:ConversationState,detail:ConversationDetail):Conver
   const {model,reasoning_effort,service_tier}=detail.conversation
   const activeSettings=model&&reasoning_effort?{model,reasoning_effort,service_tier}:null
   const lastEventId=state.activeConversationId===detail.conversation.id?state.lastEventId:0
-  return {...state,activeConversationId:detail.conversation.id,activeSettings,scopes:detail.scopes,messages,messageOrder:detail.messages.map(message=>message.id),lastEventId}
+  const goal=state.activeConversationId===detail.conversation.id?state.goal:null
+  return {...state,activeConversationId:detail.conversation.id,activeSettings,scopes:detail.scopes,messages,messageOrder:detail.messages.map(message=>message.id),lastEventId,goal}
 }
 
 export function conversationReducer(state:ConversationState,action:ConversationAction):ConversationState{
   if(action.type==="conversations")return {...state,conversations:action.items}
   if(action.type==="active"){
     if(action.id===state.activeConversationId)return state
-    return {...state,activeConversationId:action.id,activeSettings:null,scopes:[],messages:{},messageOrder:[],lastEventId:0,drawerOpen:false,pendingSwitch:null}
+    return {...state,activeConversationId:action.id,activeSettings:null,scopes:[],messages:{},messageOrder:[],lastEventId:0,drawerOpen:false,pendingSwitch:null,goal:null}
   }
   if(action.type==="switch-start")return {...state,pendingSwitch:{requestId:action.requestId,conversationId:action.conversationId,targetSelection:null,status:"loading"}}
   if(action.type==="switch-resolved"){
@@ -95,6 +120,7 @@ export function conversationReducer(state:ConversationState,action:ConversationA
     return installDetail(state,action.detail)
   }
   if(action.type==="drawer")return {...state,drawerOpen:action.open,drawerView:action.view??state.drawerView}
+  if(action.type==="goal-loaded")return state.activeConversationId===action.conversationId?{...state,goal:action.goal}:state
   if(action.type==="event")return reduceConversationEvent(state,action.event)
   return {...installDetail(state,action.detail),pendingSwitch:null}
 }

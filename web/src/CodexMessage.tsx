@@ -2,6 +2,7 @@ import { Bot, CircleAlert, LoaderCircle } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import type { ChatMessage, MessageCitation } from "./types"
+import { CodexWorklog } from "./CodexWorklog"
 
 const researchLabels: Partial<Record<NonNullable<ChatMessage["progress_phase"]>, string>> = {
   "research-planning": "正在生成检索式…",
@@ -79,12 +80,11 @@ export function CodexMessage({
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.live_content}</ReactMarkdown>
             </div>
           )}
-          <ConversationProgress phase={message.progress_phase} label={message.progress_label} />
+          {message.worklog&&<CodexWorklog worklog={message.worklog} active/>}
+          {!message.worklog&&<ConversationProgress phase={message.progress_phase} label={message.progress_label} />}
         </div>
       ) : (
-        <div className="codex-markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-        </div>
+        <><div className="codex-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>{message.worklog&&<CodexWorklog worklog={message.worklog} active={false}/>}</>
       )}
       {message.status === "failed" && (
         <p className="message-error">
