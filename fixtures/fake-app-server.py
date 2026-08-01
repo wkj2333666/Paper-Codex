@@ -212,6 +212,17 @@ for raw in sys.stdin:
                 "itemId": "command-1", "reason": "should be denied"
             }})
             pending_server_request = "approval"
+        elif "goal-budget" in text:
+            answer = "budget-limited answer"
+            send({"method": "item/completed", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": {"id": "goal-budget-answer", "type": "agentMessage", "text": answer}}})
+            send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "completed"}}})
+            goal = dict(thread_goals[msg["params"]["threadId"]])
+            goal.update({"status": "budgetLimited", "tokensUsed": 40000, "timeUsedSeconds": 20})
+            thread_goals[msg["params"]["threadId"]] = goal
+            send({"method": "thread/goal/updated", "params": {"threadId": msg["params"]["threadId"], "goal": goal}})
+            pending_turn = None
+        elif "control-block" in text:
+            send({"method": "test/control-block-started", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn}})
         elif "goal-auto" in text:
             first_answer = "first goal turn"
             send({"method": "item/agentMessage/delta", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "itemId": "goal-answer-1", "delta": first_answer}})

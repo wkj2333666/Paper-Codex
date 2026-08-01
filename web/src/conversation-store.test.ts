@@ -107,6 +107,19 @@ describe("conversation store", () => {
     })
   })
 
+  it("keeps persisted worklog state when completion hydrates database messages", () => {
+    let state = reduceConversationEvent(conversationInitialState, event(1, "work-summary-delta", {
+      item_id: "reasoning-1", summary_index: 0, text: "已经完成证据核验",
+    }))
+    state = {...state,activeConversationId:"conversation-1"}
+    const hydrated = conversationReducer(state, {type:"hydrate-detail",expectedConversationId:"conversation-1",detail:{
+      conversation:{id:"conversation-1",title:"研究",thread_id:"thread-1",status:"idle",model:"gpt-test",reasoning_effort:"low",service_tier:null,archived_at:null,created_at:"",updated_at:""},
+      scopes:[],messages:[{...state.messages.a,status:"completed",content:"最终回答",worklog:undefined}],
+    }})
+    expect(hydrated.messages.a.worklog?.summaries[0].text).toBe("已经完成证据核验")
+    expect(hydrated.lastEventId).toBe(1)
+  })
+
   it("keeps the active conversation's Codex settings when loading details", () => {
     const detail = {
       conversation: {

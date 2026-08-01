@@ -9,6 +9,7 @@ use paper_codex::codex_tools::{
 use paper_codex::prompts::conversation_answer_schema;
 use serde_json::Value;
 use std::{path::PathBuf, sync::Arc};
+use std::time::Duration;
 use tokio::sync::{mpsc, watch, Mutex};
 
 fn fake_command() -> CodexCommand {
@@ -557,6 +558,98 @@ async fn keeps_consuming_native_goal_continuations_until_the_goal_is_terminal() 
     let goal = runtime.get_goal(&thread_id).await.unwrap().unwrap();
     assert_eq!(goal.status, "complete");
     assert_eq!(goal.tokens_used, 321);
+}
+
+#[tokio::test]
+async fn finishes_when_a_native_goal_reaches_its_budget_limit() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let thread_id = runtime.create_thread(root.path()).await.unwrap();
+    runtime
+        .set_goal(
+            &thread_id,
+            CodexGoalRequest {
+                objective: Some("在预算内完成核验".into()),
+                status: Some("active".into()),
+                token_budget: Some(40_000),
+            },
+        )
+        .await
+        .unwrap();
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let outcome = runtime
+        .run_turn(
+            CodexTurn {
+                thread_id: Some(thread_id.clone()),
+                cwd: root.path().to_path_buf(),
+                prompt: "goal-budget".into(),
+                skill: None,
+                tool_preferences: Vec::new(),
+                output_schema: None,
+                settings: standard_settings(),
+            },
+            cancel_rx,
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome.final_text, "budget-limited answer");
+    assert_eq!(runtime.get_goal(&thread_id).await.unwrap().unwrap().status, "budgetLimited");
+}
+
+#[tokio::test]
+async fn goal_controls_do_not_wait_for_an_active_turn_to_finish() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let thread_id = runtime.create_thread(root.path()).await.unwrap();
+    runtime
+        .set_goal(
+            &thread_id,
+            CodexGoalRequest {
+                objective: Some("可暂停的目标".into()),
+                status: Some("active".into()),
+                token_budget: None,
+            },
+        )
+        .await
+        .unwrap();
+    let mut events = runtime.subscribe();
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let turn_runtime = runtime.clone();
+    let turn_thread = thread_id.clone();
+    let cwd = root.path().to_path_buf();
+    let turn = tokio::spawn(async move {
+        turn_runtime
+            .run_turn(
+                CodexTurn {
+                    thread_id: Some(turn_thread),
+                    cwd,
+                    prompt: "control-block".into(),
+                    skill: None,
+                    tool_preferences: Vec::new(),
+                    output_schema: None,
+                    settings: standard_settings(),
+                },
+                cancel_rx,
+            )
+            .await
+    });
+    while events.recv().await.unwrap().kind != "test/control-block-started" {}
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        runtime.set_goal(
+            &thread_id,
+            CodexGoalRequest {
+                objective: None,
+                status: Some("paused".into()),
+                token_budget: None,
+            },
+        ),
+    )
+    .await
+    .expect("goal control blocked behind the active turn")
+    .unwrap();
+    cancel_tx.send(true).unwrap();
+    assert_eq!(turn.await.unwrap().unwrap().status, "interrupted");
 }
 
 #[tokio::test]

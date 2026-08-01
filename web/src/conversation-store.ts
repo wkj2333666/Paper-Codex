@@ -87,11 +87,12 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
 }
 
 function installDetail(state:ConversationState,detail:ConversationDetail):ConversationState{
-  const messages=Object.fromEntries(detail.messages.map(message=>[message.id,message]))
+  const sameConversation=state.activeConversationId===detail.conversation.id
+  const messages=Object.fromEntries(detail.messages.map(message=>[message.id,sameConversation&&state.messages[message.id]?.worklog?{...message,worklog:state.messages[message.id].worklog}:message]))
   const {model,reasoning_effort,service_tier}=detail.conversation
   const activeSettings=model&&reasoning_effort?{model,reasoning_effort,service_tier}:null
-  const lastEventId=state.activeConversationId===detail.conversation.id?state.lastEventId:0
-  const goal=state.activeConversationId===detail.conversation.id?state.goal:null
+  const lastEventId=sameConversation?state.lastEventId:0
+  const goal=sameConversation?state.goal:null
   return {...state,activeConversationId:detail.conversation.id,activeSettings,scopes:detail.scopes,messages,messageOrder:detail.messages.map(message=>message.id),lastEventId,goal}
 }
 

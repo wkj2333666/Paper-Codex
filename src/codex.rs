@@ -316,7 +316,14 @@ impl CodexGoal {
     fn terminal(&self) -> bool {
         matches!(
             self.status.as_str(),
-            "complete" | "completed" | "blocked" | "paused" | "cancelled" | "failed"
+            "complete"
+                | "completed"
+                | "blocked"
+                | "paused"
+                | "cancelled"
+                | "failed"
+                | "usageLimited"
+                | "budgetLimited"
         )
     }
 }
@@ -696,7 +703,6 @@ impl CodexRuntime {
 
     async fn goal_request(&self, method: &str, params: Value) -> Result<Value> {
         self.command.prepare_runtime_tmp().await?;
-        let _turn_guard = self.turn_lock.lock().await;
         let existing_session = self.session.lock().await.take();
         let mut session = if let Some(session) = existing_session {
             session
