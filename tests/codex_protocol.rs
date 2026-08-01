@@ -8,8 +8,8 @@ use paper_codex::codex_tools::{
 };
 use paper_codex::prompts::conversation_answer_schema;
 use serde_json::Value;
-use std::{path::PathBuf, sync::Arc};
 use std::time::Duration;
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
 
 fn fake_command() -> CodexCommand {
@@ -593,7 +593,10 @@ async fn finishes_when_a_native_goal_reaches_its_budget_limit() {
         .await
         .unwrap();
     assert_eq!(outcome.final_text, "budget-limited answer");
-    assert_eq!(runtime.get_goal(&thread_id).await.unwrap().unwrap().status, "budgetLimited");
+    assert_eq!(
+        runtime.get_goal(&thread_id).await.unwrap().unwrap().status,
+        "budgetLimited"
+    );
 }
 
 #[tokio::test]
