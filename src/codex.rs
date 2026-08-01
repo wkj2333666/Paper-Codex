@@ -1,7 +1,5 @@
 use crate::{
-    codex_tools::{
-        DynamicToolCall, DynamicToolDefinition, DynamicToolOutput, DynamicToolSession,
-    },
+    codex_tools::{DynamicToolCall, DynamicToolDefinition, DynamicToolOutput, DynamicToolSession},
     prompts::ConversationAnswer,
 };
 use anyhow::{bail, Context, Result};
