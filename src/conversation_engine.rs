@@ -274,7 +274,10 @@ impl ConversationEngine {
         let thread_id = match conversation.thread_id {
             Some(thread_id) => thread_id,
             None => {
-                let thread_id = self.codex.create_thread(self.contexts.workspace_root()).await?;
+                let thread_id = self
+                    .codex
+                    .create_thread(self.contexts.workspace_root())
+                    .await?;
                 self.db
                     .set_conversation_runtime(conversation_id, Some(&thread_id), "idle")
                     .await?;
@@ -1075,7 +1078,11 @@ fn work_item_label(item: &Value) -> String {
         .or_else(|| item.get("tool"))
         .or_else(|| item.get("command"))
         .and_then(Value::as_str)
-        .unwrap_or_else(|| item.get("type").and_then(Value::as_str).unwrap_or("Codex 工作"))
+        .unwrap_or_else(|| {
+            item.get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("Codex 工作")
+        })
         .to_owned()
 }
 

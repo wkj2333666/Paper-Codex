@@ -1332,9 +1332,11 @@ async fn set_conversation_goal(
     {
         return Err(ApiError::bad_request("目标内容不能为空"));
     }
-    if request.status.as_deref().is_some_and(|status| {
-        !matches!(status, "active" | "paused")
-    }) {
+    if request
+        .status
+        .as_deref()
+        .is_some_and(|status| !matches!(status, "active" | "paused"))
+    {
         return Err(ApiError::bad_request("目标状态无效"));
     }
     if request.token_budget == Some(0) {
