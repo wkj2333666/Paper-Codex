@@ -6,6 +6,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
@@ -16,7 +17,7 @@ use std::{
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, Lines},
     process::{Child, ChildStdin, ChildStdout, Command},
-    sync::{broadcast, mpsc, watch, Mutex},
+    sync::{broadcast, mpsc, oneshot, watch, Mutex},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -407,6 +408,12 @@ pub struct CodexEvent {
     pub payload: Value,
 }
 
+struct ControlRequest {
+    method: String,
+    params: Value,
+    response: oneshot::Sender<Value>,
+}
+
 struct Session {
     _child: Child,
     stdin: BufWriter<ChildStdin>,
@@ -507,12 +514,14 @@ pub struct CodexRuntime {
     events: broadcast::Sender<CodexEvent>,
     capabilities: CodexCapabilities,
     dynamic_tools_available: AtomicBool,
+    active_control: watch::Sender<Option<mpsc::UnboundedSender<ControlRequest>>>,
 }
 
 impl CodexRuntime {
     pub async fn spawn(command: CodexCommand) -> Result<Arc<Self>> {
         let (session, capabilities) = Session::spawn(&command).await?;
         let (events, _) = broadcast::channel(512);
+        let (active_control, _) = watch::channel(None);
         Ok(Arc::new(Self {
             command,
             session: Mutex::new(Some(session)),
@@ -520,6 +529,7 @@ impl CodexRuntime {
             events,
             capabilities,
             dynamic_tools_available: AtomicBool::new(true),
+            active_control,
         }))
     }
 
@@ -703,15 +713,57 @@ impl CodexRuntime {
 
     async fn goal_request(&self, method: &str, params: Value) -> Result<Value> {
         self.command.prepare_runtime_tmp().await?;
-        let existing_session = self.session.lock().await.take();
-        let mut session = if let Some(session) = existing_session {
-            session
-        } else {
-            Session::spawn(&self.command).await?.0
-        };
-        let response = session.request(method, params).await;
-        *self.session.lock().await = Some(session);
-        let response = response?;
+        let mut active = self.active_control.subscribe();
+        loop {
+            let active_sender = active.borrow().clone();
+            if let Some(sender) = active_sender {
+                return self
+                    .active_control_request(sender, method, params.clone())
+                    .await;
+            }
+            let turn_guard = tokio::select! {
+                guard = self.turn_lock.lock() => Some(guard),
+                changed = active.changed() => {
+                    changed.context("Codex control channel closed")?;
+                    None
+                }
+            };
+            let Some(_turn_guard) = turn_guard else {
+                continue;
+            };
+            let existing_session = self.session.lock().await.take();
+            let mut session = if let Some(session) = existing_session {
+                session
+            } else {
+                Session::spawn(&self.command).await?.0
+            };
+            let response = session.request(method, params).await;
+            *self.session.lock().await = Some(session);
+            let response = response?;
+            if let Some(error) = response.get("error") {
+                bail!("Codex {method} failed: {error}");
+            }
+            return Ok(response);
+        }
+    }
+
+    async fn active_control_request(
+        &self,
+        sender: mpsc::UnboundedSender<ControlRequest>,
+        method: &str,
+        params: Value,
+    ) -> Result<Value> {
+        let (response, receiver) = oneshot::channel();
+        sender
+            .send(ControlRequest {
+                method: method.to_owned(),
+                params,
+                response,
+            })
+            .context("active Codex turn stopped accepting controls")?;
+        let response = receiver
+            .await
+            .context("active Codex turn ended before the control response")?;
         if let Some(error) = response.get("error") {
             bail!("Codex {method} failed: {error}");
         }
@@ -996,9 +1048,19 @@ impl CodexRuntime {
         } else {
             Session::spawn(&self.command).await?.0
         };
+        let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+        self.active_control.send_replace(Some(control_tx));
         let outcome = self
-            .run_turn_session(&mut session, turn, cancel, turn_events, tools.as_ref())
+            .run_turn_session(
+                &mut session,
+                turn,
+                cancel,
+                turn_events,
+                tools.as_ref(),
+                &mut control_rx,
+            )
             .await;
+        self.active_control.send_replace(None);
         *self.session.lock().await = Some(session);
         outcome
     }
@@ -1010,6 +1072,7 @@ impl CodexRuntime {
         mut cancel: watch::Receiver<bool>,
         turn_events: Option<&mpsc::UnboundedSender<CodexEvent>>,
         tools: Option<&DynamicToolSession>,
+        control_rx: &mut mpsc::UnboundedReceiver<ControlRequest>,
     ) -> Result<CodexOutcome> {
         let method = if turn.thread_id.is_some() {
             "thread/resume"
@@ -1098,6 +1161,7 @@ impl CodexRuntime {
         let mut interrupted = false;
         let mut turn_finished = false;
         let mut terminal_goal = false;
+        let mut control_responses = HashMap::<u64, oneshot::Sender<Value>>::new();
         loop {
             if *cancel.borrow() && !interrupted {
                 interrupted = true;
@@ -1106,6 +1170,12 @@ impl CodexRuntime {
                 session.write(&json!({"method":"turn/interrupt","id":id,"params":{"threadId":thread_id,"turnId":turn_id}})).await?;
             }
             tokio::select! {
+                Some(control) = control_rx.recv() => {
+                    let id = session.next_id;
+                    session.next_id += 1;
+                    session.write(&json!({"method":control.method,"id":id,"params":control.params})).await?;
+                    control_responses.insert(id, control.response);
+                }
                 changed = cancel.changed(), if !interrupted => {
                     if changed.is_ok() && *cancel.borrow() {
                         interrupted = true;
@@ -1116,6 +1186,14 @@ impl CodexRuntime {
                 line = session.lines.next_line() => {
                     let line = line?.context("Codex App Server exited during turn")?;
                     let message: Value = serde_json::from_str(&line).context("decode Codex event")?;
+                    if message.get("method").is_none() {
+                        if let Some(id) = message.get("id").and_then(Value::as_u64) {
+                            if let Some(response) = control_responses.remove(&id) {
+                                let _ = response.send(message);
+                                continue;
+                            }
+                        }
+                    }
                     if message.get("id").is_some() && message.get("method").is_some() {
                         let request_id = message.get("id").cloned().unwrap_or(Value::Null);
                         if message.get("method").and_then(Value::as_str) == Some("item/tool/call") {

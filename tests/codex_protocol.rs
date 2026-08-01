@@ -637,7 +637,7 @@ async fn goal_controls_do_not_wait_for_an_active_turn_to_finish() {
             .await
     });
     while events.recv().await.unwrap().kind != "test/control-block-started" {}
-    tokio::time::timeout(
+    let paused = tokio::time::timeout(
         Duration::from_secs(2),
         runtime.set_goal(
             &thread_id,
@@ -651,6 +651,13 @@ async fn goal_controls_do_not_wait_for_an_active_turn_to_finish() {
     .await
     .expect("goal control blocked behind the active turn")
     .unwrap();
+    assert_eq!(paused.status, "paused");
+    let observed = tokio::time::timeout(Duration::from_secs(2), runtime.get_goal(&thread_id))
+        .await
+        .expect("goal read blocked behind the active turn")
+        .unwrap()
+        .unwrap();
+    assert_eq!(observed.status, "paused");
     cancel_tx.send(true).unwrap();
     assert_eq!(turn.await.unwrap().unwrap().status, "interrupted");
 }
