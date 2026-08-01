@@ -6,7 +6,10 @@ use paper_codex::{
         EvidenceLevel, ResearchProvider, ResearchQuery, ResearchTrigger, SearchRunState,
         WorkMetadata,
     },
-    research_service::{ProjectResearchToolHandler, ProviderState, ResearchService, ResearchServiceConfig, SearchRequest},
+    research_service::{
+        ProjectResearchToolHandler, ProviderState, ResearchService, ResearchServiceConfig,
+        SearchRequest,
+    },
     research_store::ResearchStore,
 };
 use serde_json::json;
@@ -24,9 +27,18 @@ enum StubResponse {
 
 #[test]
 fn project_research_tools_include_controlled_import() {
-    let definitions=ProjectResearchToolHandler::definitions();
-    let import=definitions.iter().find(|item| item.name=="research_import").expect("research_import tool");
-    assert_eq!(import.input_schema.pointer("/required/0").and_then(serde_json::Value::as_str),Some("work_id"));
+    let definitions = ProjectResearchToolHandler::definitions();
+    let import = definitions
+        .iter()
+        .find(|item| item.name == "research_import")
+        .expect("research_import tool");
+    assert_eq!(
+        import
+            .input_schema
+            .pointer("/required/0")
+            .and_then(serde_json::Value::as_str),
+        Some("work_id")
+    );
 }
 
 struct StubProvider {

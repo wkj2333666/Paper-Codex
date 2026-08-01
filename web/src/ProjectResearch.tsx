@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import {
   BookOpen,
   CheckCircle2,
@@ -8,19 +8,25 @@ import {
   FileText,
   History,
   LoaderCircle,
+  LayoutDashboard,
   RotateCcw,
   Trash2,
   X,
 } from "lucide-react"
 import { api } from "./api"
+import { ProjectOverview } from "./ProjectOverview"
+import type { ResolvedTheme } from "./theme"
 import type {
+  GraphPayload,
   LiteratureSearchDetail,
   LiteratureSearchRun,
   Paper,
+  Project,
   ProjectCandidate,
+  ProjectGoalSummary,
 } from "./types"
 
-export type ProjectResearchTab="papers"|"candidates"|"searches"
+export type ProjectResearchTab="overview"|"papers"|"candidates"|"searches"
 
 export interface CandidateActions {
   dismiss:(workId:string)=>Promise<void>
@@ -65,6 +71,7 @@ export interface ProjectResearchViewProps {
   onRemovePaper:(paperId:string)=>void
   onToggleDismissed:()=>void
   onOpenSearch:(search:LiteratureSearchRun)=>void
+  overview?:ReactNode
 }
 
 const evidenceLabel=(value:ProjectCandidate["evidence_level"])=>({
@@ -82,17 +89,19 @@ const candidateStatusLabel=(value:ProjectCandidate["status"])=>({
 
 export function ProjectResearchView({
   tab,papers,candidates,searches,includeDismissed,busy,error,actions,onTab,
-  onOpenCandidate,onOpenPaper,onRemovePaper,onToggleDismissed,onOpenSearch,
+  onOpenCandidate,onOpenPaper,onRemovePaper,onToggleDismissed,onOpenSearch,overview,
 }:ProjectResearchViewProps){
   const activeSearches=searches.filter(item=>item.state==="running").length
   return <section className="project-research" aria-label="项目研究资料">
     <nav className="project-research-tabs" aria-label="项目资料分类">
+      <button className={tab==="overview"?"active":""} onClick={()=>onTab("overview")}><LayoutDashboard/>综合视图</button>
       <button className={tab==="papers"?"active":""} onClick={()=>onTab("papers")}><BookOpen/>项目论文 <em>{papers.length}</em></button>
       <button className={tab==="candidates"?"active":""} onClick={()=>onTab("candidates")}><FileSearch/>候选论文 <em>{candidates.filter(item=>item.status!=="dismissed").length}</em></button>
       <button className={tab==="searches"?"active":""} onClick={()=>onTab("searches")}><History/>检索历史 {activeSearches>0&&<em>{activeSearches}</em>}</button>
     </nav>
     {error&&<p className="project-research-error" role="alert">{error}</p>}
     {busy&&<div className="project-research-loading" role="status"><LoaderCircle className="spin"/>正在加载项目研究资料…</div>}
+    {!busy&&tab==="overview"&&overview}
     {!busy&&tab==="papers"&&(papers.length?<div className="project-paper-list">{papers.map(paper=><article key={paper.id}>
       <button className="project-paper-main" onClick={()=>onOpenPaper(paper.id)}><FileText/><span><strong>{paper.title}</strong><small>{paper.year??"年份未知"} · {paper.doi??paper.arxiv_id??paper.id}</small></span></button>
       <button className="icon-action" aria-label={`移出项目：${paper.title}`} onClick={()=>onRemovePaper(paper.id)}><X/></button>
@@ -157,10 +166,13 @@ function providerSummary(search:LiteratureSearchRun){
   return `${providers.length} 个来源 · ${hits} 条命中${failed.length?` · ${failed.join("、")} 暂不可用`:""}`
 }
 
-export function ProjectResearch({projectId,papers,focusWorkId,onFocusHandled,onOpenPaper,onRemovePaper,onChanged}:{projectId:string;papers:Paper[];focusWorkId?:string;onFocusHandled?:()=>void;onOpenPaper:(paperId:string)=>void;onRemovePaper:(paperId:string)=>Promise<void>;onChanged?:()=>Promise<void>}){
-  const [tab,setTab]=useState<ProjectResearchTab>("papers")
+export function ProjectResearch({project,papers,theme,focusWorkId,onFocusHandled,onOpenPaper,onRemovePaper,onChanged}:{project:Project;papers:Paper[];theme:ResolvedTheme;focusWorkId?:string;onFocusHandled?:()=>void;onOpenPaper:(paperId:string)=>void;onRemovePaper:(paperId:string)=>Promise<void>;onChanged?:()=>Promise<void>}){
+  const projectId=project.id
+  const [tab,setTab]=useState<ProjectResearchTab>("overview")
   const [candidates,setCandidates]=useState<ProjectCandidate[]>([])
   const [searches,setSearches]=useState<LiteratureSearchRun[]>([])
+  const [goals,setGoals]=useState<ProjectGoalSummary[]>([])
+  const [graph,setGraph]=useState<GraphPayload>({nodes:[],edges:[]})
   const [includeDismissed,setIncludeDismissed]=useState(false)
   const [busy,setBusy]=useState(true)
   const [error,setError]=useState("")
@@ -169,17 +181,19 @@ export function ProjectResearch({projectId,papers,focusWorkId,onFocusHandled,onO
   const [loadedProjectId,setLoadedProjectId]=useState<string|null>(null)
   const load=useCallback(async()=>{
     try{
-      const [nextCandidates,nextSearches]=await Promise.all([
+      const [nextCandidates,nextSearches,nextGoals,nextGraph]=await Promise.all([
         api.projectCandidates(projectId,includeDismissed),
         api.projectLiteratureSearches(projectId),
+        api.projectGoals(projectId),
+        api.graph({project_id:projectId,include_hypotheses:true}),
       ])
-      setCandidates(nextCandidates);setSearches(nextSearches);setError("")
+      setCandidates(nextCandidates);setSearches(nextSearches);setGoals(nextGoals);setGraph(nextGraph);setError("")
       setLoadedProjectId(projectId)
       setSelectedCandidate(current=>current?nextCandidates.find(item=>item.work.id===current.work.id)??null:null)
     }catch(value){setError(value instanceof Error?value.message:"加载项目候选失败")}
     finally{setBusy(false)}
   },[includeDismissed,projectId])
-  useEffect(()=>{setTab("papers");setCandidates([]);setSearches([]);setSelectedCandidate(null);setSearchDetail(null);setLoadedProjectId(null)},[projectId])
+  useEffect(()=>{setTab("overview");setCandidates([]);setSearches([]);setGoals([]);setGraph({nodes:[],edges:[]});setSelectedCandidate(null);setSearchDetail(null);setLoadedProjectId(null)},[projectId])
   useEffect(()=>{setBusy(true);void load()},[load])
   useEffect(()=>{
     if(!focusWorkId||loadedProjectId!==projectId)return
@@ -189,7 +203,7 @@ export function ProjectResearch({projectId,papers,focusWorkId,onFocusHandled,onO
     setSelectedCandidate(candidate)
     onFocusHandled?.()
   },[candidates,focusWorkId,loadedProjectId,onFocusHandled,projectId])
-  const active=useMemo(()=>candidates.some(item=>item.status==="importing")||searches.some(item=>item.state==="running"),[candidates,searches])
+  const active=useMemo(()=>goals.some(item=>item.status==="active")||candidates.some(item=>item.status==="importing")||searches.some(item=>item.state==="running"),[candidates,goals,searches])
   useEffect(()=>{if(!active)return;const timer=window.setInterval(()=>void load(),4000);return()=>window.clearInterval(timer)},[active,load])
   const refresh=useCallback(async()=>{await load();await onChanged?.()},[load,onChanged])
   const actions=useMemo(()=>createCandidateActions(projectId,refresh,onOpenPaper),[projectId,refresh,onOpenPaper])
@@ -197,7 +211,7 @@ export function ProjectResearch({projectId,papers,focusWorkId,onFocusHandled,onO
     setSearchDetail(await api.literatureSearch(projectId,search.id))
   }
   return <>
-    <ProjectResearchView tab={tab} papers={papers} candidates={candidates} searches={searches} includeDismissed={includeDismissed} busy={busy} error={error} actions={actions} onTab={setTab} onOpenCandidate={setSelectedCandidate} onOpenPaper={onOpenPaper} onRemovePaper={paperId=>void onRemovePaper(paperId)} onToggleDismissed={()=>setIncludeDismissed(value=>!value)} onOpenSearch={search=>void openSearch(search)}/>
+    <ProjectResearchView tab={tab} papers={papers} candidates={candidates} searches={searches} includeDismissed={includeDismissed} busy={busy} error={error} actions={actions} onTab={setTab} onOpenCandidate={setSelectedCandidate} onOpenPaper={onOpenPaper} onRemovePaper={paperId=>void onRemovePaper(paperId)} onToggleDismissed={()=>setIncludeDismissed(value=>!value)} onOpenSearch={search=>void openSearch(search)} overview={<ProjectOverview project={project} papers={papers} candidates={candidates} searches={searches} goals={goals} graph={graph} theme={theme} onOpenPaper={onOpenPaper}/>}/>
     {selectedCandidate&&<CandidateDrawer candidate={selectedCandidate} actions={actions} onClose={()=>setSelectedCandidate(null)} onOpenPaper={onOpenPaper}/>}
     {searchDetail&&<SearchDrawer detail={searchDetail} onClose={()=>setSearchDetail(null)}/>}
   </>

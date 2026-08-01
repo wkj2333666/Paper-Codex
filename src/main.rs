@@ -85,11 +85,12 @@ async fn main() -> Result<()> {
         Some(research_store),
     )
     .await?;
-    let conversation_engine = ConversationEngine::start_with_research(
+    let conversation_engine = ConversationEngine::start_with_services(
         db.clone(),
         workspace.clone(),
         codex,
         Some(research.clone()),
+        Some(engine.clone()),
     )
     .await?;
     let state = AppState::new(

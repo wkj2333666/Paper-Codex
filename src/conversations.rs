@@ -123,7 +123,79 @@ pub struct ConversationEvent {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectGoalSummary {
+    pub conversation_id: String,
+    pub conversation_title: String,
+    pub objective: String,
+    pub status: String,
+    pub tokens_used: u64,
+    pub time_used_seconds: u64,
+    pub updated_at: String,
+}
+
 impl Database {
+    pub async fn project_goal_summaries(&self, project_id: &str) -> Result<Vec<ProjectGoalSummary>> {
+        let conversations: Vec<(String, String)> = sqlx::query_as(
+            r#"SELECT DISTINCT c.id,c.title
+               FROM conversations c
+               JOIN conversation_scopes s ON s.conversation_id=c.id
+               WHERE s.scope_type='project' AND s.scope_id=? AND c.archived_at IS NULL
+               ORDER BY c.updated_at DESC"#,
+        )
+        .bind(project_id)
+        .fetch_all(self.pool())
+        .await?;
+        let mut summaries = Vec::new();
+        for (conversation_id, conversation_title) in conversations {
+            let event: Option<(String, String, String)> = sqlx::query_as(
+                r#"SELECT event_type,payload_json,created_at
+                   FROM conversation_events
+                   WHERE conversation_id=? AND event_type IN ('goal-updated','goal-cleared')
+                   ORDER BY id DESC LIMIT 1"#,
+            )
+            .bind(&conversation_id)
+            .fetch_optional(self.pool())
+            .await?;
+            let Some((event_type, payload_json, updated_at)) = event else {
+                continue;
+            };
+            if event_type == "goal-cleared" {
+                continue;
+            }
+            let payload: Value = serde_json::from_str(&payload_json)?;
+            let objective = payload
+                .get("objective")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            if objective.is_empty() {
+                continue;
+            }
+            summaries.push(ProjectGoalSummary {
+                conversation_id,
+                conversation_title,
+                objective,
+                status: payload
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("active")
+                    .to_owned(),
+                tokens_used: payload
+                    .get("tokens_used")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                time_used_seconds: payload
+                    .get("time_used_seconds")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                updated_at,
+            });
+        }
+        Ok(summaries)
+    }
+
     pub async fn create_conversation(&self, title: &str) -> Result<Conversation> {
         let title = title.trim();
         if title.is_empty() {

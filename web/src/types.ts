@@ -24,6 +24,7 @@ export interface CodexMcpTool { name:string; title:string|null; description:stri
 export interface CodexMcpServer { name:string; title:string|null; description:string|null; auth_status:"unsupported"|"notLoggedIn"|"bearerToken"|"oAuth"|string; tools:CodexMcpTool[] }
 export interface CodexIntegrations { skills:CodexSkill[]; mcp_servers:CodexMcpServer[]; supports_skills:boolean; supports_mcp_status:boolean; skills_error:string|null; mcp_error:string|null }
 export interface CodexGoal { thread_id:string; objective:string; status:string; token_budget:number|null; tokens_used:number; time_used_seconds:number }
+export interface ProjectGoalSummary { conversation_id:string; conversation_title:string; objective:string; status:string; tokens_used:number; time_used_seconds:number; updated_at:string }
 export interface CodexGoalRequest { objective?:string; status?:"active"|"paused"; token_budget?:number }
 export interface CodexWorkSummary { item_id:string; summary_index:number; text:string }
 export interface CodexPlanStep { step:string; status:"pending"|"inProgress"|"completed"|string }
@@ -38,7 +39,7 @@ export type EvidenceLevel="metadata"|"abstract"|"fulltext"
 export type CandidateStatus="candidate"|"importing"|"imported"|"dismissed"
 export type SearchRunState="running"|"completed"|"partial"|"failed"|"cancelled"
 export type ResearchTrigger="automatic"|"explicit"
-export type ResearchProgressPhase="research-planning"|"research-searching"|"research-deduplicating"|"research-inspecting-abstract"|"research-fetching-fulltext"|"research-saving-candidates"|"research-partial"
+export type ResearchProgressPhase="research-planning"|"research-searching"|"research-deduplicating"|"research-inspecting-abstract"|"research-fetching-fulltext"|"research-saving-candidates"|"research-importing"|"research-partial"
 export interface DiscoveredWork { id:string; canonical_key:string; doi:string|null; arxiv_id:string|null; openalex_id:string|null; title:string; authors:string[]; year:number|null; abstract_text:string|null; source_url:string; pdf_url:string|null; evidence_level:EvidenceLevel; metadata:Record<string,unknown> }
 export interface ProjectCandidate { project_id:string; work:DiscoveredWork; status:CandidateStatus; relevance_reason:string; relevance_tags:string[]; evidence_level:EvidenceLevel; discovered_by_search_run_id:string|null; discovered_by_conversation_id:string|null; import_task_id:string|null; paper_id:string|null; created_at:string; updated_at:string }
 export interface ProviderStatus { state:"completed"|"failed"|"cancelled"; hits:number; error:string|null }

@@ -167,6 +167,7 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(delete_project),
         )
         .route("/api/projects/{id}/impact", get(project_impact))
+        .route("/api/projects/{id}/goals", get(project_goals))
         .route(
             "/api/projects/{id}/candidates",
             get(list_project_candidates),
@@ -262,6 +263,18 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(
         json!({"status":"ok","codex":state.engine.is_some() || state.conversation_engine.is_some(),"version":env!("CARGO_PKG_VERSION")}),
     )
+}
+
+async fn project_goals(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .db
+        .get_project(&id)
+        .await?
+        .context("project not found")?;
+    Ok(Json(json!(state.db.project_goal_summaries(&id).await?)))
 }
 
 #[derive(Deserialize)]

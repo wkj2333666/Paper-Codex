@@ -2,7 +2,7 @@ use crate::{
     acquisition::Acquirer,
     codex::{CodexOutcome, CodexRunSettings, CodexRuntime, CodexTurn},
     db::Database,
-    domain::{Paper, TaskEvent, TaskState},
+    domain::{Paper, Task, TaskEvent, TaskState},
     extraction::extract_pdf,
     graph::materialize_proposal,
     knowledge::{
@@ -107,6 +107,44 @@ impl TaskEngine {
 
     pub fn subscribe(&self) -> broadcast::Receiver<TaskEvent> {
         self.events.subscribe()
+    }
+
+    pub async fn wait_for_terminal(
+        &self,
+        id: &str,
+        mut cancel: watch::Receiver<bool>,
+    ) -> Result<Task> {
+        let mut events = self.subscribe();
+        loop {
+            let task = self.db.get_task(id).await?.context("task not found")?;
+            let state: TaskState = task.state.parse().map_err(anyhow::Error::msg)?;
+            if matches!(
+                state,
+                TaskState::Done
+                    | TaskState::Failed
+                    | TaskState::Cancelled
+                    | TaskState::NeedsInput
+            ) {
+                return Ok(task);
+            }
+            tokio::select! {
+                changed = cancel.changed() => {
+                    if changed.is_err() || *cancel.borrow() {
+                        self.cancel(id).await?;
+                        return self.db.get_task(id).await?.context("cancelled task not found");
+                    }
+                }
+                event = events.recv() => {
+                    match event {
+                        Ok(event) if event.task_id == id => {}
+                        Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(broadcast::error::RecvError::Closed) => {
+                            bail!("task event stream closed");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub async fn create_ingest(&self, input: IngestInput) -> Result<String> {

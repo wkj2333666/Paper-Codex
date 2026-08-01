@@ -327,7 +327,9 @@ pub fn conversation_question_prompt_with_research(
         };
         format!(
             r#"
-- 当前对话允许使用项目研究工具 research_search、research_inspect 和 research_save。{mode_instruction}
+- 当前对话允许使用项目研究工具 research_search、research_inspect、research_save 和 research_import。{mode_instruction}
+- 形成完整研究闭环：检索候选，查证证据，保存真正相关的候选；若当前对话有 active Goal，且某篇候选对 Goal 高度相关，可继续调用 research_import，等待其完成全文提取、智能评阅、知识图谱和上下文刷新，再读取工具返回的 papers/ 文件参与后续分析。
+- research_import 只用于已经 research_save 的高价值候选，不要批量导入。一次 Goal 推进最多导入少量最关键论文。
 - 本地正式论文问题仍优先读取当前目录文件；外部候选论文必须先检索，再按需查证。
 - 凡写入 candidate_citations 的候选，必须先在本轮 research_inspect；仅由 Web 或 MCP 找到且未经本轮 research_inspect 查证的资料，只能在 answer_markdown 中写成普通 Markdown 链接，candidate_citations 必须为空。
 - 候选证据必须标明 metadata、abstract 或 fulltext；不得为外部候选捏造页码。
@@ -353,6 +355,7 @@ pub fn conversation_question_prompt_with_research(
 - 每条本地正式论文引用必须给出准确 paper_id、revision、从 1 开始的页码和可定位的连续原文 quote。
 - 区分论文作者的结论与分析解释；证据不足时明确说明。
 - 只有用户明确要求批注、标注、记住、固定或保存为笔记时，annotation intent 才可设置 persist=true。
+- 例外：当前对话存在 active Goal 时，可为本轮新导入且直接支撑 Goal 的论文持久化最多 3 条高价值评注；每条必须有准确页码和连续原文证据，避免把摘要复述成评注。
 {research_instructions}
 
 问题：{question}"#
