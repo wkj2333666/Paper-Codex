@@ -426,6 +426,96 @@ async fn conversation_api_supports_crud_scopes_and_messages() {
 }
 
 #[tokio::test]
+async fn conversation_goal_api_creates_reads_pauses_resumes_and_clears_native_goal() {
+    let (app, db) = conversation_test_app().await;
+    let token = login_token(&app).await;
+    let conversation = db.create_conversation("长任务").await.unwrap();
+    db.replace_conversation_scopes(
+        &conversation.id,
+        &[paper_codex::conversations::ConversationScopeInput {
+            scope_type: "project".into(),
+            scope_id: Some("default".into()),
+        }],
+    )
+    .await
+    .unwrap();
+
+    let set = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/conversations/{}/goal", conversation.id))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(
+                    r#"{"objective":"完成综述","status":"active","token_budget":40000}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(set.status(), StatusCode::OK);
+    let set = json_response(set).await;
+    assert_eq!(set["objective"], "完成综述");
+    assert_eq!(set["status"], "active");
+    assert_eq!(set["token_budget"], 40000);
+    assert!(db
+        .get_conversation(&conversation.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .thread_id
+        .is_some());
+
+    for status in ["paused", "active"] {
+        let updated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/conversations/{}/goal", conversation.id))
+                    .header("content-type", "application/json")
+                    .header("x-paper-codex-token", &token)
+                    .body(Body::from(serde_json::json!({"status":status}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.status(), StatusCode::OK);
+        assert_eq!(json_response(updated).await["status"], status);
+    }
+
+    let loaded = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/conversations/{}/goal", conversation.id))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(loaded.status(), StatusCode::OK);
+    assert_eq!(json_response(loaded).await["objective"], "完成综述");
+
+    let cleared = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/conversations/{}/goal", conversation.id))
+                .header("x-paper-codex-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
 async fn conversation_api_exposes_and_persists_codex_run_settings() {
     let (app, _db) = conversation_test_app().await;
     let token = login_token(&app).await;

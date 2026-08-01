@@ -52,6 +52,61 @@ const detail = (id: string, content: string) => ({
 })
 
 describe("conversation store", () => {
+  it("appends readable reasoning summaries by item and section", () => {
+    let state = reduceConversationEvent(conversationInitialState, event(1, "work-summary-delta", {
+      turn_id: "turn-1", item_id: "reasoning-1", summary_index: 0, text: "正在核对",
+    }))
+    state = reduceConversationEvent(state, event(2, "work-summary-delta", {
+      turn_id: "turn-1", item_id: "reasoning-1", summary_index: 0, text: "论文证据",
+    }))
+    state = reduceConversationEvent(state, event(3, "work-summary-part", {
+      turn_id: "turn-1", item_id: "reasoning-1", summary_index: 1,
+    }))
+
+    expect(state.messages.a.worklog?.summaries).toEqual([
+      { item_id: "reasoning-1", summary_index: 0, text: "正在核对论文证据" },
+      { item_id: "reasoning-1", summary_index: 1, text: "" },
+    ])
+  })
+
+  it("replaces plan snapshots and updates tool items by stable id", () => {
+    let state = reduceConversationEvent(conversationInitialState, event(1, "plan-updated", {
+      turn_id: "turn-1",
+      explanation: "先定位再回答",
+      plan: [{ step: "定位证据", status: "inProgress" }],
+    }))
+    state = reduceConversationEvent(state, event(2, "plan-updated", {
+      turn_id: "turn-1",
+      plan: [{ step: "定位证据", status: "completed" }, { step: "组织回答", status: "inProgress" }],
+    }))
+    state = reduceConversationEvent(state, event(3, "work-item-updated", {
+      turn_id: "turn-1", item_id: "tool-1", item_type: "webSearch", label: "检索论文", status: "inProgress",
+    }))
+    state = reduceConversationEvent(state, event(4, "work-item-updated", {
+      turn_id: "turn-1", item_id: "tool-1", item_type: "webSearch", label: "检索论文", status: "completed",
+    }))
+
+    expect(state.messages.a.worklog?.plan?.steps).toEqual([
+      { step: "定位证据", status: "completed" },
+      { step: "组织回答", status: "inProgress" },
+    ])
+    expect(Object.values(state.messages.a.worklog?.items ?? {})).toEqual([
+      { item_id: "tool-1", item_type: "webSearch", label: "检索论文", status: "completed" },
+    ])
+  })
+
+  it("tracks thread goal updates even when the event has no message id", () => {
+    const goalEvent = { ...event(1, "goal-updated", {
+      thread_id: "thread-1", objective: "完成综述", status: "active",
+      token_budget: 40000, tokens_used: 1200, time_used_seconds: 35,
+    }), message_id: null }
+    const state = reduceConversationEvent(conversationInitialState, goalEvent)
+    expect(state.goal).toEqual({
+      thread_id: "thread-1", objective: "完成综述", status: "active",
+      token_budget: 40000, tokens_used: 1200, time_used_seconds: 35,
+    })
+  })
+
   it("keeps the active conversation's Codex settings when loading details", () => {
     const detail = {
       conversation: {
