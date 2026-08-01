@@ -1053,6 +1053,14 @@ impl CodexRuntime {
         if let Some(service_tier) = turn.settings.service_tier {
             params["serviceTier"] = Value::String(service_tier);
         }
+        let mut active_goal = session
+            .request("thread/goal/get", json!({"threadId":thread_id}))
+            .await
+            .ok()
+            .and_then(|response| response.pointer("/result/goal").cloned())
+            .filter(|value| !value.is_null())
+            .and_then(|value| CodexGoal::from_value(&value).ok())
+            .filter(CodexGoal::active);
         let start = session.request("turn/start", params).await?;
         if let Some(error) = start.get("error") {
             bail!("Codex turn/start failed: {error}");
@@ -1064,14 +1072,6 @@ impl CodexRuntime {
             .to_owned();
         let mut final_text = String::new();
         let mut interrupted = false;
-        let mut active_goal = session
-            .request("thread/goal/get", json!({"threadId":thread_id}))
-            .await
-            .ok()
-            .and_then(|response| response.pointer("/result/goal").cloned())
-            .filter(|value| !value.is_null())
-            .and_then(|value| CodexGoal::from_value(&value).ok())
-            .filter(CodexGoal::active);
         let mut turn_finished = false;
         let mut terminal_goal = false;
         loop {
