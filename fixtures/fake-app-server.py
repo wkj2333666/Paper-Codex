@@ -5,7 +5,10 @@ import sys
 pending_turn = None
 pending_server_request = None
 turn_counter = 0
+thread_counter = 0
 active_dynamic_tools = []
+thread_dynamic_tools = {}
+last_thread_request = None
 reject_dynamic_tools = "--reject-dynamic-tools" in sys.argv
 
 def send(value):
@@ -124,13 +127,18 @@ for raw in sys.stdin:
         if reject_dynamic_tools and "dynamicTools" in msg["params"]:
             send({"id": msg["id"], "error": {"code": -32602, "message": "dynamicTools unsupported"}})
             continue
+        thread_counter += 1
+        thread_id = "thread-fake" if thread_counter == 1 else f"thread-fake-{thread_counter}"
         active_dynamic_tools = msg["params"].get("dynamicTools", [])
-        send({"id": msg["id"], "result": {"thread": {"id": "thread-fake"}}})
+        thread_dynamic_tools[thread_id] = active_dynamic_tools
+        last_thread_request = {"method": method, "params": msg["params"]}
+        send({"id": msg["id"], "result": {"thread": {"id": thread_id}}})
     elif method == "thread/resume":
         if reject_dynamic_tools and "dynamicTools" in msg["params"]:
             send({"id": msg["id"], "error": {"code": -32602, "message": "dynamicTools unsupported"}})
             continue
-        active_dynamic_tools = msg["params"].get("dynamicTools", [])
+        active_dynamic_tools = thread_dynamic_tools.get(msg["params"]["threadId"], [])
+        last_thread_request = {"method": method, "params": msg["params"]}
         send({"id": msg["id"], "result": {"thread": {"id": msg["params"]["threadId"]}}})
     elif method in ["thread/archive", "thread/unarchive", "thread/delete"]:
         result = {"thread": {"id": msg["params"]["threadId"]}} if method == "thread/unarchive" else {}
@@ -140,6 +148,8 @@ for raw in sys.stdin:
         pending_turn = f"turn-fake-{turn_counter}"
         send({"id": msg["id"], "result": {"turn": {"id": pending_turn}}})
         text = msg["params"]["input"][0]["text"]
+        if last_thread_request is not None and "observe-thread-params" in text:
+            send({"method": "test/thread-params", "params": last_thread_request})
         if "runtime-tmp" in text:
             send({"method": "test/runtime-tmp", "params": {"path": os.environ.get("TMPDIR")}})
         if "settings" in text or "skill-turn" in text:

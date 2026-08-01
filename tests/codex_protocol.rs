@@ -104,6 +104,20 @@ async fn next_test_turn_params(
     }
 }
 
+async fn next_test_thread_params(
+    mut events: tokio::sync::broadcast::Receiver<paper_codex::codex::CodexEvent>,
+    expected_method: &str,
+) -> Value {
+    loop {
+        let event = events.recv().await.unwrap();
+        if event.kind == "test/thread-params"
+            && event.payload["params"]["method"] == expected_method
+        {
+            return event.payload["params"]["params"].clone();
+        }
+    }
+}
+
 async fn next_test_runtime_tmp(
     mut events: tokio::sync::broadcast::Receiver<paper_codex::codex::CodexEvent>,
 ) -> PathBuf {
@@ -297,6 +311,36 @@ async fn executes_dynamic_tool_requests_through_the_bound_handler() {
     assert_eq!(calls[0].thread_id, "thread-fake");
     assert_eq!(outcome.status, "completed");
     assert_eq!(outcome.final_text, "tool-backed answer");
+}
+
+#[tokio::test]
+async fn does_not_try_to_retrofit_dynamic_tools_during_thread_resume() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let first = runtime
+        .run_turn(research_turn("ordinary first turn"), cancel_rx.clone())
+        .await
+        .unwrap();
+    let handler = Arc::new(RecordingHandler::default());
+    let (event_tx, _event_rx) = mpsc::unbounded_channel();
+    let thread_params = next_test_thread_params(runtime.subscribe(), "thread/resume");
+    let mut resumed = research_turn("observe-thread-params ordinary resumed turn");
+    resumed.thread_id = Some(first.thread_id);
+
+    runtime
+        .run_turn_with_events_and_tools(
+            resumed,
+            cancel_rx,
+            event_tx,
+            Some(test_tool_session(handler)),
+        )
+        .await
+        .unwrap();
+
+    let params = tokio::time::timeout(std::time::Duration::from_secs(1), thread_params)
+        .await
+        .unwrap();
+    assert!(params.get("dynamicTools").is_none());
 }
 
 #[tokio::test]
