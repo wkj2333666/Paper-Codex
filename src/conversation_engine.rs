@@ -271,15 +271,29 @@ impl ConversationEngine {
             .get_conversation(conversation_id)
             .await?
             .context("conversation does not exist")?;
+        let scopes = self.db.conversation_scopes(conversation_id).await?;
+        let has_research_project = research_project_id(&self.db, &scopes).await?.is_some();
         let thread_id = match conversation.thread_id {
             Some(thread_id) => thread_id,
             None => {
-                let thread_id = self
+                let definitions = if has_research_project
+                    && self.research.is_some()
+                    && self.codex.capabilities().supports_dynamic_tools
+                {
+                    ProjectResearchToolHandler::definitions()
+                } else {
+                    Vec::new()
+                };
+                let (thread_id, dynamic_tools_initialized) = self
                     .codex
-                    .create_thread(self.contexts.workspace_root())
+                    .create_thread_with_dynamic_tools(self.contexts.workspace_root(), &definitions)
                     .await?;
                 self.db
-                    .set_conversation_runtime(conversation_id, Some(&thread_id), "idle")
+                    .complete_conversation_runtime(
+                        conversation_id,
+                        &thread_id,
+                        dynamic_tools_initialized,
+                    )
                     .await?;
                 thread_id
             }
