@@ -96,6 +96,20 @@ test("conversation deletion uses the encoded conversation endpoint", async()=>{
   })
 })
 
+test("native conversation goals use the dedicated goal endpoint", async()=>{
+  await api.conversationGoal("conversation/one")
+  await api.setConversationGoal("conversation/one", {objective:"完成综述",status:"active",token_budget:40000})
+  await api.clearConversationGoal("conversation/one")
+  expect(capturedRequests.slice(-3).map(request=>[request.method,request.url])).toEqual([
+    ["GET","/api/conversations/conversation%2Fone/goal"],
+    ["PUT","/api/conversations/conversation%2Fone/goal"],
+    ["DELETE","/api/conversations/conversation%2Fone/goal"],
+  ])
+  expect(JSON.parse(String(capturedRequests.at(-2)?.body))).toEqual({
+    objective:"完成综述",status:"active",token_budget:40000,
+  })
+})
+
 test("conversation messages send explicit project research mode", async()=>{
   await api.sendConversationMessage("conversation/1","查找相关工作","explicit",{
     name:"paper-research",

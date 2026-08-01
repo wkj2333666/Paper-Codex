@@ -8,6 +8,7 @@ turn_counter = 0
 thread_counter = 0
 active_dynamic_tools = []
 thread_dynamic_tools = {}
+thread_goals = {}
 last_thread_request = None
 reject_dynamic_tools = "--reject-dynamic-tools" in sys.argv
 
@@ -143,6 +144,29 @@ for raw in sys.stdin:
     elif method in ["thread/archive", "thread/unarchive", "thread/delete"]:
         result = {"thread": {"id": msg["params"]["threadId"]}} if method == "thread/unarchive" else {}
         send({"id": msg["id"], "result": result})
+    elif method == "thread/goal/set":
+        thread_id = msg["params"]["threadId"]
+        previous = thread_goals.get(thread_id)
+        objective = msg["params"].get("objective", previous["objective"] if previous else "")
+        reset_usage = previous is None or objective != previous["objective"]
+        goal = {
+            "threadId": thread_id,
+            "objective": objective,
+            "status": msg["params"].get("status", previous["status"] if previous else "active"),
+            "tokenBudget": msg["params"].get("tokenBudget", previous.get("tokenBudget") if previous else None),
+            "tokensUsed": 0 if reset_usage else previous["tokensUsed"],
+            "timeUsedSeconds": 0 if reset_usage else previous["timeUsedSeconds"],
+        }
+        thread_goals[thread_id] = goal
+        send({"id": msg["id"], "result": {"goal": goal}})
+        send({"method": "thread/goal/updated", "params": {"threadId": thread_id, "goal": goal}})
+    elif method == "thread/goal/get":
+        send({"id": msg["id"], "result": {"goal": thread_goals.get(msg["params"]["threadId"])}})
+    elif method == "thread/goal/clear":
+        thread_id = msg["params"]["threadId"]
+        thread_goals.pop(thread_id, None)
+        send({"id": msg["id"], "result": {}})
+        send({"method": "thread/goal/cleared", "params": {"threadId": thread_id}})
     elif method == "turn/start":
         turn_counter += 1
         pending_turn = f"turn-fake-{turn_counter}"
@@ -188,6 +212,50 @@ for raw in sys.stdin:
                 "itemId": "command-1", "reason": "should be denied"
             }})
             pending_server_request = "approval"
+        elif "goal-budget" in text:
+            answer = "budget-limited answer"
+            send({"method": "item/completed", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": {"id": "goal-budget-answer", "type": "agentMessage", "text": answer}}})
+            send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "completed"}}})
+            goal = dict(thread_goals[msg["params"]["threadId"]])
+            goal.update({"status": "budgetLimited", "tokensUsed": 40000, "timeUsedSeconds": 20})
+            thread_goals[msg["params"]["threadId"]] = goal
+            send({"method": "thread/goal/updated", "params": {"threadId": msg["params"]["threadId"], "goal": goal}})
+            pending_turn = None
+        elif "control-block" in text:
+            send({"method": "test/control-block-started", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn}})
+        elif "goal-auto" in text:
+            first_answer = "first goal turn"
+            send({"method": "item/agentMessage/delta", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "itemId": "goal-answer-1", "delta": first_answer}})
+            send({"method": "item/completed", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": {"id": "goal-answer-1", "type": "agentMessage", "text": first_answer}}})
+            send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "completed"}}})
+            turn_counter += 1
+            pending_turn = f"turn-fake-{turn_counter}"
+            send({"method": "turn/started", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "inProgress"}}})
+            send({"method": "item/reasoning/summaryTextDelta", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "itemId": "goal-reasoning-2", "summaryIndex": 0, "delta": "继续核验完成条件"}})
+            second_answer = "second goal turn"
+            send({"method": "item/agentMessage/delta", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "itemId": "goal-answer-2", "delta": second_answer}})
+            send({"method": "item/completed", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": {"id": "goal-answer-2", "type": "agentMessage", "text": second_answer}}})
+            send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "completed"}}})
+            goal = dict(thread_goals[msg["params"]["threadId"]])
+            goal.update({"status": "complete", "tokensUsed": 321, "timeUsedSeconds": 12})
+            thread_goals[msg["params"]["threadId"]] = goal
+            send({"method": "thread/goal/updated", "params": {"threadId": msg["params"]["threadId"], "goal": goal}})
+            pending_turn = None
+        elif "stream-worklog" in text:
+            send({"method": "item/started", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": {"id": "reasoning-1", "type": "reasoning", "summary": [], "content": []}}})
+            send({"method": "item/reasoning/summaryTextDelta", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "itemId": "reasoning-1", "summaryIndex": 0, "delta": "正在核对"}})
+            send({"method": "item/reasoning/summaryTextDelta", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "itemId": "reasoning-1", "summaryIndex": 0, "delta": "论文证据"}})
+            send({"method": "item/reasoning/summaryPartAdded", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "itemId": "reasoning-1", "summaryIndex": 1}})
+            send({"method": "item/reasoning/textDelta", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "itemId": "reasoning-1", "contentIndex": 0, "delta": "raw hidden reasoning"}})
+            send({"method": "turn/plan/updated", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "explanation": "先定位再回答", "plan": [{"step": "定位证据", "status": "inProgress"}, {"step": "组织回答", "status": "pending"}]}})
+            send({"method": "item/started", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": {"id": "tool-1", "type": "webSearch", "query": "shared prefix attention"}}})
+            send({"method": "item/completed", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": {"id": "tool-1", "type": "webSearch", "query": "shared prefix attention"}}})
+            send({"method": "turn/plan/updated", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "plan": [{"step": "定位证据", "status": "completed"}, {"step": "组织回答", "status": "inProgress"}]}})
+            answer = "worklog answer"
+            send({"method": "item/agentMessage/delta", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "itemId": "item-1", "delta": answer}})
+            send({"method": "item/completed", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": {"id": "item-1", "type": "agentMessage", "text": answer}}})
+            send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "completed"}}})
+            pending_turn = None
         elif "cancel-me" not in text:
             if "outputSchema" in msg["params"]:
                 if "invalid-structured" in text:

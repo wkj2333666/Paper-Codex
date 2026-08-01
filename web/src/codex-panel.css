@@ -150,6 +150,68 @@
   scroll-behavior: smooth;
 }
 
+.codex-goal-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 9px 12px 0;
+  padding: 8px 9px;
+  border: 1px solid color-mix(in srgb, var(--green) 24%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--green-soft) 62%, var(--paper));
+}
+
+.codex-goal-icon,
+.codex-goal-actions button {
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.codex-goal-icon { color: var(--green); }
+.codex-goal-icon svg { width: 15px; height: 15px; }
+.codex-goal-copy { display: grid; min-width: 0; flex: 1; gap: 1px; }
+.codex-goal-copy strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.codex-goal-copy span { color: var(--muted); font-size: 8px; }
+.codex-goal-actions { display: flex; gap: 1px; }
+.codex-goal-actions button { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; color: var(--muted); background: transparent; }
+.codex-goal-actions button:hover { color: var(--green); background: var(--green-soft); }
+.codex-goal-actions svg { width: 13px; height: 13px; }
+
+.codex-live-work {
+  margin-left: 30px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--paper) 80%, var(--codex-subtle));
+}
+
+.codex-live-work > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  font-size: 10px;
+}
+
+.codex-live-work > summary::-webkit-details-marker { display: none; }
+.codex-live-work > summary span { display: flex; align-items: center; gap: 7px; }
+.codex-live-work > summary svg { width: 13px; height: 13px; }
+.codex-live-work[open] > summary > svg { transform: rotate(180deg); }
+.codex-live-work-body { display: grid; gap: 9px; padding: 0 10px 10px; border-top: 1px solid var(--line); }
+.codex-reasoning-summaries { padding-top: 9px; }
+.codex-reasoning-summaries p { margin: 0 0 6px; color: color-mix(in srgb, var(--ink) 82%, var(--muted)); font-size: 11px; line-height: 1.55; }
+.codex-plan > p { margin: 0 0 6px; color: var(--muted); font-size: 9px; }
+.codex-plan ol { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.codex-plan li,.codex-work-items > div { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+.codex-plan li svg,.codex-work-items svg { width: 12px; height: 12px; flex: none; }
+.codex-plan .plan-completed,.codex-work-items .work-item-completed { color: var(--green); }
+.codex-plan .plan-inProgress { color: var(--ink); }
+.codex-work-items { display: grid; gap: 4px; padding-top: 7px; border-top: 1px solid var(--line); }
+
 .codex-message-group {
   display: grid;
   gap: 9px;

@@ -23,6 +23,13 @@ export interface CodexToolPreference { server:string; tool:string }
 export interface CodexMcpTool { name:string; title:string|null; description:string|null }
 export interface CodexMcpServer { name:string; title:string|null; description:string|null; auth_status:"unsupported"|"notLoggedIn"|"bearerToken"|"oAuth"|string; tools:CodexMcpTool[] }
 export interface CodexIntegrations { skills:CodexSkill[]; mcp_servers:CodexMcpServer[]; supports_skills:boolean; supports_mcp_status:boolean; skills_error:string|null; mcp_error:string|null }
+export interface CodexGoal { thread_id:string; objective:string; status:string; token_budget:number|null; tokens_used:number; time_used_seconds:number }
+export interface CodexGoalRequest { objective?:string; status?:"active"|"paused"; token_budget?:number }
+export interface CodexWorkSummary { item_id:string; summary_index:number; text:string }
+export interface CodexPlanStep { step:string; status:"pending"|"inProgress"|"completed"|string }
+export interface CodexPlan { explanation?:string; steps:CodexPlanStep[] }
+export interface CodexWorkItem { item_id:string; item_type:string; label:string; status:string }
+export interface CodexWorklog { summaries:CodexWorkSummary[]; plan?:CodexPlan; items:Record<string,CodexWorkItem> }
 export interface Conversation { id:string; title:string; thread_id:string|null; status:string; model:string|null; reasoning_effort:string|null; service_tier:string|null; archived_at:string|null; created_at:string; updated_at:string }
 export interface ConversationScope { conversation_id?:string; scope_type:"paper"|"project"|"global"; scope_id:string|null; added_at?:string }
 export interface MessageCitation { id:string; message_id:string; paper_id:string; revision:string; page:number; section:string|null; locator:string|null; quote:string; prefix:string; suffix:string; explanation:string; match_status:string }
@@ -43,6 +50,6 @@ export type ImportCandidateOutcome={state:"already_in_project"|"linked_existing"
 export interface Annotation { id:string; citation_id:string; paper_id:string; revision:string; source_message_id:string; kind:string; body:string; state:"visible"|"hidden"; availability:"available"|"revision-stale"|"paper-missing"; created_at:string; updated_at:string }
 export interface AnnotationAnchor { annotation_id:string; page:number; rect_index:number; x:number; y:number; width:number; height:number }
 export interface PaperAnnotation { annotation:Annotation; citation:MessageCitation; anchors:AnnotationAnchor[] }
-export interface ChatMessage { id:string; conversation_id:string; role:"user"|"assistant"|"system"; content:string; live_content?:string; turn_id:string|null; status:string; error:string|null; research_mode:ResearchMode; skill_name?:string|null; skill_path?:string|null; tool_preferences:CodexToolPreference[]; citations:MessageCitation[]; candidate_citations:CandidateCitation[]; progress_phase?:"reading"|"reasoning"|"tool"|"answering"|ResearchProgressPhase; progress_label?:string; created_at:string; updated_at:string }
+export interface ChatMessage { id:string; conversation_id:string; role:"user"|"assistant"|"system"; content:string; live_content?:string; turn_id:string|null; status:string; error:string|null; research_mode:ResearchMode; skill_name?:string|null; skill_path?:string|null; tool_preferences:CodexToolPreference[]; citations:MessageCitation[]; candidate_citations:CandidateCitation[]; progress_phase?:"reading"|"reasoning"|"tool"|"answering"|ResearchProgressPhase; progress_label?:string; worklog?:CodexWorklog; created_at:string; updated_at:string }
 export interface ConversationDetail { conversation:Conversation; scopes:ConversationScope[]; messages:ChatMessage[] }
 export interface ConversationStreamEvent { id:number; type:string; conversation_id:string; message_id:string|null; payload:Record<string,unknown>; created_at:string }
