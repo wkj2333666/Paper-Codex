@@ -590,10 +590,7 @@ impl CodexRuntime {
     }
 
     pub async fn create_thread(&self, cwd: &Path) -> Result<String> {
-        Ok(self
-            .create_thread_with_dynamic_tools(cwd, &[])
-            .await?
-            .0)
+        Ok(self.create_thread_with_dynamic_tools(cwd, &[]).await?.0)
     }
 
     pub async fn create_thread_with_dynamic_tools(
