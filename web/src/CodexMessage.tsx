@@ -84,7 +84,7 @@ export function CodexMessage({
           {!message.worklog&&<ConversationProgress phase={message.progress_phase} label={message.progress_label} />}
         </div>
       ) : (
-        <><div className="codex-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>{message.worklog&&<CodexWorklog worklog={message.worklog} active={false}/>}</>
+        <div className="codex-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>
       )}
       {message.status === "failed" && (
         <p className="message-error">

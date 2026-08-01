@@ -1,4 +1,4 @@
-import type { CandidateCitation, ChatMessage, CodexGoal, CodexPlanStep, CodexRunSettings, CodexWorkItem, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, MessageCitation, ResearchProgressPhase } from "./types"
+import type { CandidateCitation, ChatMessage, CodexGoal, CodexPlanStep, CodexRunSettings, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, MessageCitation, ResearchProgressPhase } from "./types"
 import type { CodexSelection } from "./conversation-scope"
 
 export interface PendingConversationSwitch {
@@ -39,7 +39,7 @@ export type ConversationAction=
 
 function pendingMessage(id:string,conversationId:string):ChatMessage{return {id,conversation_id:conversationId,role:"assistant",content:"",live_content:"",turn_id:null,status:"streaming",error:null,research_mode:"auto",tool_preferences:[],citations:[],candidate_citations:[],created_at:"",updated_at:""}}
 
-const researchProgressPhases:ResearchProgressPhase[]=["research-planning","research-searching","research-deduplicating","research-inspecting-abstract","research-fetching-fulltext","research-saving-candidates","research-partial"]
+const researchProgressPhases:ResearchProgressPhase[]=["research-planning","research-searching","research-deduplicating","research-inspecting-abstract","research-fetching-fulltext","research-saving-candidates","research-importing","research-partial"]
 function progressPhase(value:unknown):ChatMessage["progress_phase"]{return value==="reading"||value==="reasoning"||value==="tool"||value==="answering"||researchProgressPhases.includes(value as ResearchProgressPhase)?value as ChatMessage["progress_phase"]:undefined}
 
 export function reduceConversationEvent(state:ConversationState,event:ConversationStreamEvent):ConversationState{
@@ -61,9 +61,10 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
     const summaries=[...(current.worklog?.summaries??[])]
     const index=summaries.findIndex(item=>item.item_id===itemId&&item.summary_index===summaryIndex)
     const text=event.type==="work-summary-delta"?String(event.payload.text??""):""
-    if(index>=0)summaries[index]={...summaries[index],text:`${summaries[index].text}${text}`}
-    else summaries.push({item_id:itemId,summary_index:summaryIndex,text})
-    next={...current,status:"streaming",worklog:{summaries,plan:current.worklog?.plan,items:current.worklog?.items??{}}}
+    let latest:{item_id:string;summary_index:number;text:string}
+    if(index>=0)latest={...summaries[index],text:`${summaries[index].text}${text}`}
+    else latest={item_id:itemId,summary_index:summaryIndex,text}
+    next={...current,status:"streaming",worklog:{summaries:[latest],plan:current.worklog?.plan,items:{}}}
   }
   else if(event.type==="plan-updated"){
     const steps=(event.payload.plan as CodexPlanStep[]|undefined)??[]
@@ -71,9 +72,7 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
     next={...current,status:"streaming",worklog:{summaries:current.worklog?.summaries??[],plan:{...(explanation?{explanation}:{}),steps},items:current.worklog?.items??{}}}
   }
   else if(event.type==="work-item-updated"){
-    const itemId=String(event.payload.item_id??"")
-    const item:CodexWorkItem={item_id:itemId,item_type:String(event.payload.item_type??"work"),label:String(event.payload.label??"Codex 工作"),status:String(event.payload.status??"inProgress")}
-    next={...current,status:"streaming",worklog:{summaries:current.worklog?.summaries??[],plan:current.worklog?.plan,items:{...(current.worklog?.items??{}),[itemId]:item}}}
+    next={...current,status:"streaming",worklog:{summaries:current.worklog?.summaries??[],plan:current.worklog?.plan,items:{}}}
   }
   else if(event.type==="answer-completed")next={...current,status:"completed",content:String(event.payload.answer_markdown??""),live_content:undefined,citations:(event.payload.citations as MessageCitation[]|undefined)??[],candidate_citations:(event.payload.candidate_citations as CandidateCitation[]|undefined)??[],progress_phase:undefined,progress_label:undefined}
   else if(event.type==="answer-failed")next={...current,status:"failed",live_content:undefined,error:String(event.payload.message??"回答失败"),progress_phase:undefined,progress_label:undefined}

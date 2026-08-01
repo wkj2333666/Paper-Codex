@@ -15,6 +15,7 @@ use crate::{
     },
     research::{ResearchMode, ResearchTrigger},
     research_service::{ProjectResearchToolHandler, ResearchService},
+    tasks::TaskEngine,
     workspace::Workspace,
 };
 use anyhow::{bail, Context, Result};
@@ -27,6 +28,7 @@ pub struct ConversationEngine {
     contexts: ConversationContextBuilder,
     codex: Arc<CodexRuntime>,
     research: Option<Arc<ResearchService>>,
+    tasks: Option<Arc<TaskEngine>>,
     queue: mpsc::Sender<String>,
     events: broadcast::Sender<ConversationEvent>,
     cancellations: Mutex<HashMap<String, watch::Sender<bool>>>,
@@ -200,6 +202,16 @@ impl ConversationEngine {
         codex: Arc<CodexRuntime>,
         research: Option<Arc<ResearchService>>,
     ) -> Result<Arc<Self>> {
+        Self::start_with_services(db, workspace, codex, research, None).await
+    }
+
+    pub async fn start_with_services(
+        db: Database,
+        workspace: Workspace,
+        codex: Arc<CodexRuntime>,
+        research: Option<Arc<ResearchService>>,
+        tasks: Option<Arc<TaskEngine>>,
+    ) -> Result<Arc<Self>> {
         Self::recover_states(&db).await?;
         let queued = db.queued_assistant_messages().await?;
         let (queue, mut receiver) = mpsc::channel::<String>(128);
@@ -214,6 +226,7 @@ impl ConversationEngine {
             db,
             codex,
             research,
+            tasks,
             queue,
             events,
             cancellations: Mutex::new(HashMap::new()),
@@ -735,7 +748,7 @@ impl ConversationEngine {
             (Some(project_id), Some(research))
                 if self.codex.capabilities().supports_dynamic_tools =>
             {
-                Some(Arc::new(ProjectResearchToolHandler::new(
+                let handler = ProjectResearchToolHandler::new(
                     research.clone(),
                     project_id.to_owned(),
                     conversation.id.clone(),
@@ -747,7 +760,16 @@ impl ConversationEngine {
                     },
                     cancel.clone(),
                     turn_event_tx.clone(),
-                )))
+                );
+                let handler = match self.tasks.as_ref() {
+                    Some(tasks) => handler.with_import_pipeline(
+                        tasks.clone(),
+                        self.contexts.clone(),
+                        scopes.clone(),
+                    ),
+                    None => handler,
+                };
+                Some(Arc::new(handler))
             }
             _ => None,
         };
@@ -865,7 +887,15 @@ impl ConversationEngine {
         {
             bail!("显式文献检索未执行检索工具");
         }
-        let sources = bundle
+        let final_bundle = if research_handler
+            .as_ref()
+            .is_some_and(|handler| handler.imported_paper())
+        {
+            self.contexts.refresh(&conversation.id, &scopes).await?
+        } else {
+            bundle
+        };
+        let sources = final_bundle
             .papers
             .iter()
             .map(|paper| ConversationSource {
@@ -1187,6 +1217,7 @@ fn research_progress_label(kind: &str) -> Option<&'static str> {
         "research-inspecting-abstract" => Some("Codex 正在查证候选论文摘要…"),
         "research-fetching-fulltext" => Some("Codex 正在获取并查证论文全文…"),
         "research-saving-candidates" => Some("Codex 正在保存相关候选论文…"),
+        "research-importing" => Some("Codex 正在导入并智能评阅关键论文…"),
         "research-partial" => Some("部分检索来源暂不可用，Codex 将继续使用已有结果…"),
         _ => None,
     }

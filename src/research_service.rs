@@ -2,6 +2,8 @@ use crate::{
     acquisition::Acquirer,
     codex::CodexEvent,
     codex_tools::{DynamicToolCall, DynamicToolDefinition, DynamicToolHandler, DynamicToolSession},
+    conversation_context::ConversationContextBuilder,
+    conversations::ConversationScope,
     extraction::extract_pdf,
     research::{
         CandidateStatus, DiscoveredWork, EvidenceLevel, ProjectCandidate, ResearchProvider,
@@ -121,6 +123,15 @@ pub struct ProjectResearchToolHandler {
     search_attempted: AtomicBool,
     cancel: watch::Receiver<bool>,
     events: mpsc::UnboundedSender<CodexEvent>,
+    import_pipeline: Option<ProjectImportPipeline>,
+    imported_paper: AtomicBool,
+}
+
+#[derive(Clone)]
+struct ProjectImportPipeline {
+    tasks: Arc<TaskEngine>,
+    contexts: ConversationContextBuilder,
+    scopes: Vec<ConversationScope>,
 }
 
 impl ProjectResearchToolHandler {
@@ -145,7 +156,23 @@ impl ProjectResearchToolHandler {
             search_attempted: AtomicBool::new(false),
             cancel,
             events,
+            import_pipeline: None,
+            imported_paper: AtomicBool::new(false),
         }
+    }
+
+    pub fn with_import_pipeline(
+        mut self,
+        tasks: Arc<TaskEngine>,
+        contexts: ConversationContextBuilder,
+        scopes: Vec<ConversationScope>,
+    ) -> Self {
+        self.import_pipeline = Some(ProjectImportPipeline {
+            tasks,
+            contexts,
+            scopes,
+        });
+        self
     }
 
     pub fn definitions() -> Vec<DynamicToolDefinition> {
@@ -195,6 +222,16 @@ impl ProjectResearchToolHandler {
                     }
                 }),
             },
+            DynamicToolDefinition {
+                name: "research_import".into(),
+                description: "把已保存且高度相关的项目候选导入论文库，等待全文提取、智能评阅和知识图谱完成，并刷新当前对话上下文。".into(),
+                input_schema: serde_json::json!({
+                    "type":"object",
+                    "additionalProperties":false,
+                    "required":["work_id"],
+                    "properties":{"work_id":{"type":"string"}}
+                }),
+            },
         ]
     }
 
@@ -211,6 +248,10 @@ impl ProjectResearchToolHandler {
 
     pub async fn evidence(&self) -> HashMap<String, crate::research::CandidateSource> {
         self.evidence.lock().await.clone()
+    }
+
+    pub fn imported_paper(&self) -> bool {
+        self.imported_paper.load(Ordering::Relaxed)
     }
 
     async fn require_research_scope(&self) -> Result<()> {
@@ -303,6 +344,12 @@ struct ResearchSaveArguments {
     reason: String,
     #[serde(default)]
     tags: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResearchImportArguments {
+    work_id: String,
 }
 
 #[async_trait]
@@ -411,6 +458,63 @@ impl DynamicToolHandler for ProjectResearchToolHandler {
                     )
                     .await?;
                 Ok(vec![serde_json::to_value(candidate)?])
+            }
+            "research_import" => {
+                let arguments: ResearchImportArguments =
+                    serde_json::from_value(call.arguments).context("候选导入参数无效")?;
+                self.require_available_work(&arguments.work_id).await?;
+                let pipeline = self
+                    .import_pipeline
+                    .as_ref()
+                    .context("当前对话未连接论文导入服务")?;
+                self.progress(
+                    "research-importing",
+                    serde_json::json!({"work_id":arguments.work_id}),
+                );
+                let outcome = self
+                    .research
+                    .import_candidate(
+                        &self.project_id,
+                        &arguments.work_id,
+                        Some(pipeline.tasks.as_ref()),
+                    )
+                    .await?;
+                let paper_id = match outcome {
+                    ImportCandidateOutcome::AlreadyInProject { paper_id }
+                    | ImportCandidateOutcome::LinkedExisting { paper_id } => paper_id,
+                    ImportCandidateOutcome::Enqueued { task_id } => {
+                        let task = pipeline
+                            .tasks
+                            .wait_for_terminal(&task_id, self.cancel.clone())
+                            .await?;
+                        match task.state.as_str() {
+                            "done" => task.paper_id.context("导入完成但未返回论文 ID")?,
+                            "cancelled" => bail!("论文导入已取消"),
+                            "needs-input" => bail!("论文导入需要人工补充信息"),
+                            _ => bail!(
+                                "论文导入失败：{}",
+                                task.error.as_deref().unwrap_or("未知错误")
+                            ),
+                        }
+                    }
+                };
+                let bundle = pipeline
+                    .contexts
+                    .refresh(&self.conversation_id, &pipeline.scopes)
+                    .await?;
+                let context_paper = bundle
+                    .papers
+                    .iter()
+                    .find(|paper| paper.paper_id == paper_id)
+                    .context("导入论文未出现在刷新后的项目上下文")?;
+                self.imported_paper.store(true, Ordering::Relaxed);
+                Ok(vec![serde_json::json!({
+                    "state":"ready",
+                    "paper_id":context_paper.paper_id,
+                    "revision":context_paper.revision,
+                    "context_file":format!("papers/{}",context_paper.file),
+                    "analysis_ready":true
+                })])
             }
             _ => bail!("未注册的项目研究工具"),
         }

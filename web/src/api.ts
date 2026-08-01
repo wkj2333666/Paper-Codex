@@ -1,4 +1,4 @@
-import type { Annotation, AnnotationAnchor, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectImpact, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
+import type { Annotation, AnnotationAnchor, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
 
 export class ApiError extends Error { constructor(public status:number,message:string){super(message)} }
 const TOKEN_KEY = "paper-codex-token"
@@ -29,6 +29,7 @@ export const api = {
   updateProject:(id:string,value:{name:string;purpose:string;parent_id:string|null})=>request<Project>(`/api/projects/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(value)}),
   deleteProject:(id:string,subtree=false)=>request<void>(`/api/projects/${encodeURIComponent(id)}${subtree?"?mode=subtree":""}`,{method:"DELETE"}),
   projectImpact:(id:string)=>request<ProjectImpact>(`/api/projects/${encodeURIComponent(id)}/impact`),
+  projectGoals:(id:string)=>request<ProjectGoalSummary[]>(`/api/projects/${encodeURIComponent(id)}/goals`),
   addPaper:(projectId:string,paperId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`,{method:"POST"}),
   removePaper:(projectId:string,paperId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`,{method:"DELETE"}),
   projectCandidates:(projectId:string,includeDismissed=false)=>request<ProjectCandidate[]>(`/api/projects/${encodeURIComponent(projectId)}/candidates${includeDismissed?"?include_dismissed=true":""}`),
