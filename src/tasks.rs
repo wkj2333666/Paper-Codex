@@ -120,10 +120,7 @@ impl TaskEngine {
             let state: TaskState = task.state.parse().map_err(anyhow::Error::msg)?;
             if matches!(
                 state,
-                TaskState::Done
-                    | TaskState::Failed
-                    | TaskState::Cancelled
-                    | TaskState::NeedsInput
+                TaskState::Done | TaskState::Failed | TaskState::Cancelled | TaskState::NeedsInput
             ) {
                 return Ok(task);
             }

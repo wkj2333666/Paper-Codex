@@ -349,12 +349,9 @@ async fn project_goal_summaries_follow_the_latest_goal_event() {
         .await
         .unwrap();
     let conversation = db.create_conversation("综述任务").await.unwrap();
-    db.replace_conversation_scopes(
-        &conversation.id,
-        &[scope("project", Some(&project_id))],
-    )
-    .await
-    .unwrap();
+    db.replace_conversation_scopes(&conversation.id, &[scope("project", Some(&project_id))])
+        .await
+        .unwrap();
     db.append_conversation_event(
         &conversation.id,
         None,

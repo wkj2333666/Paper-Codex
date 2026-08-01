@@ -135,7 +135,10 @@ pub struct ProjectGoalSummary {
 }
 
 impl Database {
-    pub async fn project_goal_summaries(&self, project_id: &str) -> Result<Vec<ProjectGoalSummary>> {
+    pub async fn project_goal_summaries(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectGoalSummary>> {
         let conversations: Vec<(String, String)> = sqlx::query_as(
             r#"SELECT DISTINCT c.id,c.title
                FROM conversations c
