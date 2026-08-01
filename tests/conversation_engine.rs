@@ -104,6 +104,17 @@ async fn wait_done(db: &Database, message_id: &str) {
     .unwrap();
 }
 
+async fn next_turn_params(
+    mut events: tokio::sync::broadcast::Receiver<paper_codex::codex::CodexEvent>,
+) -> serde_json::Value {
+    loop {
+        let event = events.recv().await.unwrap();
+        if event.kind == "test/turn-params" {
+            return event.payload["params"].clone();
+        }
+    }
+}
+
 #[tokio::test]
 async fn runs_fifo_and_resumes_the_same_codex_thread() {
     let (engine, _temp) = harness().await;
@@ -607,4 +618,111 @@ async fn research_tools_accept_a_paper_in_the_handlers_only_project() {
         search[0]["works"][0]["title"],
         "Kolmogorov Complexity of Game Rules"
     );
+}
+
+#[tokio::test]
+async fn legacy_project_thread_is_replaced_with_dynamic_tools_and_bounded_history() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = Workspace::initialize(temp.path()).await.unwrap();
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let project = db
+        .create_project("infra", "推理基础设施", "比较共享前缀方案")
+        .await
+        .unwrap();
+    db.insert_paper("paper:one", "Hydragen").await.unwrap();
+    db.add_paper_to_project("paper:one", &project)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE papers SET canonical_sha256='revision-one' WHERE id='paper:one'")
+        .execute(db.pool())
+        .await
+        .unwrap();
+    let pages = workspace
+        .state_dir()
+        .join("cache/extraction/revision-one/pages.md");
+    atomic_write(&pages, b"<!-- page:1 -->\nevidence")
+        .await
+        .unwrap();
+    let conversation = db.create_conversation("共享前缀").await.unwrap();
+    db.replace_conversation_scopes(
+        &conversation.id,
+        &[
+            ConversationScopeInput {
+                scope_type: "project".into(),
+                scope_id: Some(project.clone()),
+            },
+            ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            },
+        ],
+    )
+    .await
+    .unwrap();
+    db.append_chat_message(
+        &conversation.id,
+        "user",
+        "Hydragen 的关键机制是什么？",
+        "completed",
+    )
+    .await
+    .unwrap();
+    db.append_chat_message(
+        &conversation.id,
+        "assistant",
+        "它拆分共享前缀与独立后缀注意力。",
+        "completed",
+    )
+    .await
+    .unwrap();
+    db.set_conversation_runtime(&conversation.id, Some("legacy-thread"), "idle")
+        .await
+        .unwrap();
+
+    let research = Arc::new(
+        ResearchService::new(
+            ResearchStore::new(db.clone()),
+            vec![Arc::new(RuleProvider)],
+            Acquirer::new(1024 * 1024).unwrap(),
+            ResearchServiceConfig {
+                cache_dir: workspace.root().join(".runtime/research-cache"),
+                cache_max_bytes: 1024 * 1024,
+                cache_ttl: Duration::from_secs(3600),
+                max_concurrency: 1,
+            },
+        )
+        .unwrap(),
+    );
+    let codex = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let turn_params = next_turn_params(codex.subscribe());
+    let engine =
+        ConversationEngine::start_with_research(db.clone(), workspace, codex, Some(research))
+            .await
+            .unwrap();
+
+    let message = engine
+        .enqueue_message(&conversation.id, "settings 比较 qwen-infra")
+        .await
+        .unwrap();
+    wait_done(&db, &message.id).await;
+
+    let stored = db
+        .get_conversation(&conversation.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(stored.thread_id.as_deref(), Some("legacy-thread"));
+    let initialized: i64 =
+        sqlx::query_scalar("SELECT dynamic_tools_initialized FROM conversations WHERE id=?")
+            .bind(&conversation.id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(initialized, 1);
+    let params = tokio::time::timeout(Duration::from_secs(1), turn_params)
+        .await
+        .unwrap();
+    let prompt = params["input"][0]["text"].as_str().unwrap();
+    assert!(prompt.contains("Hydragen 的关键机制是什么？"));
+    assert!(prompt.contains("它拆分共享前缀与独立后缀注意力。"));
 }

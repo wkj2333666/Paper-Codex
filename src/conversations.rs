@@ -18,6 +18,7 @@ pub struct Conversation {
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub service_tier: Option<String>,
+    pub dynamic_tools_initialized: bool,
     pub archived_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -147,7 +148,7 @@ impl Database {
     ) -> Result<Vec<Conversation>> {
         let archived_filter = if archived { "IS NOT NULL" } else { "IS NULL" };
         let query = format!(
-            "SELECT id,title,thread_id,status,model,reasoning_effort,service_tier,archived_at,created_at,updated_at FROM conversations WHERE archived_at {archived_filter} ORDER BY updated_at DESC,rowid DESC LIMIT ? OFFSET ?"
+            "SELECT id,title,thread_id,status,model,reasoning_effort,service_tier,dynamic_tools_initialized,archived_at,created_at,updated_at FROM conversations WHERE archived_at {archived_filter} ORDER BY updated_at DESC,rowid DESC LIMIT ? OFFSET ?"
         );
         Ok(sqlx::query_as(&query)
             .bind(limit.clamp(1, 100))
@@ -157,7 +158,7 @@ impl Database {
     }
 
     pub async fn get_conversation(&self, id: &str) -> Result<Option<Conversation>> {
-        Ok(sqlx::query_as("SELECT id,title,thread_id,status,model,reasoning_effort,service_tier,archived_at,created_at,updated_at FROM conversations WHERE id=?")
+        Ok(sqlx::query_as("SELECT id,title,thread_id,status,model,reasoning_effort,service_tier,dynamic_tools_initialized,archived_at,created_at,updated_at FROM conversations WHERE id=?")
             .bind(id)
             .fetch_optional(self.pool())
             .await?)
@@ -468,6 +469,28 @@ impl Database {
         .await?)
     }
 
+    pub async fn completed_conversation_history_before(
+        &self,
+        message_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ChatMessage>> {
+        let mut messages = sqlx::query_as(
+            r#"SELECT id,conversation_id,role,content,turn_id,status,error,research_mode,skill_name,skill_path,tool_preferences_json AS tool_preferences,created_at,updated_at
+               FROM chat_messages
+               WHERE conversation_id=(SELECT conversation_id FROM chat_messages WHERE id=?1)
+                 AND rowid < (SELECT rowid FROM chat_messages WHERE id=?1)
+                 AND role IN ('user','assistant')
+                 AND status='completed'
+               ORDER BY rowid DESC LIMIT ?2"#,
+        )
+        .bind(message_id)
+        .bind(limit.clamp(1, 32))
+        .fetch_all(self.pool())
+        .await?;
+        messages.reverse();
+        Ok(messages)
+    }
+
     pub async fn set_conversation_runtime(
         &self,
         id: &str,
@@ -481,6 +504,27 @@ impl Database {
             .execute(self.pool())
             .await?
             .rows_affected();
+        if changed == 0 {
+            bail!("conversation does not exist");
+        }
+        Ok(())
+    }
+
+    pub async fn complete_conversation_runtime(
+        &self,
+        id: &str,
+        thread_id: &str,
+        dynamic_tools_initialized: bool,
+    ) -> Result<()> {
+        let changed = sqlx::query(
+            "UPDATE conversations SET thread_id=?,dynamic_tools_initialized=?,status='idle',updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        )
+        .bind(thread_id)
+        .bind(dynamic_tools_initialized)
+        .bind(id)
+        .execute(self.pool())
+        .await?
+        .rows_affected();
         if changed == 0 {
             bail!("conversation does not exist");
         }

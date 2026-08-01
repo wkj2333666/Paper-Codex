@@ -3,9 +3,10 @@ set -euo pipefail
 
 target="${PAPER_CODEX_CODEX_HOME:-$PWD/.runtime/codex-home}"
 source_home=""
+skill_sources=()
 
 usage() {
-  echo "usage: $0 [--target PATH] [--import-from CODEX_HOME]"
+  echo "usage: $0 [--target PATH] [--import-from CODEX_HOME] [--sync-skill-from SKILL_DIR]..."
 }
 
 config_uses_file_credentials() {
@@ -29,6 +30,11 @@ while (($#)); do
     --import-from)
       [[ $# -ge 2 ]] || { usage >&2; exit 2; }
       source_home="$2"
+      shift 2
+      ;;
+    --sync-skill-from)
+      [[ $# -ge 2 ]] || { usage >&2; exit 2; }
+      skill_sources+=("$2")
       shift 2
       ;;
     -h|--help)
@@ -81,5 +87,38 @@ if [[ -n "$source_home" && -d "$source_home/skills" ]]; then
     fi
   done < <(find "$source_home/skills" -mindepth 1 -maxdepth 1 ! -name .system -print0)
 fi
+
+for skill_source in "${skill_sources[@]}"; do
+  [[ -d "$skill_source" && -f "$skill_source/SKILL.md" ]] || {
+    echo "skill source must contain SKILL.md: $skill_source" >&2
+    exit 2
+  }
+  skill_source="$(cd "$skill_source" && pwd -P)"
+  name="${skill_source##*/}"
+  [[ -n "$name" && "$name" != "." && "$name" != ".." && "$name" != ".system" ]] || {
+    echo "invalid skill directory name: $name" >&2
+    exit 2
+  }
+  destination="$target/skills/$name"
+  temporary="$(mktemp -d "$target/skills/.${name}.sync.XXXXXX")"
+  cp -aL -- "$skill_source/." "$temporary/"
+  backup=""
+  if [[ -e "$destination" || -L "$destination" ]]; then
+    backup="$(mktemp -d "$target/skills/.${name}.backup.XXXXXX")"
+    rmdir "$backup"
+    mv "$destination" "$backup"
+  fi
+  if mv "$temporary" "$destination"; then
+    if [[ -n "$backup" ]]; then
+      rm -rf -- "$backup"
+    fi
+  else
+    if [[ -n "$backup" ]]; then
+      mv "$backup" "$destination"
+    fi
+    rm -rf -- "$temporary"
+    exit 1
+  fi
+done
 
 echo "initialized isolated Codex home: $target"

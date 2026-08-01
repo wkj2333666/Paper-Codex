@@ -153,3 +153,50 @@ fn release_archive_includes_codex_home_initializer() {
     assert!(workflow
         .contains("install -m 0755 scripts/init-codex-home.sh \"${package}/init-codex-home.sh\""));
 }
+
+#[test]
+fn explicit_skill_sync_replaces_only_the_named_isolated_skill() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("isolated");
+    let source = temp.path().join("remote-ssh-ops");
+    fs::create_dir_all(target.join("skills/remote-ssh-ops")).unwrap();
+    fs::create_dir_all(target.join("skills/keep-me")).unwrap();
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        target.join("config.toml"),
+        "cli_auth_credentials_store = \"file\"\n",
+    )
+    .unwrap();
+    fs::write(target.join("auth.json"), "private-auth").unwrap();
+    fs::write(target.join("skills/remote-ssh-ops/SKILL.md"), "old").unwrap();
+    fs::write(target.join("skills/keep-me/SKILL.md"), "keep").unwrap();
+    fs::write(source.join("SKILL.md"), "new").unwrap();
+
+    let output = run_initializer(
+        temp.path(),
+        &[
+            "--target",
+            target.to_str().unwrap(),
+            "--sync-skill-from",
+            source.to_str().unwrap(),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("auth.json")).unwrap(),
+        "private-auth"
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("skills/remote-ssh-ops/SKILL.md")).unwrap(),
+        "new"
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("skills/keep-me/SKILL.md")).unwrap(),
+        "keep"
+    );
+}
