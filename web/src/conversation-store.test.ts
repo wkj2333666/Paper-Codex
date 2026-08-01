@@ -52,7 +52,7 @@ const detail = (id: string, content: string) => ({
 })
 
 describe("conversation store", () => {
-  it("appends readable reasoning summaries by item and section", () => {
+  it("keeps only the latest readable reasoning section", () => {
     let state = reduceConversationEvent(conversationInitialState, event(1, "work-summary-delta", {
       turn_id: "turn-1", item_id: "reasoning-1", summary_index: 0, text: "正在核对",
     }))
@@ -62,14 +62,16 @@ describe("conversation store", () => {
     state = reduceConversationEvent(state, event(3, "work-summary-part", {
       turn_id: "turn-1", item_id: "reasoning-1", summary_index: 1,
     }))
+    state = reduceConversationEvent(state, event(4, "work-summary-delta", {
+      turn_id: "turn-1", item_id: "reasoning-1", summary_index: 1, text: "正在形成方向建议",
+    }))
 
     expect(state.messages.a.worklog?.summaries).toEqual([
-      { item_id: "reasoning-1", summary_index: 0, text: "正在核对论文证据" },
-      { item_id: "reasoning-1", summary_index: 1, text: "" },
+      { item_id: "reasoning-1", summary_index: 1, text: "正在形成方向建议" },
     ])
   })
 
-  it("replaces plan snapshots and updates tool items by stable id", () => {
+  it("retains plan state but does not retain tool-call rows for rendering", () => {
     let state = reduceConversationEvent(conversationInitialState, event(1, "plan-updated", {
       turn_id: "turn-1",
       explanation: "先定位再回答",
@@ -90,9 +92,7 @@ describe("conversation store", () => {
       { step: "定位证据", status: "completed" },
       { step: "组织回答", status: "inProgress" },
     ])
-    expect(Object.values(state.messages.a.worklog?.items ?? {})).toEqual([
-      { item_id: "tool-1", item_type: "webSearch", label: "检索论文", status: "completed" },
-    ])
+    expect(Object.values(state.messages.a.worklog?.items ?? {})).toEqual([])
   })
 
   it("tracks thread goal updates even when the event has no message id", () => {

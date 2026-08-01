@@ -462,6 +462,9 @@ mod tests {
         assert!(prompt.contains("本轮 research_inspect"));
         assert!(prompt.contains("Web 或 MCP"));
         assert!(prompt.contains("普通 Markdown 链接"));
+        assert!(prompt.contains("research_import"));
+        assert!(prompt.contains("完整研究闭环"));
+        assert!(prompt.contains("最多 3 条"));
     }
 
     #[test]

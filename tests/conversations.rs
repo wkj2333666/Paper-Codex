@@ -341,6 +341,25 @@ async fn messages_and_events_are_replayed_once_in_order() {
     assert_eq!(replay, vec![second]);
 }
 
+#[tokio::test]
+async fn project_goal_summaries_follow_the_latest_goal_event() {
+    let db=test_db().await;
+    let project_id=db.create_project("goal-project","Goal Project","").await.unwrap();
+    let conversation=db.create_conversation("综述任务").await.unwrap();
+    db.replace_conversation_scopes(&conversation.id,&[scope("project",Some(&project_id))]).await.unwrap();
+    db.append_conversation_event(&conversation.id,None,"goal-updated",&json!({
+      "thread_id":"thread-1","objective":"完成项目综述","status":"active","tokens_used":50,"time_used_seconds":3
+    })).await.unwrap();
+
+    let goals=db.project_goal_summaries(&project_id).await.unwrap();
+    assert_eq!(goals.len(),1);
+    assert_eq!(goals[0].objective,"完成项目综述");
+    assert_eq!(goals[0].conversation_title,"综述任务");
+
+    db.append_conversation_event(&conversation.id,None,"goal-cleared",&json!({})).await.unwrap();
+    assert!(db.project_goal_summaries(&project_id).await.unwrap().is_empty());
+}
+
 async fn citation_fixture(db: &Database, paper_id: &str, revision: &str) -> String {
     let conversation = db.create_conversation("引用").await.unwrap();
     let message = db

@@ -20,9 +20,12 @@ describe("native Codex goal and work surfaces", () => {
     expect(html).toContain('aria-label="清除目标"')
   })
 
-  it("renders readable summaries, latest plan, and one row per tool item", () => {
+  it("renders only the latest readable thought while active and hides tool details", () => {
     const html = renderToStaticMarkup(<CodexWorklog active worklog={{
-      summaries: [{ item_id: "reasoning-1", summary_index: 0, text: "正在核对论文证据" }],
+      summaries: [
+        { item_id: "reasoning-1", summary_index: 0, text: "旧的思考" },
+        { item_id: "reasoning-1", summary_index: 1, text: "正在核对论文证据" },
+      ],
       plan: { explanation: "先定位再回答", steps: [
         { step: "定位证据", status: "completed" },
         { step: "组织回答", status: "inProgress" },
@@ -30,8 +33,17 @@ describe("native Codex goal and work surfaces", () => {
       items: { "tool-1": { item_id: "tool-1", item_type: "webSearch", label: "检索论文", status: "completed" } },
     }} />)
     expect(html).toContain("正在核对论文证据")
-    expect(html).toContain("组织回答")
-    expect(html.match(/检索论文/g)).toHaveLength(1)
+    expect(html).not.toContain("旧的思考")
+    expect(html).not.toContain("组织回答")
+    expect(html).not.toContain("检索论文")
     expect(html).not.toContain("raw hidden reasoning")
+  })
+
+  it("does not retain ephemeral thinking after the answer completes", () => {
+    const html = renderToStaticMarkup(<CodexWorklog active={false} worklog={{
+      summaries: [{ item_id: "reasoning-1", summary_index: 0, text: "临时思考" }],
+      items: {},
+    }} />)
+    expect(html).toBe("")
   })
 })
