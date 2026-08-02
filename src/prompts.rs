@@ -328,8 +328,8 @@ pub fn conversation_question_prompt_with_research(
         format!(
             r#"
 - 当前对话允许使用项目研究工具 research_search、research_inspect、research_save 和 research_import。{mode_instruction}
-- 形成完整研究闭环：检索候选，查证证据，保存真正相关的候选；若当前对话有 active Goal，且某篇候选对 Goal 高度相关，可继续调用 research_import，等待其完成全文提取、智能评阅、知识图谱和上下文刷新，再读取工具返回的 papers/ 文件参与后续分析。
-- research_import 只用于已经 research_save 的高价值候选，不要批量导入。一次 Goal 推进最多导入少量最关键论文。
+- 形成完整研究闭环：检索候选，查证证据，保存真正相关的候选。若用户明确要求直接加入项目、成为项目论文或不要只保留候选，必须对选中的高价值结果依次调用 research_save 和 research_import，不得停在 candidate；若当前对话有 active Goal，且某篇候选对 Goal 高度相关，也可主动导入。
+- research_import 只用于已经 research_save 的高价值候选，不要批量导入。等待其完成全文提取、智能评阅、知识图谱和上下文刷新，再读取工具返回的 papers/ 文件参与后续分析；一次请求或一次 Goal 推进最多导入少量最关键论文。
 - 本地正式论文问题仍优先读取当前目录文件；外部候选论文必须先检索，再按需查证。
 - 凡写入 candidate_citations 的候选，必须先在本轮 research_inspect；仅由 Web 或 MCP 找到且未经本轮 research_inspect 查证的资料，只能在 answer_markdown 中写成普通 Markdown 链接，candidate_citations 必须为空。
 - 候选证据必须标明 metadata、abstract 或 fulltext；不得为外部候选捏造页码。
