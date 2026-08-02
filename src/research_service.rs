@@ -135,6 +135,8 @@ struct ProjectImportPipeline {
 }
 
 impl ProjectResearchToolHandler {
+    pub const DEFINITIONS_VERSION: i64 = 1;
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         research: Arc<ResearchService>,

@@ -306,6 +306,11 @@ impl ConversationEngine {
                         conversation_id,
                         &thread_id,
                         dynamic_tools_initialized,
+                        if dynamic_tools_initialized {
+                            ProjectResearchToolHandler::DEFINITIONS_VERSION
+                        } else {
+                            0
+                        },
                     )
                     .await?;
                 thread_id
@@ -785,17 +790,19 @@ impl ConversationEngine {
             )
             .await?;
         }
-        let replace_legacy_thread = research_handler.is_some()
+        let replace_outdated_thread = research_handler.is_some()
             && conversation.thread_id.is_some()
-            && !conversation.dynamic_tools_initialized;
-        let thread_id = if replace_legacy_thread {
+            && (!conversation.dynamic_tools_initialized
+                || conversation.dynamic_tools_version
+                    < ProjectResearchToolHandler::DEFINITIONS_VERSION);
+        let thread_id = if replace_outdated_thread {
             self.emit(
                 &conversation.id,
                 Some(&assistant.id),
                 "answer-progress",
                 json!({
                     "phase":"tool",
-                    "label":"正在为旧对话启用项目研究工具…"
+                    "label":"正在更新当前对话的项目研究工具…"
                 }),
             )
             .await?;
@@ -809,7 +816,7 @@ impl ConversationEngine {
             question.research_mode,
             research_handler.is_some(),
         );
-        if replace_legacy_thread {
+        if replace_outdated_thread {
             let history = self
                 .db
                 .completed_conversation_history_before(
@@ -952,13 +959,28 @@ impl ConversationEngine {
                 None,
             )
             .await?;
-        let dynamic_tools_initialized = conversation.dynamic_tools_initialized
-            || (started_with_dynamic_tools && self.codex.capabilities().supports_dynamic_tools);
+        let (dynamic_tools_initialized, dynamic_tools_version) = if started_with_dynamic_tools {
+            let initialized = self.codex.capabilities().supports_dynamic_tools;
+            (
+                initialized,
+                if initialized {
+                    ProjectResearchToolHandler::DEFINITIONS_VERSION
+                } else {
+                    0
+                },
+            )
+        } else {
+            (
+                conversation.dynamic_tools_initialized,
+                conversation.dynamic_tools_version,
+            )
+        };
         self.db
             .complete_conversation_runtime(
                 &conversation.id,
                 &outcome.thread_id,
                 dynamic_tools_initialized,
+                dynamic_tools_version,
             )
             .await?;
         self.emit(

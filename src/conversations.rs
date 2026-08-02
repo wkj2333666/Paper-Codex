@@ -19,6 +19,7 @@ pub struct Conversation {
     pub reasoning_effort: Option<String>,
     pub service_tier: Option<String>,
     pub dynamic_tools_initialized: bool,
+    pub dynamic_tools_version: i64,
     pub archived_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -223,7 +224,7 @@ impl Database {
     ) -> Result<Vec<Conversation>> {
         let archived_filter = if archived { "IS NOT NULL" } else { "IS NULL" };
         let query = format!(
-            "SELECT id,title,thread_id,status,model,reasoning_effort,service_tier,dynamic_tools_initialized,archived_at,created_at,updated_at FROM conversations WHERE archived_at {archived_filter} ORDER BY updated_at DESC,rowid DESC LIMIT ? OFFSET ?"
+            "SELECT id,title,thread_id,status,model,reasoning_effort,service_tier,dynamic_tools_initialized,dynamic_tools_version,archived_at,created_at,updated_at FROM conversations WHERE archived_at {archived_filter} ORDER BY updated_at DESC,rowid DESC LIMIT ? OFFSET ?"
         );
         Ok(sqlx::query_as(&query)
             .bind(limit.clamp(1, 100))
@@ -233,7 +234,7 @@ impl Database {
     }
 
     pub async fn get_conversation(&self, id: &str) -> Result<Option<Conversation>> {
-        Ok(sqlx::query_as("SELECT id,title,thread_id,status,model,reasoning_effort,service_tier,dynamic_tools_initialized,archived_at,created_at,updated_at FROM conversations WHERE id=?")
+        Ok(sqlx::query_as("SELECT id,title,thread_id,status,model,reasoning_effort,service_tier,dynamic_tools_initialized,dynamic_tools_version,archived_at,created_at,updated_at FROM conversations WHERE id=?")
             .bind(id)
             .fetch_optional(self.pool())
             .await?)
@@ -590,12 +591,14 @@ impl Database {
         id: &str,
         thread_id: &str,
         dynamic_tools_initialized: bool,
+        dynamic_tools_version: i64,
     ) -> Result<()> {
         let changed = sqlx::query(
-            "UPDATE conversations SET thread_id=?,dynamic_tools_initialized=?,status='idle',updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            "UPDATE conversations SET thread_id=?,dynamic_tools_initialized=?,dynamic_tools_version=?,status='idle',updated_at=CURRENT_TIMESTAMP WHERE id=?",
         )
         .bind(thread_id)
         .bind(dynamic_tools_initialized)
+        .bind(dynamic_tools_version)
         .bind(id)
         .execute(self.pool())
         .await?
