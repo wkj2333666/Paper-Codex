@@ -467,6 +467,7 @@ mod tests {
         assert!(prompt.contains("普通 Markdown 链接"));
         assert!(prompt.contains("research_import"));
         assert!(prompt.contains("完整研究闭环"));
+        assert!(prompt.contains("明确要求直接加入项目"));
         assert!(prompt.contains("最多 3 条"));
     }
 

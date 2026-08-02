@@ -115,6 +115,17 @@ async fn next_turn_params(
     }
 }
 
+async fn next_thread_params(
+    mut events: tokio::sync::broadcast::Receiver<paper_codex::codex::CodexEvent>,
+) -> serde_json::Value {
+    loop {
+        let event = events.recv().await.unwrap();
+        if event.kind == "test/thread-params" {
+            return event.payload["params"].clone();
+        }
+    }
+}
+
 #[tokio::test]
 async fn runs_fifo_and_resumes_the_same_codex_thread() {
     let (engine, _temp) = harness().await;
@@ -621,7 +632,7 @@ async fn research_tools_accept_a_paper_in_the_handlers_only_project() {
 }
 
 #[tokio::test]
-async fn legacy_project_thread_is_replaced_with_dynamic_tools_and_bounded_history() {
+async fn outdated_project_thread_is_replaced_with_current_tools_and_bounded_history() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = Workspace::initialize(temp.path()).await.unwrap();
     let db = Database::connect("sqlite::memory:").await.unwrap();
@@ -678,6 +689,11 @@ async fn legacy_project_thread_is_replaced_with_dynamic_tools_and_bounded_histor
     db.set_conversation_runtime(&conversation.id, Some("legacy-thread"), "idle")
         .await
         .unwrap();
+    sqlx::query("UPDATE conversations SET dynamic_tools_initialized=1 WHERE id=?")
+        .bind(&conversation.id)
+        .execute(db.pool())
+        .await
+        .unwrap();
 
     let research = Arc::new(
         ResearchService::new(
@@ -695,13 +711,17 @@ async fn legacy_project_thread_is_replaced_with_dynamic_tools_and_bounded_histor
     );
     let codex = CodexRuntime::spawn(fake_command()).await.unwrap();
     let turn_params = next_turn_params(codex.subscribe());
+    let thread_params = next_thread_params(codex.subscribe());
     let engine =
         ConversationEngine::start_with_research(db.clone(), workspace, codex, Some(research))
             .await
             .unwrap();
 
     let message = engine
-        .enqueue_message(&conversation.id, "settings 比较 qwen-infra")
+        .enqueue_message(
+            &conversation.id,
+            "observe-thread-params settings 比较 qwen-infra",
+        )
         .await
         .unwrap();
     wait_done(&db, &message.id).await;
@@ -719,6 +739,15 @@ async fn legacy_project_thread_is_replaced_with_dynamic_tools_and_bounded_histor
             .await
             .unwrap();
     assert_eq!(initialized, 1);
+    let params = tokio::time::timeout(Duration::from_secs(1), thread_params)
+        .await
+        .unwrap();
+    assert_eq!(params["method"], "thread/start");
+    assert!(params["params"]["dynamicTools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["name"] == "research_import"));
     let params = tokio::time::timeout(Duration::from_secs(1), turn_params)
         .await
         .unwrap();
