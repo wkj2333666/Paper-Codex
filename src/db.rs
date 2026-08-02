@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY, title TEXT NOT NULL, thread_id TEXT, status TEXT NOT NULL DEFAULT 'idle',
   model TEXT, reasoning_effort TEXT, service_tier TEXT,
   dynamic_tools_initialized INTEGER NOT NULL DEFAULT 0,
+  dynamic_tools_version INTEGER NOT NULL DEFAULT 0,
   archived_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -324,6 +325,7 @@ impl Database {
             ("reasoning_effort", "TEXT"),
             ("service_tier", "TEXT"),
             ("dynamic_tools_initialized", "INTEGER NOT NULL DEFAULT 0"),
+            ("dynamic_tools_version", "INTEGER NOT NULL DEFAULT 0"),
         ] {
             if !has_column(pool, "conversations", column).await? {
                 sqlx::query(&format!(
