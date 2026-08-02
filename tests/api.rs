@@ -1399,6 +1399,75 @@ async fn candidate_import_reuses_an_existing_paper_only_after_authenticated_conf
 }
 
 #[tokio::test]
+async fn removing_an_imported_paper_from_a_project_restores_its_candidate_state() {
+    let (app, db, research) = research_test_app().await;
+    let project = db
+        .create_project("candidate-removal", "Candidate removal", "")
+        .await
+        .unwrap();
+    let work = research
+        .store()
+        .upsert_work(candidate_work("10.1000/removal"))
+        .await
+        .unwrap();
+    research
+        .save_candidate(&project, &work.id, "直接相关", &[], None, None)
+        .await
+        .unwrap();
+    db.insert_paper("paper:removal", "Rule Complexity")
+        .await
+        .unwrap();
+    sqlx::query("UPDATE papers SET doi='10.1000/removal' WHERE id='paper:removal'")
+        .execute(db.pool())
+        .await
+        .unwrap();
+    let token = login_token(&app).await;
+    let imported = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/projects/{project}/candidates/{}/import",
+                    work.id
+                ))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(imported.status(), StatusCode::OK);
+
+    let removed = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/projects/{project}/papers/paper:removal"))
+                .header("x-paper-codex-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+    assert!(!db
+        .paper_project_ids("paper:removal")
+        .await
+        .unwrap()
+        .contains(&project));
+    let candidate = research
+        .store()
+        .get_candidate(&project, &work.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(candidate.status, CandidateStatus::Candidate);
+    assert_eq!(candidate.paper_id, None);
+}
+
+#[tokio::test]
 async fn candidate_review_distinguishes_dismiss_remove_and_importing_conflict() {
     let (app, db, research) = research_test_app().await;
     let token = login_token(&app).await;
