@@ -620,11 +620,23 @@ impl Database {
     }
 
     pub async fn remove_paper_from_project(&self, paper_id: &str, project_id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM project_papers WHERE project_id=? AND paper_id=?")
             .bind(project_id)
             .bind(paper_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        sqlx::query(
+            r#"UPDATE project_candidates
+               SET status='candidate',paper_id=NULL,import_task_id=NULL,
+                   updated_at=CURRENT_TIMESTAMP
+               WHERE project_id=? AND paper_id=? AND status='imported'"#,
+        )
+        .bind(project_id)
+        .bind(paper_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 
