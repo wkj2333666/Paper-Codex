@@ -32,6 +32,25 @@ export function shouldReloadProjectResearch(event:{type:string;payload:Record<st
   return event.type==="project-research-revised"&&event.payload.project_id===projectId
 }
 
+export class ProjectResearchReloadCoordinator {
+  private generation=0
+
+  invalidate(){this.generation+=1}
+
+  async run<T>(load:()=>Promise<T>,apply:(value:T)=>void,onError?:(error:unknown)=>void){
+    const generation=++this.generation
+    try{
+      const value=await load()
+      if(generation!==this.generation)return false
+      apply(value)
+      return true
+    }catch(error){
+      if(generation===this.generation)onError?.(error)
+      return false
+    }
+  }
+}
+
 export interface CandidateActions {
   dismiss:(workId:string)=>Promise<void>
   restore:(workId:string)=>Promise<void>
@@ -184,28 +203,44 @@ export function ProjectResearch({project,papers,theme,researchRevision=0,focusWo
   const [searchDetail,setSearchDetail]=useState<LiteratureSearchDetail|null>(null)
   const [loadedProjectId,setLoadedProjectId]=useState<string|null>(null)
   const loadedResearchRevision=useRef({projectId,revision:researchRevision})
+  const reloadCoordinator=useRef(new ProjectResearchReloadCoordinator())
   const load=useCallback(async()=>{
-    try{
-      const [nextCandidates,nextSearches,nextGoals,nextGraph]=await Promise.all([
+    return reloadCoordinator.current.run(
+      ()=>Promise.all([
         api.projectCandidates(projectId,includeDismissed),
         api.projectLiteratureSearches(projectId),
         api.projectGoals(projectId),
         api.graph({project_id:projectId,include_hypotheses:true}),
-      ])
-      setCandidates(nextCandidates);setSearches(nextSearches);setGoals(nextGoals);setGraph(nextGraph);setError("")
-      setLoadedProjectId(projectId)
-      setSelectedCandidate(current=>current?nextCandidates.find(item=>item.work.id===current.work.id)??null:null)
-    }catch(value){setError(value instanceof Error?value.message:"加载项目候选失败")}
-    finally{setBusy(false)}
+      ]),
+      ([nextCandidates,nextSearches,nextGoals,nextGraph])=>{
+        setCandidates(nextCandidates);setSearches(nextSearches);setGoals(nextGoals);setGraph(nextGraph);setError("");setBusy(false)
+        setLoadedProjectId(projectId)
+        setSelectedCandidate(current=>current?nextCandidates.find(item=>item.work.id===current.work.id)??null:null)
+      },
+      value=>{setError(value instanceof Error?value.message:"加载项目候选失败");setBusy(false)},
+    )
   },[includeDismissed,projectId])
-  useEffect(()=>{setTab("overview");setCandidates([]);setSearches([]);setGoals([]);setGraph({nodes:[],edges:[]});setSelectedCandidate(null);setSearchDetail(null);setLoadedProjectId(null)},[projectId])
+  useEffect(()=>{reloadCoordinator.current.invalidate();loadedResearchRevision.current={projectId,revision:researchRevision};setTab("overview");setCandidates([]);setSearches([]);setGoals([]);setGraph({nodes:[],edges:[]});setSelectedCandidate(null);setSearchDetail(null);setLoadedProjectId(null)},[projectId])
   useEffect(()=>{setBusy(true);void load()},[load])
   useEffect(()=>{
     const signal={type:"project-research-revised",payload:{project_id:projectId,revision:researchRevision}}
     if(loadedResearchRevision.current.projectId!==projectId){loadedResearchRevision.current={projectId,revision:researchRevision};return}
     if(loadedResearchRevision.current.revision===researchRevision||!shouldReloadProjectResearch(signal,projectId))return
-    loadedResearchRevision.current.revision=researchRevision
-    setBusy(true);void load()
+    let cancelled=false
+    const reloadRevision=async()=>{
+      while(!cancelled&&loadedResearchRevision.current.revision!==researchRevision){
+        setBusy(true)
+        const applied=await load()
+        if(cancelled)return
+        if(applied){
+          if(loadedResearchRevision.current.projectId===projectId)loadedResearchRevision.current.revision=researchRevision
+          return
+        }
+        await new Promise<void>(resolve=>window.setTimeout(resolve,1200))
+      }
+    }
+    void reloadRevision()
+    return()=>{cancelled=true}
   },[load,projectId,researchRevision])
   useEffect(()=>{
     if(!focusWorkId||loadedProjectId!==projectId)return

@@ -326,12 +326,19 @@ impl TaskEngine {
         atomic_write(&extracted_path, extracted.markdown.as_bytes()).await?;
         let metadata_path = staging.join("metadata.json");
         atomic_write(&metadata_path, &serde_json::to_vec_pretty(&resolved)?).await?;
-        if let Some(project_id) = &input.project_id {
-            self.db.add_paper_to_project(&paper_id, project_id).await?;
-        }
-        if let Some(research) = &self.research {
-            research.complete_candidate_import(id, &paper_id).await?;
-        }
+        self.check_cancel(&cancel)?;
+        let formalized_candidate = if let Some(project_id) = &input.project_id {
+            if let Some(research) = &self.research {
+                research
+                    .formalize_project_paper(id, &paper_id, project_id)
+                    .await?
+            } else {
+                self.db.add_paper_to_project(&paper_id, project_id).await?;
+                false
+            }
+        } else {
+            false
+        };
         self.emit(
             id,
             "formalized",
@@ -461,6 +468,17 @@ impl TaskEngine {
         self.search
             .upsert("paper", &paper_id, &paper.title, &body)
             .await?;
+        if formalized_candidate {
+            let completed = self
+                .research
+                .as_ref()
+                .context("formalized candidate lost its research store")?
+                .complete_candidate_import(id, &paper_id)
+                .await?;
+            if !completed {
+                bail!("formalized candidate disappeared before enrichment completed");
+            }
+        }
         self.stage(id, TaskState::Done).await?;
         self.emit(
             id,

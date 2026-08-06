@@ -153,10 +153,8 @@ async fn failed_import_keeps_an_acquired_paper_imported_but_reopens_unacquired_c
     db.insert_paper("paper:acquired", "Acquired paper")
         .await
         .unwrap();
-    sqlx::query("UPDATE project_candidates SET paper_id=? WHERE import_task_id=?")
-        .bind("paper:acquired")
-        .bind(&acquired_task)
-        .execute(db.pool())
+    store
+        .formalize_project_paper(&acquired_task, "paper:acquired", &project)
         .await
         .unwrap();
 
@@ -260,6 +258,12 @@ async fn formalization_keeps_enrichment_active_and_repeated_saves_cannot_demote_
         .unwrap();
     assert_eq!(imported.status, CandidateStatus::Imported);
     assert_eq!(imported.import_task_id, None);
+    let repeated_imported = store
+        .save_candidate(&project, &work.id, "再次更新理由", &[], None, None)
+        .await
+        .unwrap();
+    assert_eq!(repeated_imported.status, CandidateStatus::Imported);
+    assert_eq!(repeated_imported.paper_id.as_deref(), Some("paper:formal"));
 }
 
 #[tokio::test]

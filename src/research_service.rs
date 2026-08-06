@@ -395,40 +395,37 @@ impl ProjectResearchToolHandler {
                         true,
                         None,
                     ),
-                    "failed" => {
+                    terminal_state => {
                         let candidate = self
                             .research
                             .store()
                             .get_candidate(&self.project_id, work_id)
                             .await?
-                            .context("导入失败后候选论文不存在")?;
-                        match (candidate.status, candidate.paper_id) {
-                            (CandidateStatus::Imported, Some(paper_id)) => {
-                                (paper_id, false, task.error)
+                            .context("导入终止后候选论文不存在")?;
+                        let (mutation, fallback) = match terminal_state {
+                            "cancelled" => ("import-cancelled", "论文导入已取消"),
+                            "needs-input" => {
+                                ("import-needs-input", "论文导入需要人工补充信息")
                             }
-                            _ => {
-                                self.research_changed("import-failed", work_id);
-                                bail!(
-                                    "论文导入失败：{}",
-                                    task.error.as_deref().unwrap_or("未知错误")
-                                )
-                            }
+                            _ => ("import-failed", "论文导入失败"),
+                        };
+                        self.research_changed(mutation, work_id);
+                        if let Some(paper_id) = candidate.paper_id {
+                            (
+                                paper_id,
+                                false,
+                                task.error.clone().or_else(|| Some(fallback.to_owned())),
+                            )
+                        } else if terminal_state == "cancelled" {
+                            bail!("论文导入已取消")
+                        } else if terminal_state == "needs-input" {
+                            bail!("论文导入需要人工补充信息")
+                        } else {
+                            bail!(
+                                "论文导入失败：{}",
+                                task.error.as_deref().unwrap_or("未知错误")
+                            )
                         }
-                    }
-                    "cancelled" => {
-                        self.research_changed("import-cancelled", work_id);
-                        bail!("论文导入已取消")
-                    }
-                    "needs-input" => {
-                        self.research_changed("import-needs-input", work_id);
-                        bail!("论文导入需要人工补充信息")
-                    }
-                    _ => {
-                        self.research_changed("import-failed", work_id);
-                        bail!(
-                            "论文导入失败：{}",
-                            task.error.as_deref().unwrap_or("未知错误")
-                        )
                     }
                 }
             }
@@ -452,7 +449,7 @@ impl ProjectResearchToolHandler {
             work_id,
         );
         Ok(vec![serde_json::json!({
-            "state":if analysis_ready { "ready" } else { "partial" },
+            "state":"imported",
             "paper_id":context_paper.paper_id,
             "revision":context_paper.revision,
             "context_file":format!("papers/{}",context_paper.file),
@@ -901,23 +898,11 @@ impl ResearchService {
             )
             .await?
         {
-            let project_ids = self.store.database().paper_project_ids(&paper.id).await?;
-            self.store
-                .database()
-                .add_paper_to_project(&paper.id, project_id)
+            let already_linked = self
+                .store
+                .link_existing_paper(project_id, work_id, &paper.id)
                 .await?;
-            sqlx::query(
-                r#"UPDATE project_candidates
-                   SET status='imported',paper_id=?,import_task_id=NULL,
-                       updated_at=CURRENT_TIMESTAMP
-                   WHERE project_id=? AND work_id=?"#,
-            )
-            .bind(&paper.id)
-            .bind(project_id)
-            .bind(work_id)
-            .execute(self.store.database().pool())
-            .await?;
-            return if project_ids.iter().any(|id| id == project_id) {
+            return if already_linked {
                 Ok(ImportCandidateOutcome::AlreadyInProject { paper_id: paper.id })
             } else {
                 Ok(ImportCandidateOutcome::LinkedExisting { paper_id: paper.id })
