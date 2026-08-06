@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   BookOpen,
   CheckCircle2,
@@ -27,6 +27,10 @@ import type {
 } from "./types"
 
 export type ProjectResearchTab="overview"|"papers"|"candidates"|"searches"
+
+export function shouldReloadProjectResearch(event:{type:string;payload:Record<string,unknown>},projectId:string){
+  return event.type==="project-research-revised"&&event.payload.project_id===projectId
+}
 
 export interface CandidateActions {
   dismiss:(workId:string)=>Promise<void>
@@ -166,7 +170,7 @@ function providerSummary(search:LiteratureSearchRun){
   return `${providers.length} 个来源 · ${hits} 条命中${failed.length?` · ${failed.join("、")} 暂不可用`:""}`
 }
 
-export function ProjectResearch({project,papers,theme,focusWorkId,onFocusHandled,onOpenPaper,onRemovePaper,onChanged}:{project:Project;papers:Paper[];theme:ResolvedTheme;focusWorkId?:string;onFocusHandled?:()=>void;onOpenPaper:(paperId:string)=>void;onRemovePaper:(paperId:string)=>Promise<void>;onChanged?:()=>Promise<void>}){
+export function ProjectResearch({project,papers,theme,researchRevision=0,focusWorkId,onFocusHandled,onOpenPaper,onRemovePaper,onChanged}:{project:Project;papers:Paper[];theme:ResolvedTheme;researchRevision?:number;focusWorkId?:string;onFocusHandled?:()=>void;onOpenPaper:(paperId:string)=>void;onRemovePaper:(paperId:string)=>Promise<void>;onChanged?:()=>Promise<void>}){
   const projectId=project.id
   const [tab,setTab]=useState<ProjectResearchTab>("overview")
   const [candidates,setCandidates]=useState<ProjectCandidate[]>([])
@@ -179,6 +183,7 @@ export function ProjectResearch({project,papers,theme,focusWorkId,onFocusHandled
   const [selectedCandidate,setSelectedCandidate]=useState<ProjectCandidate|null>(null)
   const [searchDetail,setSearchDetail]=useState<LiteratureSearchDetail|null>(null)
   const [loadedProjectId,setLoadedProjectId]=useState<string|null>(null)
+  const loadedResearchRevision=useRef({projectId,revision:researchRevision})
   const load=useCallback(async()=>{
     try{
       const [nextCandidates,nextSearches,nextGoals,nextGraph]=await Promise.all([
@@ -195,6 +200,13 @@ export function ProjectResearch({project,papers,theme,focusWorkId,onFocusHandled
   },[includeDismissed,projectId])
   useEffect(()=>{setTab("overview");setCandidates([]);setSearches([]);setGoals([]);setGraph({nodes:[],edges:[]});setSelectedCandidate(null);setSearchDetail(null);setLoadedProjectId(null)},[projectId])
   useEffect(()=>{setBusy(true);void load()},[load])
+  useEffect(()=>{
+    const signal={type:"project-research-revised",payload:{project_id:projectId,revision:researchRevision}}
+    if(loadedResearchRevision.current.projectId!==projectId){loadedResearchRevision.current={projectId,revision:researchRevision};return}
+    if(loadedResearchRevision.current.revision===researchRevision||!shouldReloadProjectResearch(signal,projectId))return
+    loadedResearchRevision.current.revision=researchRevision
+    setBusy(true);void load()
+  },[load,projectId,researchRevision])
   useEffect(()=>{
     if(!focusWorkId||loadedProjectId!==projectId)return
     const candidate=candidates.find(item=>item.work.id===focusWorkId)

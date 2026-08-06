@@ -1121,6 +1121,15 @@ impl ConversationEngine {
                 self.emit(conversation_id, None, "goal-cleared", json!({}))
                     .await?;
             }
+            "project-research-changed" => {
+                self.emit(
+                    conversation_id,
+                    Some(message_id),
+                    "project-research-changed",
+                    event.payload.clone(),
+                )
+                .await?;
+            }
             _ => {}
         }
         if let Some(label) = research_progress_label(&event.kind) {
