@@ -15,7 +15,7 @@ import type { Activity as TaskActivity, CandidateCitation, CodexCapabilities, Co
 
 export { ConversationProgress } from "./CodexMessage"
 
-export interface CodexPanelProps {selection:CodexSelection;scopeLabel:string;activities:TaskActivity[];drawerOpen:boolean;onCollapse:()=>void;onCitation:(citation:MessageCitation)=>void;onCandidate?:(projectId:string,workId:string)=>void;onCitations:(citations:MessageCitation[])=>void;onSelect:(selection:CodexSelection)=>void;codexCapabilities?:CodexCapabilities}
+export interface CodexPanelProps {selection:CodexSelection;scopeLabel:string;activities:TaskActivity[];drawerOpen:boolean;onCollapse:()=>void;onCitation:(citation:MessageCitation)=>void;onCandidate?:(projectId:string,workId:string)=>void;onCitations:(citations:MessageCitation[])=>void;onSelect:(selection:CodexSelection)=>void;onResearchChanged?:(projectId:string)=>void;codexCapabilities?:CodexCapabilities}
 
 const fallbackCapabilities:CodexCapabilities={default:{model:"gpt-5.6-luna",reasoning_effort:"medium",service_tier:null},models:[{id:"gpt-5.6-luna",display_name:"GPT-5.6-Luna",default_reasoning_effort:"medium",supported_reasoning_efforts:["low","medium","high","xhigh"],supports_fast:false}],supports_dynamic_tools:false}
 
@@ -46,7 +46,7 @@ export function CandidateCitationList({citations,onCandidate}:{citations:Candida
   </button>)}</div>
 }
 
-export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollapse,onCitation,onCandidate=()=>{},onCitations,onSelect,codexCapabilities:providedCapabilities}:CodexPanelProps){
+export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollapse,onCitation,onCandidate=()=>{},onCitations,onSelect,onResearchChanged,codexCapabilities:providedCapabilities}:CodexPanelProps){
   const [state,dispatch]=useReducer(conversationReducer,conversationInitialState)
   const [text,setText]=useState("");const [busy,setBusy]=useState(false);const [error,setError]=useState("")
   const [researchMode,setResearchMode]=useState<ResearchMode>("auto")
@@ -112,7 +112,7 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
     }
   },[selection.kind,selection.id,selection.projectId,state.activeConversationId,state.scopes,state.pendingSwitch])
   useEffect(()=>onCitations(latestAnswerCitations(state.messages,state.messageOrder)),[onCitations,state.messages,state.messageOrder])
-  useEffect(()=>{if(!state.activeConversationId)return;const conversationId=state.activeConversationId;const controller=new AbortController();void streamConversationEvents(conversationId,state.lastEventId,event=>{dispatch({type:"event",event});if(["answer-completed","answer-failed","answer-cancelled"].includes(event.type)){void loadDetail(conversationId);if(event.type==="answer-completed")void refreshList()}},controller.signal).catch(()=>{});return()=>controller.abort()},[state.activeConversationId,loadDetail,refreshList])
+  useEffect(()=>{if(!state.activeConversationId)return;const conversationId=state.activeConversationId;const controller=new AbortController();void streamConversationEvents(conversationId,state.lastEventId,event=>{dispatch({type:"event",event});if(event.type==="project-research-changed"){const projectId=event.payload.project_id;if(typeof projectId==="string")onResearchChanged?.(projectId)}if(["answer-completed","answer-failed","answer-cancelled"].includes(event.type)){void loadDetail(conversationId);if(event.type==="answer-completed")void refreshList()}},controller.signal).catch(()=>{});return()=>controller.abort()},[state.activeConversationId,loadDetail,onResearchChanged,refreshList])
   const create=async()=>{const scopes=scopeFor(selection);if(!scopes.length)throw new Error("请先创建或进入一个研究项目");const item=await api.createConversation("新对话",scopes,normalizeCodexSettings(effectiveCapabilities,null));rememberConversation(item.id);await refreshList();dispatch({type:"active",id:item.id});return item.id}
   const openConversation=async(id:string)=>{
     const requestId=++historySwitchRequest.current

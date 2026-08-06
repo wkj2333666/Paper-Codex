@@ -135,7 +135,7 @@ struct ProjectImportPipeline {
 }
 
 impl ProjectResearchToolHandler {
-    pub const DEFINITIONS_VERSION: i64 = 1;
+    pub const DEFINITIONS_VERSION: i64 = 2;
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -213,6 +213,20 @@ impl ProjectResearchToolHandler {
             DynamicToolDefinition {
                 name: "research_save".into(),
                 description: "把经判断确实相关的检索结果保存为当前项目候选论文。".into(),
+                input_schema: serde_json::json!({
+                    "type":"object",
+                    "additionalProperties":false,
+                    "required":["work_id","reason"],
+                    "properties":{
+                        "work_id":{"type":"string"},
+                        "reason":{"type":"string"},
+                        "tags":{"type":"array","items":{"type":"string"},"default":[]}
+                    }
+                }),
+            },
+            DynamicToolDefinition {
+                name: "research_add_to_project".into(),
+                description: "把本轮查证且高度相关的论文一步保存并加入当前项目；PDF 提取成功即成为正式论文，智能评阅结果会在随后返回。".into(),
                 input_schema: serde_json::json!({
                     "type":"object",
                     "additionalProperties":false,
@@ -310,6 +324,136 @@ impl ProjectResearchToolHandler {
             text: None,
             payload,
         });
+    }
+
+    fn research_changed(&self, mutation: &str, work_id: &str) {
+        self.progress(
+            "project-research-changed",
+            serde_json::json!({
+                "project_id":self.project_id,
+                "work_id":work_id,
+                "mutation":mutation,
+            }),
+        );
+    }
+
+    async fn save_work(&self, arguments: &ResearchSaveArguments) -> Result<ProjectCandidate> {
+        self.require_available_work(&arguments.work_id).await?;
+        self.progress(
+            "research-saving-candidates",
+            serde_json::json!({"work_id":arguments.work_id}),
+        );
+        let run_id = self.last_run_id.lock().await.clone();
+        let candidate = self
+            .research
+            .save_candidate(
+                &self.project_id,
+                &arguments.work_id,
+                &arguments.reason,
+                &arguments.tags,
+                run_id.as_deref(),
+                Some(&self.conversation_id),
+            )
+            .await?;
+        self.research_changed("candidate-saved", &arguments.work_id);
+        Ok(candidate)
+    }
+
+    async fn import_work(&self, work_id: &str) -> Result<Vec<Value>> {
+        self.require_available_work(work_id).await?;
+        let pipeline = self
+            .import_pipeline
+            .as_ref()
+            .context("当前对话未连接论文导入服务")?;
+        self.progress("research-importing", serde_json::json!({"work_id":work_id}));
+        let outcome = self
+            .research
+            .import_candidate(&self.project_id, work_id, Some(pipeline.tasks.as_ref()))
+            .await?;
+        self.research_changed("import-started", work_id);
+
+        let (paper_id, analysis_ready, analysis_error) = match outcome {
+            ImportCandidateOutcome::AlreadyInProject { paper_id }
+            | ImportCandidateOutcome::LinkedExisting { paper_id } => {
+                let analysis_ready = self
+                    .research
+                    .store()
+                    .database()
+                    .get_paper(&paper_id)
+                    .await?
+                    .is_some_and(|paper| paper.note_path.is_some());
+                (paper_id, analysis_ready, None)
+            }
+            ImportCandidateOutcome::Enqueued { task_id } => {
+                let task = pipeline
+                    .tasks
+                    .wait_for_terminal(&task_id, self.cancel.clone())
+                    .await?;
+                match task.state.as_str() {
+                    "done" => (
+                        task.paper_id.context("导入完成但未返回论文 ID")?,
+                        true,
+                        None,
+                    ),
+                    terminal_state => {
+                        let candidate = self
+                            .research
+                            .store()
+                            .get_candidate(&self.project_id, work_id)
+                            .await?
+                            .context("导入终止后候选论文不存在")?;
+                        let (mutation, fallback) = match terminal_state {
+                            "cancelled" => ("import-cancelled", "论文导入已取消"),
+                            "needs-input" => ("import-needs-input", "论文导入需要人工补充信息"),
+                            _ => ("import-failed", "论文导入失败"),
+                        };
+                        self.research_changed(mutation, work_id);
+                        if let Some(paper_id) = candidate.paper_id {
+                            (
+                                paper_id,
+                                false,
+                                task.error.clone().or_else(|| Some(fallback.to_owned())),
+                            )
+                        } else if terminal_state == "cancelled" {
+                            bail!("论文导入已取消")
+                        } else if terminal_state == "needs-input" {
+                            bail!("论文导入需要人工补充信息")
+                        } else {
+                            bail!(
+                                "论文导入失败：{}",
+                                task.error.as_deref().unwrap_or("未知错误")
+                            )
+                        }
+                    }
+                }
+            }
+        };
+        let bundle = pipeline
+            .contexts
+            .refresh(&self.conversation_id, &pipeline.scopes)
+            .await?;
+        let context_paper = bundle
+            .papers
+            .iter()
+            .find(|paper| paper.paper_id == paper_id)
+            .context("导入论文未出现在刷新后的项目上下文")?;
+        self.imported_paper.store(true, Ordering::Relaxed);
+        self.research_changed(
+            if analysis_ready {
+                "import-completed"
+            } else {
+                "import-partial"
+            },
+            work_id,
+        );
+        Ok(vec![serde_json::json!({
+            "state":"imported",
+            "paper_id":context_paper.paper_id,
+            "revision":context_paper.revision,
+            "context_file":format!("papers/{}",context_paper.file),
+            "analysis_ready":analysis_ready,
+            "analysis_error":analysis_error,
+        })])
     }
 }
 
@@ -442,81 +586,19 @@ impl DynamicToolHandler for ProjectResearchToolHandler {
             "research_save" => {
                 let arguments: ResearchSaveArguments =
                     serde_json::from_value(call.arguments).context("候选保存参数无效")?;
-                self.require_available_work(&arguments.work_id).await?;
-                self.progress(
-                    "research-saving-candidates",
-                    serde_json::json!({"work_id":arguments.work_id}),
-                );
-                let run_id = self.last_run_id.lock().await.clone();
-                let candidate = self
-                    .research
-                    .save_candidate(
-                        &self.project_id,
-                        &arguments.work_id,
-                        &arguments.reason,
-                        &arguments.tags,
-                        run_id.as_deref(),
-                        Some(&self.conversation_id),
-                    )
-                    .await?;
+                let candidate = self.save_work(&arguments).await?;
                 Ok(vec![serde_json::to_value(candidate)?])
+            }
+            "research_add_to_project" => {
+                let arguments: ResearchSaveArguments =
+                    serde_json::from_value(call.arguments).context("正式论文添加参数无效")?;
+                self.save_work(&arguments).await?;
+                self.import_work(&arguments.work_id).await
             }
             "research_import" => {
                 let arguments: ResearchImportArguments =
                     serde_json::from_value(call.arguments).context("候选导入参数无效")?;
-                self.require_available_work(&arguments.work_id).await?;
-                let pipeline = self
-                    .import_pipeline
-                    .as_ref()
-                    .context("当前对话未连接论文导入服务")?;
-                self.progress(
-                    "research-importing",
-                    serde_json::json!({"work_id":arguments.work_id}),
-                );
-                let outcome = self
-                    .research
-                    .import_candidate(
-                        &self.project_id,
-                        &arguments.work_id,
-                        Some(pipeline.tasks.as_ref()),
-                    )
-                    .await?;
-                let paper_id = match outcome {
-                    ImportCandidateOutcome::AlreadyInProject { paper_id }
-                    | ImportCandidateOutcome::LinkedExisting { paper_id } => paper_id,
-                    ImportCandidateOutcome::Enqueued { task_id } => {
-                        let task = pipeline
-                            .tasks
-                            .wait_for_terminal(&task_id, self.cancel.clone())
-                            .await?;
-                        match task.state.as_str() {
-                            "done" => task.paper_id.context("导入完成但未返回论文 ID")?,
-                            "cancelled" => bail!("论文导入已取消"),
-                            "needs-input" => bail!("论文导入需要人工补充信息"),
-                            _ => bail!(
-                                "论文导入失败：{}",
-                                task.error.as_deref().unwrap_or("未知错误")
-                            ),
-                        }
-                    }
-                };
-                let bundle = pipeline
-                    .contexts
-                    .refresh(&self.conversation_id, &pipeline.scopes)
-                    .await?;
-                let context_paper = bundle
-                    .papers
-                    .iter()
-                    .find(|paper| paper.paper_id == paper_id)
-                    .context("导入论文未出现在刷新后的项目上下文")?;
-                self.imported_paper.store(true, Ordering::Relaxed);
-                Ok(vec![serde_json::json!({
-                    "state":"ready",
-                    "paper_id":context_paper.paper_id,
-                    "revision":context_paper.revision,
-                    "context_file":format!("papers/{}",context_paper.file),
-                    "analysis_ready":true
-                })])
+                self.import_work(&arguments.work_id).await
             }
             _ => bail!("未注册的项目研究工具"),
         }
@@ -814,23 +896,11 @@ impl ResearchService {
             )
             .await?
         {
-            let project_ids = self.store.database().paper_project_ids(&paper.id).await?;
-            self.store
-                .database()
-                .add_paper_to_project(&paper.id, project_id)
+            let already_linked = self
+                .store
+                .link_existing_paper(project_id, work_id, &paper.id)
                 .await?;
-            sqlx::query(
-                r#"UPDATE project_candidates
-                   SET status='imported',paper_id=?,import_task_id=NULL,
-                       updated_at=CURRENT_TIMESTAMP
-                   WHERE project_id=? AND work_id=?"#,
-            )
-            .bind(&paper.id)
-            .bind(project_id)
-            .bind(work_id)
-            .execute(self.store.database().pool())
-            .await?;
-            return if project_ids.iter().any(|id| id == project_id) {
+            return if already_linked {
                 Ok(ImportCandidateOutcome::AlreadyInProject { paper_id: paper.id })
             } else {
                 Ok(ImportCandidateOutcome::LinkedExisting { paper_id: paper.id })

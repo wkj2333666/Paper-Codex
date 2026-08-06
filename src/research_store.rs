@@ -302,7 +302,11 @@ impl ResearchStore {
                discovered_by_search_run_id,discovered_by_conversation_id
                ) VALUES(?,?,'candidate',?,?,?,?,?)
                ON CONFLICT(project_id,work_id) DO UPDATE SET
-               status='candidate',
+               status=CASE
+                 WHEN project_candidates.status IN ('importing','imported')
+                 THEN project_candidates.status
+                 ELSE 'candidate'
+               END,
                relevance_reason=excluded.relevance_reason,
                relevance_tags_json=excluded.relevance_tags_json,
                evidence_level=excluded.evidence_level,
@@ -398,25 +402,111 @@ impl ResearchStore {
             .context("importing project candidate is missing")
     }
 
-    pub async fn complete_candidate_import(&self, task_id: &str, paper_id: &str) -> Result<()> {
-        sqlx::query(
+    pub async fn formalize_project_paper(
+        &self,
+        task_id: &str,
+        paper_id: &str,
+        project_id: &str,
+    ) -> Result<bool> {
+        let mut transaction = self.db.pool().begin().await?;
+        let task_state: Option<String> = sqlx::query_scalar("SELECT state FROM tasks WHERE id=?")
+            .bind(task_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+        let task_state = task_state.context("paper import task does not exist")?;
+        if matches!(
+            task_state.as_str(),
+            "done" | "failed" | "cancelled" | "needs-input"
+        ) {
+            bail!("terminal paper import task cannot formalize a project paper");
+        }
+        let changed = sqlx::query(
             r#"UPDATE project_candidates
-               SET status='imported',paper_id=?,updated_at=CURRENT_TIMESTAMP
-               WHERE import_task_id=?"#,
+               SET paper_id=?,updated_at=CURRENT_TIMESTAMP
+               WHERE project_id=? AND import_task_id=? AND status='importing'"#,
+        )
+        .bind(paper_id)
+        .bind(project_id)
+        .bind(task_id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        if changed > 1 {
+            bail!("paper import task is attached to multiple project candidates");
+        }
+        sqlx::query("INSERT OR IGNORE INTO project_papers(project_id,paper_id) VALUES(?,?)")
+            .bind(project_id)
+            .bind(paper_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(changed == 1)
+    }
+
+    pub async fn link_existing_paper(
+        &self,
+        project_id: &str,
+        work_id: &str,
+        paper_id: &str,
+    ) -> Result<bool> {
+        let mut transaction = self.db.pool().begin().await?;
+        let already_linked: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM project_papers WHERE project_id=? AND paper_id=?)",
+        )
+        .bind(project_id)
+        .bind(paper_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let changed = sqlx::query(
+            r#"UPDATE project_candidates
+               SET status='imported',paper_id=?,import_task_id=NULL,
+                   updated_at=CURRENT_TIMESTAMP
+               WHERE project_id=? AND work_id=? AND status!='importing'"#,
+        )
+        .bind(paper_id)
+        .bind(project_id)
+        .bind(work_id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        if changed != 1 {
+            bail!("project candidate cannot link an existing paper");
+        }
+        sqlx::query("INSERT OR IGNORE INTO project_papers(project_id,paper_id) VALUES(?,?)")
+            .bind(project_id)
+            .bind(paper_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(already_linked)
+    }
+
+    pub async fn complete_candidate_import(&self, task_id: &str, paper_id: &str) -> Result<bool> {
+        let changed = sqlx::query(
+            r#"UPDATE project_candidates
+               SET status='imported',paper_id=?,import_task_id=NULL,
+                   updated_at=CURRENT_TIMESTAMP
+               WHERE import_task_id=? AND paper_id=? AND status='importing'"#,
         )
         .bind(paper_id)
         .bind(task_id)
+        .bind(paper_id)
         .execute(self.db.pool())
-        .await?;
-        Ok(())
+        .await?
+        .rows_affected();
+        if changed > 1 {
+            bail!("paper import task completed multiple project candidates");
+        }
+        Ok(changed == 1)
     }
 
     pub async fn fail_candidate_import(&self, task_id: &str) -> Result<()> {
         sqlx::query(
             r#"UPDATE project_candidates
-               SET status='candidate',import_task_id=NULL,paper_id=NULL,
+               SET status=CASE WHEN paper_id IS NULL THEN 'candidate' ELSE 'imported' END,
+                   import_task_id=NULL,
                    updated_at=CURRENT_TIMESTAMP
-               WHERE import_task_id=? AND status='importing'"#,
+               WHERE import_task_id=? AND status IN ('importing','imported')"#,
         )
         .bind(task_id)
         .execute(self.db.pool())

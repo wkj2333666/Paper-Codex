@@ -1403,22 +1403,38 @@ async fn conversation_events(
     if state.db.get_conversation(&id).await?.is_none() {
         return Err(ApiError::not_found("对话不存在"));
     }
-    let replay = state
-        .db
-        .conversation_events_after(&id, query.after.unwrap_or(0))
-        .await?;
+    let after = query.after.unwrap_or(0).max(0);
     let mut live = state
         .conversation_engine
         .as_ref()
         .map(|engine| engine.subscribe());
+    let replay = state.db.conversation_events_after(&id, after).await?;
+    let db = state.db.clone();
     let stream = stream! {
-        for item in replay { yield Ok(to_conversation_sse(item)); }
+        let mut cursor = after;
+        for item in replay {
+            cursor = cursor.max(item.id);
+            yield Ok(to_conversation_sse(item));
+        }
         if let Some(receiver) = &mut live {
             loop {
                 match receiver.recv().await {
-                    Ok(item) if item.conversation_id == id => yield Ok(to_conversation_sse(item)),
+                    Ok(item) if item.conversation_id == id && item.id > cursor => {
+                        cursor = item.id;
+                        yield Ok(to_conversation_sse(item));
+                    }
                     Ok(_) => continue,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        match db.conversation_events_after(&id, cursor).await {
+                            Ok(recovered) => {
+                                for item in recovered {
+                                    cursor = cursor.max(item.id);
+                                    yield Ok(to_conversation_sse(item));
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
                     Err(_) => break,
                 }
             }
@@ -1465,12 +1481,38 @@ async fn events(
     State(state): State<AppState>,
     Query(query): Query<EventsQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let replay = state.db.events_after(query.after.unwrap_or(0)).await?;
+    let after = query.after.unwrap_or(0).max(0);
     let mut live = state.engine.as_ref().map(|engine| engine.subscribe());
+    let replay = state.db.events_after(after).await?;
+    let db = state.db.clone();
     let stream = stream! {
-        for item in replay { yield Ok(to_sse(item)); }
+        let mut cursor = after;
+        for item in replay {
+            cursor = cursor.max(item.id);
+            yield Ok(to_sse(item));
+        }
         if let Some(receiver) = &mut live {
-            loop { match receiver.recv().await { Ok(item) => yield Ok(to_sse(item)), Err(broadcast::error::RecvError::Lagged(_)) => continue, Err(_) => break } }
+            loop {
+                match receiver.recv().await {
+                    Ok(item) if item.id > cursor => {
+                        cursor = item.id;
+                        yield Ok(to_sse(item));
+                    }
+                    Ok(_) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        match db.events_after(cursor).await {
+                            Ok(recovered) => {
+                                for item in recovered {
+                                    cursor = cursor.max(item.id);
+                                    yield Ok(to_sse(item));
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
         }
     };
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))

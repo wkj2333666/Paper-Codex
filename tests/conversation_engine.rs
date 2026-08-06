@@ -306,6 +306,73 @@ async fn publishes_semantic_progress_and_final_answer() {
     assert_eq!(completed.payload["citations"].as_array().unwrap().len(), 1);
 }
 
+#[tokio::test]
+async fn commentary_agent_messages_become_work_summaries_without_replacing_the_final_answer() {
+    let (engine, _temp) = harness().await;
+    let conversation = engine
+        .create_conversation(
+            "多条工作摘要",
+            vec![ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            }],
+        )
+        .await
+        .unwrap();
+    let mut events = engine.subscribe();
+    let message = engine
+        .enqueue_message(&conversation.id, "multiple-commentary-items")
+        .await
+        .unwrap();
+    let events = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut matching = Vec::new();
+        loop {
+            let event = events.recv().await.unwrap();
+            if event.message_id.as_deref() != Some(&message.id) {
+                continue;
+            }
+            let completed = event.event_type == "answer-completed";
+            matching.push(event);
+            if completed {
+                return matching;
+            }
+        }
+    })
+    .await
+    .unwrap();
+
+    let summaries = events
+        .iter()
+        .filter(|event| event.event_type == "work-summary-delta")
+        .map(|event| {
+            (
+                event.payload["item_id"].as_str().unwrap(),
+                event.payload["text"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summaries,
+        vec![
+            ("commentary-1", "先核验术语"),
+            ("commentary-2", "再检查证据"),
+        ]
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "answer-delta")
+            .filter_map(|event| event.payload["text"].as_str())
+            .collect::<String>(),
+        "最终回答 [1]"
+    );
+    let completed = events
+        .iter()
+        .find(|event| event.event_type == "answer-completed")
+        .unwrap();
+    assert_eq!(completed.payload["answer_markdown"], "最终回答 [1]");
+}
+
 #[derive(Clone)]
 struct RuleProvider;
 
