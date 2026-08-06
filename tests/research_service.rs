@@ -33,8 +33,7 @@ fn project_research_tools_add_atomically_and_retire_prior_tool_definitions() {
         .find(|item| item.name == "research_add_to_project")
         .expect("research_add_to_project tool");
     assert_eq!(
-        add
-            .input_schema
+        add.input_schema
             .pointer("/required/0")
             .and_then(serde_json::Value::as_str),
         Some("work_id")
