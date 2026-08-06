@@ -1,7 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it, vi } from "vitest"
 import { api } from "./api"
-import { createCandidateActions, ProjectResearchView, shouldReloadProjectResearch } from "./ProjectResearch"
+import {
+  createCandidateActions,
+  ProjectResearchReloadCoordinator,
+  ProjectResearchView,
+  shouldReloadProjectResearch,
+} from "./ProjectResearch"
 import type { ProjectCandidate } from "./types"
 
 const candidate = (status:ProjectCandidate["status"]="candidate"):ProjectCandidate=>({
@@ -45,6 +50,31 @@ describe("ProjectResearch",()=>{
     const refresh=vi.fn(async()=>{})
     await createCandidateActions("project-a",refresh,vi.fn()).dismiss("work/1")
     expect(update).toHaveBeenCalledWith("project-a","work/1",{status:"dismissed"})
+  })
+
+  it("does not let an older research reload overwrite a newer response",async()=>{
+    let resolveFirst!:(value:string)=>void
+    let resolveSecond!:(value:string)=>void
+    const first=new Promise<string>(resolve=>{resolveFirst=resolve})
+    const second=new Promise<string>(resolve=>{resolveSecond=resolve})
+    const applied:string[]=[]
+    const coordinator=new ProjectResearchReloadCoordinator()
+
+    const firstRun=coordinator.run(()=>first,value=>applied.push(value))
+    const secondRun=coordinator.run(()=>second,value=>applied.push(value))
+    resolveSecond("newer")
+    expect(await secondRun).toBe(true)
+    resolveFirst("older")
+    expect(await firstRun).toBe(false)
+    expect(applied).toEqual(["newer"])
+  })
+
+  it("only acknowledges a research reload after it succeeds",async()=>{
+    const coordinator=new ProjectResearchReloadCoordinator()
+    expect(await coordinator.run(async()=>{throw new Error("temporary")},()=>{})).toBe(false)
+    const applied:string[]=[]
+    expect(await coordinator.run(async()=>"retried",value=>applied.push(value))).toBe(true)
+    expect(applied).toEqual(["retried"])
   })
 
   it("distinguishes candidate, importing, and imported actions",()=>{

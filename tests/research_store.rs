@@ -199,6 +199,112 @@ async fn failed_import_keeps_an_acquired_paper_imported_but_reopens_unacquired_c
     assert_eq!(pending.import_task_id, None);
 }
 
+#[tokio::test]
+async fn formalization_keeps_enrichment_active_and_repeated_saves_cannot_demote_it() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let store = ResearchStore::new(db.clone());
+    let project = db.create_project("formal", "Formal", "").await.unwrap();
+    let work = store
+        .upsert_work(sample_work("doi:10.1000/formal"))
+        .await
+        .unwrap();
+    store
+        .save_candidate(&project, &work.id, "正式导入", &[], None, None)
+        .await
+        .unwrap();
+    let task = db
+        .create_task("ingest", r#"{"source":"doi:10.1000/formal"}"#)
+        .await
+        .unwrap();
+    store
+        .mark_candidate_importing(&project, &work.id, &task)
+        .await
+        .unwrap();
+    db.insert_paper("paper:formal", "Formal paper")
+        .await
+        .unwrap();
+
+    assert!(store
+        .formalize_project_paper(&task, "paper:formal", &project)
+        .await
+        .unwrap());
+    let formalizing = store
+        .get_candidate(&project, &work.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(formalizing.status, CandidateStatus::Importing);
+    assert_eq!(formalizing.paper_id.as_deref(), Some("paper:formal"));
+    assert_eq!(formalizing.import_task_id.as_deref(), Some(task.as_str()));
+    assert_eq!(
+        db.paper_project_ids("paper:formal").await.unwrap(),
+        vec![project.clone()]
+    );
+
+    let repeated = store
+        .save_candidate(&project, &work.id, "更新后的理由", &[], None, None)
+        .await
+        .unwrap();
+    assert_eq!(repeated.status, CandidateStatus::Importing);
+    assert_eq!(repeated.paper_id.as_deref(), Some("paper:formal"));
+    assert_eq!(repeated.import_task_id.as_deref(), Some(task.as_str()));
+
+    assert!(store
+        .complete_candidate_import(&task, "paper:formal")
+        .await
+        .unwrap());
+    let imported = store
+        .get_candidate(&project, &work.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(imported.status, CandidateStatus::Imported);
+    assert_eq!(imported.import_task_id, None);
+}
+
+#[tokio::test]
+async fn cancelled_task_cannot_formalize_a_project_paper() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let store = ResearchStore::new(db.clone());
+    let project = db.create_project("cancel", "Cancel", "").await.unwrap();
+    let work = store
+        .upsert_work(sample_work("doi:10.1000/cancel"))
+        .await
+        .unwrap();
+    store
+        .save_candidate(&project, &work.id, "取消边界", &[], None, None)
+        .await
+        .unwrap();
+    let task = db
+        .create_task("ingest", r#"{"source":"doi:10.1000/cancel"}"#)
+        .await
+        .unwrap();
+    store
+        .mark_candidate_importing(&project, &work.id, &task)
+        .await
+        .unwrap();
+    db.insert_paper("paper:cancel", "Cancelled paper")
+        .await
+        .unwrap();
+    db.force_task_state(
+        &task,
+        paper_codex::domain::TaskState::Cancelled,
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert!(store
+        .formalize_project_paper(&task, "paper:cancel", &project)
+        .await
+        .is_err());
+    assert!(db
+        .paper_project_ids("paper:cancel")
+        .await
+        .unwrap()
+        .is_empty());
+}
+
 #[test]
 fn canonical_identifiers_remove_transport_noise_without_title_merging() {
     assert_eq!(
