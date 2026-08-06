@@ -86,13 +86,43 @@ fn leading_chars(value: &str, limit: usize) -> String {
     format!("{}…", value.chars().take(keep).collect::<String>())
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum AgentMessagePhase {
+    Commentary,
+    FinalAnswer,
+    #[default]
+    Unknown,
+}
+
 #[derive(Default)]
 struct AnswerPreview {
     raw: String,
     visible: String,
+    item_id: Option<String>,
+    phase: AgentMessagePhase,
 }
 
 impl AnswerPreview {
+    fn start(&mut self, item: &Value) {
+        self.raw.clear();
+        self.visible.clear();
+        self.item_id = item.get("id").and_then(Value::as_str).map(str::to_owned);
+        self.phase = match item.get("phase").and_then(Value::as_str) {
+            Some("commentary") => AgentMessagePhase::Commentary,
+            Some("final_answer") => AgentMessagePhase::FinalAnswer,
+            _ => AgentMessagePhase::Unknown,
+        };
+    }
+
+    fn ensure_item(&mut self, item_id: Option<&str>) {
+        if item_id.is_some() && item_id != self.item_id.as_deref() {
+            self.raw.clear();
+            self.visible.clear();
+            self.item_id = item_id.map(str::to_owned);
+            self.phase = AgentMessagePhase::Unknown;
+        }
+    }
+
     fn push(&mut self, delta: &str) -> Option<String> {
         self.raw.push_str(delta);
         let next = extract_json_string_prefix(&self.raw, "answer_markdown")?;
@@ -1049,6 +1079,9 @@ impl ConversationEngine {
             "item/started" | "item/completed" => {
                 if let Some(item) = event.payload.pointer("/params/item") {
                     let item_type = item.get("type").and_then(Value::as_str).unwrap_or("work");
+                    if event.kind == "item/started" && item_type == "agentMessage" {
+                        preview.start(item);
+                    }
                     if item_type != "agentMessage" && item_type != "reasoning" {
                         self.emit(
                             conversation_id,
@@ -1109,12 +1142,33 @@ impl ConversationEngine {
             .await?;
         }
         if event.kind == "agent-delta" {
+            let item_id = event
+                .payload
+                .pointer("/params/itemId")
+                .and_then(Value::as_str);
+            preview.ensure_item(item_id);
             if let Some(delta) = event.text.as_deref().and_then(|text| preview.push(text)) {
+                let (event_type, payload) = if preview.phase == AgentMessagePhase::Commentary {
+                    (
+                        "work-summary-delta",
+                        json!({
+                            "turn_id":event.payload.pointer("/params/turnId"),
+                            "item_id":item_id,
+                            "summary_index":0,
+                            "text":delta,
+                        }),
+                    )
+                } else {
+                    (
+                        "answer-delta",
+                        json!({"text":delta,"phase":"answering"}),
+                    )
+                };
                 self.emit(
                     conversation_id,
                     Some(message_id),
-                    "answer-delta",
-                    json!({"text":delta,"phase":"answering"}),
+                    event_type,
+                    payload,
                 )
                 .await?;
             }
