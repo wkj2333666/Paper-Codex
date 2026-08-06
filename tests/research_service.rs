@@ -39,7 +39,7 @@ fn project_research_tools_add_atomically_and_retire_prior_tool_definitions() {
         Some("work_id")
     );
     assert!(
-        ProjectResearchToolHandler::DEFINITIONS_VERSION > 1,
+        std::hint::black_box(ProjectResearchToolHandler::DEFINITIONS_VERSION) > 1,
         "the prior persisted dynamic-tool definition must be invalidated"
     );
 }
