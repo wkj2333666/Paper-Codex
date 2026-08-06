@@ -128,6 +128,74 @@ async fn search_run_keeps_results_without_promoting_all_to_candidates() {
     );
 }
 
+#[tokio::test]
+async fn failed_import_keeps_an_acquired_paper_imported_but_reopens_unacquired_candidates() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let store = ResearchStore::new(db.clone());
+    let project = db.create_project("bench", "Bench", "").await.unwrap();
+
+    let acquired = store
+        .upsert_work(sample_work("doi:10.1000/acquired"))
+        .await
+        .unwrap();
+    store
+        .save_candidate(&project, &acquired.id, "已获取正式论文", &[], None, None)
+        .await
+        .unwrap();
+    let acquired_task = db
+        .create_task("ingest", r#"{"source":"doi:10.1000/acquired"}"#)
+        .await
+        .unwrap();
+    store
+        .mark_candidate_importing(&project, &acquired.id, &acquired_task)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE project_candidates SET paper_id=? WHERE import_task_id=?")
+        .bind("paper:acquired")
+        .bind(&acquired_task)
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+    let pending = store
+        .upsert_work(sample_work("doi:10.1000/pending"))
+        .await
+        .unwrap();
+    store
+        .save_candidate(&project, &pending.id, "尚未获取正式论文", &[], None, None)
+        .await
+        .unwrap();
+    let pending_task = db
+        .create_task("ingest", r#"{"source":"doi:10.1000/pending"}"#)
+        .await
+        .unwrap();
+    store
+        .mark_candidate_importing(&project, &pending.id, &pending_task)
+        .await
+        .unwrap();
+
+    store.fail_candidate_import(&acquired_task).await.unwrap();
+    store.fail_candidate_import(&pending_task).await.unwrap();
+
+    let acquired = store
+        .get_candidate(&project, &acquired.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(acquired.status, CandidateStatus::Imported);
+    assert_eq!(acquired.paper_id.as_deref(), Some("paper:acquired"));
+    assert_eq!(acquired.import_task_id, None);
+
+    let pending = store
+        .get_candidate(&project, &pending.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending.status, CandidateStatus::Candidate);
+    assert_eq!(pending.paper_id, None);
+    assert_eq!(pending.import_task_id, None);
+}
+
 #[test]
 fn canonical_identifiers_remove_transport_noise_without_title_merging() {
     assert_eq!(

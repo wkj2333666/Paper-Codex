@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it, vi } from "vitest"
 import { api } from "./api"
-import { createCandidateActions, ProjectResearchView } from "./ProjectResearch"
+import { createCandidateActions, ProjectResearchView, shouldReloadProjectResearch } from "./ProjectResearch"
 import type { ProjectCandidate } from "./types"
 
 const candidate = (status:ProjectCandidate["status"]="candidate"):ProjectCandidate=>({
@@ -34,6 +34,12 @@ const candidate = (status:ProjectCandidate["status"]="candidate"):ProjectCandida
 })
 
 describe("ProjectResearch",()=>{
+  it("recognizes a selected project's research revision as a reload signal",()=>{
+    expect(shouldReloadProjectResearch({type:"project-research-revised",payload:{project_id:"project-a",revision:2}},"project-a")).toBe(true)
+    expect(shouldReloadProjectResearch({type:"project-research-revised",payload:{project_id:"project-b",revision:2}},"project-a")).toBe(false)
+    expect(shouldReloadProjectResearch({type:"done",payload:{project_id:"project-a"}},"project-a")).toBe(false)
+  })
+
   it("keeps candidate actions scoped to the selected project",async()=>{
     const update=vi.spyOn(api,"updateCandidate").mockResolvedValue(candidate("dismissed"))
     const refresh=vi.fn(async()=>{})

@@ -26,18 +26,22 @@ enum StubResponse {
 }
 
 #[test]
-fn project_research_tools_include_controlled_import() {
+fn project_research_tools_add_atomically_and_retire_prior_tool_definitions() {
     let definitions = ProjectResearchToolHandler::definitions();
-    let import = definitions
+    let add = definitions
         .iter()
-        .find(|item| item.name == "research_import")
-        .expect("research_import tool");
+        .find(|item| item.name == "research_add_to_project")
+        .expect("research_add_to_project tool");
     assert_eq!(
-        import
+        add
             .input_schema
             .pointer("/required/0")
             .and_then(serde_json::Value::as_str),
         Some("work_id")
+    );
+    assert!(
+        ProjectResearchToolHandler::DEFINITIONS_VERSION > 1,
+        "the prior persisted dynamic-tool definition must be invalidated"
     );
 }
 

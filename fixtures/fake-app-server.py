@@ -256,6 +256,32 @@ for raw in sys.stdin:
             send({"method": "item/completed", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": {"id": "item-1", "type": "agentMessage", "text": answer}}})
             send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "completed"}}})
             pending_turn = None
+        elif "multiple-commentary-items" in text:
+            commentary = [
+                ("commentary-1", "先核验术语"),
+                ("commentary-2", "再检查证据"),
+            ]
+            for item_id, summary in commentary:
+                item = {"id": item_id, "type": "agentMessage", "phase": "commentary", "text": summary}
+                send({"method": "item/started", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": item}})
+                send({"method": "item/agentMessage/delta", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "itemId": item_id, "delta": json.dumps({"answer_markdown": summary}, ensure_ascii=False, separators=(",", ":"))}})
+                send({"method": "item/completed", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": item}})
+            answer = json.dumps({
+                "answer_markdown": "最终回答 [1]",
+                "citations": [{
+                    "id": "1", "paper_id": "paper:one", "revision": "revision-one", "page": 1,
+                    "section": None, "locator": None, "quote": "evidence", "prefix": "", "suffix": "",
+                    "explanation": "supports the final answer"
+                }],
+                "candidate_citations": [],
+                "annotation_intents": []
+            }, ensure_ascii=False, separators=(",", ":"))
+            final_item = {"id": "final-answer", "type": "agentMessage", "phase": "final_answer", "text": answer}
+            send({"method": "item/started", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": final_item}})
+            send({"method": "item/agentMessage/delta", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "itemId": "final-answer", "delta": answer}})
+            send({"method": "item/completed", "params": {"threadId": msg["params"]["threadId"], "turnId": pending_turn, "item": final_item}})
+            send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "completed"}}})
+            pending_turn = None
         elif "cancel-me" not in text:
             if "outputSchema" in msg["params"]:
                 if "invalid-structured" in text:

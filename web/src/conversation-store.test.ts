@@ -71,6 +71,25 @@ describe("conversation store", () => {
     ])
   })
 
+  it("replaces an earlier commentary item while appending deltas from the current item", () => {
+    let state = reduceConversationEvent(conversationInitialState, event(1, "work-summary-delta", {
+      turn_id: "turn-1", item_id: "commentary-1", summary_index: 0, text: "先核验",
+    }))
+    state = reduceConversationEvent(state, event(2, "work-summary-delta", {
+      turn_id: "turn-1", item_id: "commentary-1", summary_index: 0, text: "术语",
+    }))
+    expect(state.messages.a.worklog?.summaries).toEqual([
+      { item_id: "commentary-1", summary_index: 0, text: "先核验术语" },
+    ])
+    state = reduceConversationEvent(state, event(3, "work-summary-delta", {
+      turn_id: "turn-1", item_id: "commentary-2", summary_index: 0, text: "再检查证据",
+    }))
+
+    expect(state.messages.a.worklog?.summaries).toEqual([
+      { item_id: "commentary-2", summary_index: 0, text: "再检查证据" },
+    ])
+  })
+
   it("retains plan state but does not retain tool-call rows for rendering", () => {
     let state = reduceConversationEvent(conversationInitialState, event(1, "plan-updated", {
       turn_id: "turn-1",
