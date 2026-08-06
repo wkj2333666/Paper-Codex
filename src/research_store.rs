@@ -401,7 +401,8 @@ impl ResearchStore {
     pub async fn complete_candidate_import(&self, task_id: &str, paper_id: &str) -> Result<()> {
         sqlx::query(
             r#"UPDATE project_candidates
-               SET status='imported',paper_id=?,updated_at=CURRENT_TIMESTAMP
+               SET status='imported',paper_id=?,import_task_id=NULL,
+                   updated_at=CURRENT_TIMESTAMP
                WHERE import_task_id=?"#,
         )
         .bind(paper_id)
@@ -414,9 +415,10 @@ impl ResearchStore {
     pub async fn fail_candidate_import(&self, task_id: &str) -> Result<()> {
         sqlx::query(
             r#"UPDATE project_candidates
-               SET status='candidate',import_task_id=NULL,paper_id=NULL,
+               SET status=CASE WHEN paper_id IS NULL THEN 'candidate' ELSE 'imported' END,
+                   import_task_id=NULL,
                    updated_at=CURRENT_TIMESTAMP
-               WHERE import_task_id=? AND status='importing'"#,
+               WHERE import_task_id=? AND status IN ('importing','imported')"#,
         )
         .bind(task_id)
         .execute(self.db.pool())

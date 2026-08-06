@@ -101,7 +101,7 @@ export default function App(){
   useEffect(()=>{
     if(!authenticated)return
     const controller=new AbortController();let stopped=false
-    const run=async()=>{while(!stopped){try{await streamEvents(lastEvent.current,event=>{lastEvent.current=Math.max(lastEvent.current,event.id);dispatch(event);setDashboard(value=>value?{...value,tasks:mergeIntakeTaskEvent(value.tasks,event)}:value);if(["result","failed","done","cancelled"].includes(event.type))void load()},controller.signal)}catch{if(controller.signal.aborted)return;await new Promise(resolve=>setTimeout(resolve,1200))}}}
+    const run=async()=>{while(!stopped){try{await streamEvents(lastEvent.current,event=>{lastEvent.current=Math.max(lastEvent.current,event.id);dispatch(event);setDashboard(value=>value?{...value,tasks:mergeIntakeTaskEvent(value.tasks,event)}:value);if(["formalized","result","failed","done","cancelled"].includes(event.type))void load()},controller.signal)}catch{if(controller.signal.aborted)return;await new Promise(resolve=>setTimeout(resolve,1200))}}}
     void run();return()=>{stopped=true;controller.abort()}
   },[authenticated,load])
   useEffect(()=>savePanelLayout(panels),[panels])
