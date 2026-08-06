@@ -286,13 +286,9 @@ async fn cancelled_task_cannot_formalize_a_project_paper() {
     db.insert_paper("paper:cancel", "Cancelled paper")
         .await
         .unwrap();
-    db.force_task_state(
-        &task,
-        paper_codex::domain::TaskState::Cancelled,
-        None,
-    )
-    .await
-    .unwrap();
+    db.force_task_state(&task, paper_codex::domain::TaskState::Cancelled, None)
+        .await
+        .unwrap();
 
     assert!(store
         .formalize_project_paper(&task, "paper:cancel", &project)
