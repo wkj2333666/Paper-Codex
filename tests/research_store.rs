@@ -150,6 +150,9 @@ async fn failed_import_keeps_an_acquired_paper_imported_but_reopens_unacquired_c
         .mark_candidate_importing(&project, &acquired.id, &acquired_task)
         .await
         .unwrap();
+    db.insert_paper("paper:acquired", "Acquired paper")
+        .await
+        .unwrap();
     sqlx::query("UPDATE project_candidates SET paper_id=? WHERE import_task_id=?")
         .bind("paper:acquired")
         .bind(&acquired_task)
