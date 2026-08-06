@@ -365,10 +365,7 @@ impl ProjectResearchToolHandler {
             .import_pipeline
             .as_ref()
             .context("当前对话未连接论文导入服务")?;
-        self.progress(
-            "research-importing",
-            serde_json::json!({"work_id":work_id}),
-        );
+        self.progress("research-importing", serde_json::json!({"work_id":work_id}));
         let outcome = self
             .research
             .import_candidate(&self.project_id, work_id, Some(pipeline.tasks.as_ref()))

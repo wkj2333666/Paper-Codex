@@ -1168,18 +1168,10 @@ impl ConversationEngine {
                         }),
                     )
                 } else {
-                    (
-                        "answer-delta",
-                        json!({"text":delta,"phase":"answering"}),
-                    )
+                    ("answer-delta", json!({"text":delta,"phase":"answering"}))
                 };
-                self.emit(
-                    conversation_id,
-                    Some(message_id),
-                    event_type,
-                    payload,
-                )
-                .await?;
+                self.emit(conversation_id, Some(message_id), event_type, payload)
+                    .await?;
             }
         }
         Ok(())
