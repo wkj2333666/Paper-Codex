@@ -133,11 +133,7 @@ async fn candidate_import_task_completion_and_failure_update_project_state() {
         .await
         .unwrap();
     store
-        .formalize_project_paper(
-            &completed_task,
-            "doi:10.1000/completed",
-            &project,
-        )
+        .formalize_project_paper(&completed_task, "doi:10.1000/completed", &project)
         .await
         .unwrap();
     store

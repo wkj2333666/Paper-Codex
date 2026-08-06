@@ -404,9 +404,7 @@ impl ProjectResearchToolHandler {
                             .context("导入终止后候选论文不存在")?;
                         let (mutation, fallback) = match terminal_state {
                             "cancelled" => ("import-cancelled", "论文导入已取消"),
-                            "needs-input" => {
-                                ("import-needs-input", "论文导入需要人工补充信息")
-                            }
+                            "needs-input" => ("import-needs-input", "论文导入需要人工补充信息"),
                             _ => ("import-failed", "论文导入失败"),
                         };
                         self.research_changed(mutation, work_id);

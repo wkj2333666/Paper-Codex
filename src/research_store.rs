@@ -409,11 +409,10 @@ impl ResearchStore {
         project_id: &str,
     ) -> Result<bool> {
         let mut transaction = self.db.pool().begin().await?;
-        let task_state: Option<String> =
-            sqlx::query_scalar("SELECT state FROM tasks WHERE id=?")
-                .bind(task_id)
-                .fetch_optional(&mut *transaction)
-                .await?;
+        let task_state: Option<String> = sqlx::query_scalar("SELECT state FROM tasks WHERE id=?")
+            .bind(task_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
         let task_state = task_state.context("paper import task does not exist")?;
         if matches!(
             task_state.as_str(),
