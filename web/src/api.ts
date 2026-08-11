@@ -66,6 +66,7 @@ export const api = {
   conversationGoal:(id:string)=>request<CodexGoal|null>(`/api/conversations/${encodeURIComponent(id)}/goal`),
   setConversationGoal:(id:string,value:CodexGoalRequest)=>request<CodexGoal>(`/api/conversations/${encodeURIComponent(id)}/goal`,{method:"PUT",body:JSON.stringify(value)}),
   clearConversationGoal:(id:string)=>request<void>(`/api/conversations/${encodeURIComponent(id)}/goal`,{method:"DELETE"}),
+  compactConversation:(id:string)=>request<void>(`/api/conversations/${encodeURIComponent(id)}/compact`,{method:"POST"}),
   replaceConversationScopes:(id:string,scopes:ConversationScope[])=>request<ConversationScope[]>(`/api/conversations/${encodeURIComponent(id)}/scopes`,{method:"PUT",body:JSON.stringify({scopes})}),
   sendConversationMessage:(id:string,content:string,researchMode:ResearchMode="auto",skill?:CodexSkillSelection|null,toolPreferences:CodexToolPreference[]=[])=>request<{message_id:string;status:string}>(`/api/conversations/${encodeURIComponent(id)}/messages`,{method:"POST",body:JSON.stringify({content,research_mode:researchMode,...(skill?{skill}:{}),...(toolPreferences.length?{tool_preferences:toolPreferences}:{})})}),
   cancelConversation:(id:string)=>request<void>(`/api/conversations/${encodeURIComponent(id)}/cancel`,{method:"POST"}),

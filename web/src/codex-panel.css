@@ -207,6 +207,7 @@
 .codex-latest-thought { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0; padding: 9px 10px; border-left: 2px solid var(--accent); color: var(--muted); background: color-mix(in srgb, var(--panel) 88%, transparent); font-size: 12px; line-height: 1.55; }
 .codex-latest-thought svg { width: 14px; height: 14px; flex: 0 0 auto; margin-top: 2px; }
 .codex-latest-thought p { margin: 0; }
+.codex-native-work{display:grid;gap:7px}.codex-plan{padding:7px 9px;border:1px solid color-mix(in srgb,var(--green) 17%,var(--line));border-radius:8px;background:color-mix(in srgb,var(--paper) 72%,transparent)}.codex-plan>summary{display:flex;align-items:center;gap:6px;cursor:pointer;list-style:none;color:var(--ink);font-size:10px;font-weight:700}.codex-plan>summary::-webkit-details-marker{display:none}.codex-plan>summary svg{width:13px;color:var(--green)}.codex-plan>summary small{margin-left:auto;color:var(--muted);font-size:9px}.codex-plan[open]>summary{margin-bottom:7px}
 .codex-plan > p { margin: 0 0 6px; color: var(--muted); font-size: 9px; }
 .codex-plan ol { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .codex-plan li,.codex-work-items > div { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
@@ -495,6 +496,7 @@
   background: #fff1ef;
   font-size: 10px;
 }
+.codex-notice{margin:0 16px 7px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--green) 25%,var(--line));border-radius:8px;color:var(--green);background:var(--green-soft);font-size:10px}
 
 .message-error svg {
   width: 13px;
@@ -829,6 +831,9 @@
   background: var(--paper-raised, var(--paper));
   box-shadow: 0 18px 48px rgba(20, 30, 24, .22);
 }
+
+.codex-command-picker{position:absolute;right:0;bottom:calc(100% + 8px);left:0;z-index:23;display:grid;gap:2px;padding:7px;border:1px solid color-mix(in srgb,var(--green) 28%,var(--line));border-radius:12px;color:var(--ink);background:var(--paper-raised,var(--paper));box-shadow:0 18px 48px rgba(20,30,24,.22)}
+.codex-command-picker>header{display:flex;align-items:baseline;justify-content:space-between;padding:4px 6px 7px}.codex-command-picker>header strong{font-size:11px}.codex-command-picker>header span{color:var(--muted);font-size:8px}.codex-command-picker>button{display:flex;align-items:center;gap:9px;width:100%;padding:8px;border:0;border-radius:8px;color:inherit;background:transparent;text-align:left}.codex-command-picker>button.active,.codex-command-picker>button:hover{background:var(--green-soft)}.codex-command-picker>button>svg{width:16px;color:var(--green)}.codex-command-picker>button>span{display:grid;gap:2px}.codex-command-picker>button strong{font:600 10px ui-monospace,SFMono-Regular,Menlo,monospace}.codex-command-picker>button small,.codex-command-picker>p{margin:0;color:var(--muted);font-size:9px}.codex-command-picker>p{padding:10px;text-align:center}
 
 .codex-tool-picker > header {
   display: flex;

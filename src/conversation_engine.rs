@@ -376,6 +376,19 @@ impl ConversationEngine {
         Ok(())
     }
 
+    pub async fn compact_conversation(&self, conversation_id: &str) -> Result<()> {
+        let conversation = self
+            .db
+            .get_conversation(conversation_id)
+            .await?
+            .context("conversation does not exist")?;
+        let thread_id = conversation
+            .thread_id
+            .as_deref()
+            .context("conversation has no Codex thread to compact")?;
+        self.codex.compact_thread(thread_id).await
+    }
+
     pub fn validate_settings(&self, settings: &CodexRunSettings) -> Result<CodexRunSettings> {
         self.codex.validate_settings(settings)
     }

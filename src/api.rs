@@ -248,6 +248,10 @@ pub fn build_router(state: AppState) -> Router {
                 .put(set_conversation_goal)
                 .delete(clear_conversation_goal),
         )
+        .route(
+            "/api/conversations/{id}/compact",
+            post(compact_conversation),
+        )
         .route("/api/conversations/{id}/cancel", post(cancel_conversation))
         .route("/api/conversations/{id}/events", get(conversation_events))
         .route("/api/citations/{id}/pin", post(pin_citation))
@@ -1468,6 +1472,20 @@ async fn clear_conversation_goal(
         .as_ref()
         .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
         .clear_conversation_goal(&id)
+        .await
+        .map_err(conversation_api_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn compact_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
+        .compact_conversation(&id)
         .await
         .map_err(conversation_api_error)?;
     Ok(StatusCode::NO_CONTENT)

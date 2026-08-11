@@ -144,6 +144,8 @@ for raw in sys.stdin:
     elif method in ["thread/archive", "thread/unarchive", "thread/delete"]:
         result = {"thread": {"id": msg["params"]["threadId"]}} if method == "thread/unarchive" else {}
         send({"id": msg["id"], "result": result})
+    elif method == "thread/compact/start":
+        send({"id": msg["id"], "result": {}})
     elif method == "thread/goal/set":
         thread_id = msg["params"]["threadId"]
         previous = thread_goals.get(thread_id)

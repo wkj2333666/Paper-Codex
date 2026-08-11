@@ -711,6 +711,16 @@ impl CodexRuntime {
         Ok(())
     }
 
+    pub async fn compact_thread(&self, thread_id: &str) -> Result<()> {
+        let response = self
+            .goal_request("thread/compact/start", json!({"threadId":thread_id}))
+            .await?;
+        if let Some(error) = response.get("error") {
+            bail!("Codex thread/compact/start failed: {error}");
+        }
+        Ok(())
+    }
+
     async fn goal_request(&self, method: &str, params: Value) -> Result<Value> {
         self.command.prepare_runtime_tmp().await?;
         let mut active = self.active_control.subscribe();
