@@ -56,6 +56,25 @@ export class ProjectResearchReloadCoordinator {
   }
 }
 
+export interface ProjectResearchScopeToken {
+  projectId:string
+  generation:number
+}
+
+export class ProjectResearchScopeCoordinator {
+  private projectId:string|null=null
+  private generation=0
+
+  select(projectId:string):ProjectResearchScopeToken{
+    if(this.projectId!==projectId){this.projectId=projectId;this.generation+=1}
+    return {projectId,generation:this.generation}
+  }
+
+  isCurrent(token:ProjectResearchScopeToken){
+    return token.projectId===this.projectId&&token.generation===this.generation
+  }
+}
+
 export interface CandidateActions {
   dismiss:(workId:string)=>Promise<void>
   restore:(workId:string)=>Promise<void>
@@ -207,6 +226,8 @@ function providerSummary(search:LiteratureSearchRun){
 
 export function ProjectResearch({project,papers,theme,researchRevision=0,focusWorkId,onFocusHandled,onOpenPaper,onRemovePaper,onChanged}:{project:Project;papers:Paper[];theme:ResolvedTheme;researchRevision?:number;focusWorkId?:string;onFocusHandled?:()=>void;onOpenPaper:(paperId:string)=>void;onRemovePaper:(paperId:string)=>Promise<void>;onChanged?:()=>Promise<void>}){
   const projectId=project.id
+  const scopeCoordinator=useRef(new ProjectResearchScopeCoordinator())
+  const scopeToken=scopeCoordinator.current.select(projectId)
   const [tab,setTab]=useState<ProjectResearchTab>("overview")
   const [candidates,setCandidates]=useState<ProjectCandidate[]>([])
   const [searches,setSearches]=useState<LiteratureSearchRun[]>([])
@@ -223,6 +244,7 @@ export function ProjectResearch({project,papers,theme,researchRevision=0,focusWo
   const loadedResearchRevision=useRef({projectId,revision:researchRevision})
   const reloadCoordinator=useRef(new ProjectResearchReloadCoordinator())
   const load=useCallback(async()=>{
+    if(!scopeCoordinator.current.isCurrent(scopeToken))return false
     return reloadCoordinator.current.run(
       ()=>Promise.all([
         api.projectCandidates(projectId,includeDismissed),
@@ -231,13 +253,14 @@ export function ProjectResearch({project,papers,theme,researchRevision=0,focusWo
         api.graph({project_id:projectId,include_hypotheses:true}),
       ]),
       ([nextCandidates,nextSearches,nextGoals,nextGraph])=>{
+        if(!scopeCoordinator.current.isCurrent(scopeToken))return
         setCandidates(nextCandidates);setSearches(nextSearches);setGoals(nextGoals);setGraph(nextGraph);setError("");setBusy(false)
         setLoadedProjectId(projectId)
         setSelectedCandidate(current=>current?nextCandidates.find(item=>item.work.id===current.work.id)??null:null)
       },
-      value=>{setError(value instanceof Error?value.message:"加载项目候选失败");setBusy(false)},
+      value=>{if(scopeCoordinator.current.isCurrent(scopeToken)){setError(value instanceof Error?value.message:"加载项目候选失败");setBusy(false)}},
     )
-  },[includeDismissed,projectId])
+  },[includeDismissed,projectId,scopeToken.generation])
   useEffect(()=>{reloadCoordinator.current.invalidate();loadedResearchRevision.current={projectId,revision:researchRevision};setTab("overview");setCandidates([]);setSearches([]);setGoals([]);setGraph({nodes:[],edges:[]});setSelectedCandidate(null);setSearchDetail(null);setLoadedProjectId(null);setBulkBusy(false);setBulkResult(null)},[projectId])
   useEffect(()=>{setBusy(true);void load()},[load])
   useEffect(()=>{
@@ -270,18 +293,30 @@ export function ProjectResearch({project,papers,theme,researchRevision=0,focusWo
   },[candidates,focusWorkId,loadedProjectId,onFocusHandled,projectId])
   const active=useMemo(()=>goals.some(item=>item.status==="active")||candidates.some(item=>item.status==="importing")||searches.some(item=>item.state==="running"),[candidates,goals,searches])
   useEffect(()=>{if(!active)return;const timer=window.setInterval(()=>void load(),4000);return()=>window.clearInterval(timer)},[active,load])
-  const refresh=useCallback(async()=>{await load();await onChanged?.()},[load,onChanged])
-  const actions=useMemo(()=>createCandidateActions(projectId,refresh,onOpenPaper),[projectId,refresh,onOpenPaper])
+  const refresh=useCallback(async()=>{
+    if(!scopeCoordinator.current.isCurrent(scopeToken))return
+    const applied=await load()
+    if(applied&&scopeCoordinator.current.isCurrent(scopeToken))await onChanged?.()
+  },[load,onChanged,projectId,scopeToken.generation])
+  const actions=useMemo(()=>createCandidateActions(projectId,refresh,paperId=>{if(scopeCoordinator.current.isCurrent(scopeToken))onOpenPaper(paperId)}),[projectId,refresh,onOpenPaper,scopeToken.generation])
   const openSearch=async(search:LiteratureSearchRun)=>{
-    setSearchDetail(await api.literatureSearch(projectId,search.id))
+    const operation=scopeCoordinator.current.select(projectId)
+    const detail=await api.literatureSearch(projectId,search.id)
+    if(scopeCoordinator.current.isCurrent(operation))setSearchDetail(detail)
   }
   const importAll=async()=>{
+    const operation=scopeCoordinator.current.select(projectId)
     const count=candidates.filter(candidate=>candidate.status==="candidate").length
     if(!count||!window.confirm(`将当前项目的 ${count} 篇候选论文全部加入并开始分析，是否继续？`))return
     setBulkBusy(true);setBulkResult(null)
-    try{setBulkResult(await api.importAllCandidates(projectId));await refresh()}
-    catch(value){setError(value instanceof Error?value.message:"批量添加候选论文失败")}
-    finally{setBulkBusy(false)}
+    try{
+      const result=await api.importAllCandidates(projectId)
+      if(!scopeCoordinator.current.isCurrent(operation))return
+      setBulkResult(result)
+      await refresh()
+    }
+    catch(value){if(scopeCoordinator.current.isCurrent(operation))setError(value instanceof Error?value.message:"批量添加候选论文失败")}
+    finally{if(scopeCoordinator.current.isCurrent(operation))setBulkBusy(false)}
   }
   return <>
     <ProjectResearchView tab={tab} papers={papers} candidates={candidates} searches={searches} includeDismissed={includeDismissed} busy={busy} error={error} actions={actions} onTab={setTab} onOpenCandidate={setSelectedCandidate} onOpenPaper={onOpenPaper} onRemovePaper={paperId=>void onRemovePaper(paperId)} onToggleDismissed={()=>setIncludeDismissed(value=>!value)} onOpenSearch={search=>void openSearch(search)} overview={<ProjectOverview project={project} papers={papers} candidates={candidates} searches={searches} goals={goals} graph={graph} theme={theme} onOpenPaper={onOpenPaper}/>} notes={<Suspense fallback={<div className="project-readme-loading"><LoaderCircle className="spin"/>正在载入笔记编辑器…</div>}><ProjectReadmeEditor key={projectId} projectId={projectId}/></Suspense>} bulkBusy={bulkBusy} bulkResult={bulkResult} onImportAll={()=>void importAll()}/>
