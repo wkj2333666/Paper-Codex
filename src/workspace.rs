@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
 };
 use tokio::io::AsyncWriteExt;
+use tokio::sync::{Mutex, MutexGuard};
 
 const WORKSPACE_GUIDANCE: &str = r#"# Paper Codex workspace
 
@@ -27,6 +28,7 @@ const PAPER_RESEARCH_OPENAI_YAML: &str =
 #[derive(Clone)]
 pub struct Workspace {
     root: Arc<PathBuf>,
+    project_readme_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,11 +86,15 @@ impl Workspace {
         }
         Ok(Self {
             root: Arc::new(root),
+            project_readme_lock: Arc::new(Mutex::new(())),
         })
     }
 
     pub fn root(&self) -> &Path {
         self.root.as_path()
+    }
+    pub(crate) async fn lock_project_readme(&self) -> MutexGuard<'_, ()> {
+        self.project_readme_lock.lock().await
     }
     pub fn state_dir(&self) -> PathBuf {
         self.root.join(".paper-wiki")

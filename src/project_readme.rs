@@ -53,6 +53,7 @@ impl ProjectReadmeStore {
         markdown: &str,
         expected_revision: &str,
     ) -> Result<ProjectReadme, ProjectReadmeError> {
+        let _guard = self.workspace.lock_project_readme().await;
         let current = self.read(project_id).await?;
         if current.revision != expected_revision {
             return Err(ProjectReadmeError::Conflict {
