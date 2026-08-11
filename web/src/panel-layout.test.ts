@@ -24,6 +24,13 @@ describe("collapsible workspace layout", () => {
     expect(panelLayout).toMatch(/\[data-panel="codex"\][^}]*grid-column:\s*5/)
   })
 
+  it("lets the center track shrink instead of widening the browser viewport", () => {
+    const desktopShell = panelLayout.match(/\.app-shell\s*\{([^}]*)\}/)?.[1] ?? ""
+
+    expect(desktopShell).toMatch(/grid-template-columns:[^;]*minmax\(0,\s*1fr\)/)
+    expect(desktopShell).not.toMatch(/minmax\(520px,\s*1fr\)/)
+  })
+
   it("uses fixed single overlay drawers below 1050px", () => {
     expect(panelLayout).toMatch(/@media\(max-width:1050px\)/)
     expect(panelLayout).toMatch(/workspace-panel[^}]*position:\s*fixed/)

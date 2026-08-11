@@ -5,12 +5,14 @@ import { api } from "./api"
 import { matchCitationText, type CitationMatchStatus } from "./citation-matcher"
 import { equationNumber, formulaOutlineRegion, locateEquationRegion } from "./equation-locator"
 import { mergeHighlightRects, pdfTextRangeToPageRect, textLayerScaleStyle, textLayerViewportScale } from "./pdf-highlight-geometry"
-import { PdfFullscreenButton, togglePdfFullscreen } from "./PdfFullscreenButton"
+import { PdfReaderToolbar, togglePdfFullscreen } from "./PdfFullscreenButton"
 import { visiblePageWindow } from "./pdf-window"
 import type { ResolvedTheme } from "./theme"
 import type { MessageCitation, PaperAnnotation } from "./types"
 
 GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString()
+
+const PDF_BASE_SCALE = 1.35
 
 type PageSize = { width: number; height: number }
 type HighlightRect = { left: number; top: number; width: number; height: number }
@@ -33,6 +35,7 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
   const [matches, setMatches] = useState<Record<string, VisualMatch>>({})
   const [error, setError] = useState("")
   const [fullscreen, setFullscreen] = useState(false)
+  const [zoom, setZoom] = useState(100)
   const scroller = useRef<HTMLDivElement>(null)
   const savedAnchorSignatures = useRef<Record<string, string>>({})
   const annotationByCitation = useMemo(() => new Map(annotations.filter(annotation => annotation.annotation.state === "visible").map(annotation => [annotation.citation.id, annotation])), [annotations])
@@ -43,14 +46,18 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
   }, [citations])
 
   useEffect(() => {
-    const updateFullscreen = () => setFullscreen(document.fullscreenElement === scroller.current)
+    const updateFullscreen = () => {
+      const next = document.fullscreenElement === scroller.current
+      setFullscreen(next)
+      if (!next) setZoom(100)
+    }
     document.addEventListener("fullscreenchange", updateFullscreen)
     return () => document.removeEventListener("fullscreenchange", updateFullscreen)
   }, [])
 
   useEffect(() => {
     let active = true
-    setPdfDocument(null); setSizes([]); setMatches({}); setError("")
+    setPdfDocument(null); setSizes([]); setMatches({}); setError(""); setZoom(100)
     const task = getDocument({ url: api.pdfUrl(paperId), httpHeaders: api.authHeaders(), rangeChunkSize: 65_536 })
     void task.promise.then(async value => {
       if (!active) return
@@ -99,11 +106,12 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
     if (!scroller.current) return
     await togglePdfFullscreen(scroller.current)
   }
+  const renderScale = PDF_BASE_SCALE * zoom / 100
 
   if (error) return <div className="pdf-error">无法显示 PDF：{error}</div>
   return <div className={`pdf-viewer ${theme === "dark" ? "dark-reader " : ""}${className}`} ref={scroller} onScroll={updateVisible}>
     <div className="pdf-reader-toolbar">
-      <PdfFullscreenButton fullscreen={fullscreen} onToggle={toggleFullscreen}/>
+      <PdfReaderToolbar fullscreen={fullscreen} zoom={zoom} onToggle={toggleFullscreen} onZoomChange={setZoom}/>
     </div>
     {!pdfDocument || !sizes.length
       ? <div className="pdf-loading">正在加载论文原文…</div>
@@ -116,9 +124,9 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
             return { citation, body: annotation?.annotation.body, status: matches[citation.id]?.status ?? (annotation?.annotation.availability === "revision-stale" ? "stale" : "page-only"), anchorRatio: matches[citation.id]?.anchorRatio ?? 0.08, pinned: Boolean(annotation), focused: citation.id === focusedCitationId, onPin: () => onPin?.(citation), onUnpin: () => onHide?.(citation) }
           })
           return <div className={`pdf-page-row${pageCitations.length ? " has-annotation" : ""}`} key={pageNumber}>
-            <div className="pdf-page-shell" data-pdf-page={pageNumber} style={{ aspectRatio: `${size.width}/${size.height}`, width: `${Math.round(size.width * 1.35)}px`, maxWidth: "100%" }}>
+            <div className="pdf-page-shell" data-pdf-page={pageNumber} style={{ aspectRatio: `${size.width}/${size.height}`, width: `${Math.round(size.width * renderScale)}px`, maxWidth: fullscreen ? "none" : "100%" }}>
               {rendered.has(pageNumber)
-                ? <PdfPage document={pdfDocument} pageNumber={pageNumber} citations={pageCitations} matches={pageMatches} focusedCitationId={focusedCitationId} currentRevision={currentRevision ?? null} onMatch={acceptMatch}/>
+                ? <PdfPage document={pdfDocument} pageNumber={pageNumber} renderScale={renderScale} citations={pageCitations} matches={pageMatches} focusedCitationId={focusedCitationId} currentRevision={currentRevision ?? null} onMatch={acceptMatch}/>
                 : <span className="pdf-page-number">{pageNumber}</span>}
             </div>
             {pageItems.length > 0 && <AnnotationGutter items={pageItems} focusedCitationId={focusedCitationId}/>}
@@ -127,9 +135,10 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
   </div>
 }
 
-function PdfPage({ document: pdfDocument, pageNumber, citations, matches, focusedCitationId, currentRevision, onMatch }: {
+function PdfPage({ document: pdfDocument, pageNumber, renderScale, citations, matches, focusedCitationId, currentRevision, onMatch }: {
   document: PDFDocumentProxy
   pageNumber: number
+  renderScale: number
   citations: MessageCitation[]
   matches: Array<{ citation: MessageCitation; match: VisualMatch }>
   focusedCitationId: string | null
@@ -145,7 +154,7 @@ function PdfPage({ document: pdfDocument, pageNumber, citations, matches, focuse
     let textLayer: TextLayer | null = null
     void pdfDocument.getPage(pageNumber).then(async page => {
       if (!active) return
-      const viewport = page.getViewport({ scale: 1.35 })
+      const viewport = page.getViewport({ scale: renderScale })
       const canvas = canvasRef.current
       const text = textRef.current
       if (!canvas || !text) return
@@ -198,7 +207,7 @@ function PdfPage({ document: pdfDocument, pageNumber, citations, matches, focuse
       })
     }).catch(() => {})
     return () => { active = false; renderTask?.cancel(); textLayer?.cancel() }
-  }, [citations, currentRevision, onMatch, pageNumber, pdfDocument])
+  }, [citations, currentRevision, onMatch, pageNumber, pdfDocument, renderScale])
 
   return <div className="pdf-page"><canvas ref={canvasRef}/><div className="textLayer" ref={textRef}/><CitationHighlights matches={matches} focusedCitationId={focusedCitationId}/><span className="pdf-page-number">{pageNumber}</span></div>
 }

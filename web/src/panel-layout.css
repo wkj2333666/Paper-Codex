@@ -7,7 +7,7 @@
   --codex-track-width: var(--codex-width);
   --sidebar-divider-width: 6px;
   --codex-divider-width: 6px;
-  grid-template-columns: var(--sidebar-track-width) var(--sidebar-divider-width) minmax(520px, 1fr) var(--codex-divider-width) var(--codex-track-width);
+  grid-template-columns: var(--sidebar-track-width) var(--sidebar-divider-width) minmax(0, 1fr) var(--codex-divider-width) var(--codex-track-width);
 }
 
 .app-shell.sidebar-collapsed { --sidebar-track-width: 42px; }
