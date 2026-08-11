@@ -13,9 +13,14 @@ export interface ProjectReadmeState {
   error:string|null
 }
 
+export interface ProjectReadmeDraft {
+  markdown:string
+  baseRevision:string
+}
+
 export type ProjectReadmeAction=
   |{type:"loading"}
-  |{type:"loaded";value:ProjectReadme}
+  |{type:"loaded";value:ProjectReadme;draft?:ProjectReadmeDraft|null}
   |{type:"edit";markdown:string}
   |{type:"saving";requestId:number}
   |{type:"saved";requestId:number;value:ProjectReadme}
@@ -29,9 +34,19 @@ export const initialProjectReadmeState:ProjectReadmeState={
 
 export function projectReadmeReducer(state:ProjectReadmeState,action:ProjectReadmeAction):ProjectReadmeState{
   if(action.type==="loading")return {...initialProjectReadmeState}
-  if(action.type==="loaded")return {
-    ...initialProjectReadmeState,status:"saved",markdown:action.value.markdown,
-    savedMarkdown:action.value.markdown,revision:action.value.revision,
+  if(action.type==="loaded"){
+    const draft=action.draft
+    if(!draft||draft.markdown===action.value.markdown)return {
+      ...initialProjectReadmeState,status:"saved",markdown:action.value.markdown,
+      savedMarkdown:action.value.markdown,revision:action.value.revision,
+    }
+    const matches=draft.baseRevision===action.value.revision
+    return {
+      ...initialProjectReadmeState,status:matches?"dirty":"conflict",markdown:draft.markdown,
+      savedMarkdown:action.value.markdown,revision:action.value.revision,
+      conflictRevision:matches?null:action.value.revision,
+      error:matches?null:"项目笔记已在其他位置更新",
+    }
   }
   if(action.type==="edit")return {
     ...state,markdown:action.markdown,

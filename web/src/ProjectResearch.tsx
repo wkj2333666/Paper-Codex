@@ -137,7 +137,7 @@ export function ProjectResearchView({
     {error&&<p className="project-research-error" role="alert">{error}</p>}
     {busy&&<div className="project-research-loading" role="status"><LoaderCircle className="spin"/>正在加载项目研究资料…</div>}
     {!busy&&tab==="overview"&&overview}
-    {!busy&&tab==="notes"&&notes}
+    {notes&&<div className="project-notes-panel" hidden={tab!=="notes"}>{notes}</div>}
     {!busy&&tab==="papers"&&(papers.length?<div className="project-paper-list">{papers.map(paper=><article key={paper.id}>
       <button className="project-paper-main" onClick={()=>onOpenPaper(paper.id)}><FileText/><span><strong>{paper.title}</strong><small>{paper.year??"年份未知"} · {paper.doi??paper.arxiv_id??paper.id}</small></span></button>
       <button className="icon-action" aria-label={`移出项目：${paper.title}`} onClick={()=>onRemovePaper(paper.id)}><X/></button>
