@@ -23,6 +23,7 @@ describe("project README editor state",()=>{
     const firstEdit=projectReadmeReducer(ready,{type:"edit",markdown:"# First"})
     const saving=projectReadmeReducer(firstEdit,{type:"saving",requestId:3})
     const secondEdit=projectReadmeReducer(saving,{type:"edit",markdown:"# Second"})
+    expect(secondEdit.status).toBe("saving")
     const saved=projectReadmeReducer(secondEdit,{type:"saved",requestId:3,value:{...loaded,markdown:"# First",revision:"revision-2"}})
     expect(saved).toMatchObject({status:"dirty",markdown:"# Second",revision:"revision-2"})
   })
