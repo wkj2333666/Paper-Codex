@@ -66,6 +66,19 @@ test("project lifecycle, trash, and graph methods use encoded scoped endpoints",
   ])
 })
 
+test("project README reads and saves with an expected revision", async()=>{
+  await api.projectReadme("project/one")
+  await api.saveProjectReadme("project/one",{markdown:"# Updated",expected_revision:"revision-1"})
+  expect(capturedRequests.slice(-2).map(request=>[request.method,request.url])).toEqual([
+    ["GET","/api/projects/project%2Fone/readme"],
+    ["PUT","/api/projects/project%2Fone/readme"],
+  ])
+  expect(JSON.parse(String(capturedRequests.at(-1)?.body))).toEqual({
+    markdown:"# Updated",
+    expected_revision:"revision-1",
+  })
+})
+
 test("task cancellation and dismissal use separate encoded endpoints", async()=>{
   await api.cancelTask("task/one")
   await api.dismissTask("task/one")
