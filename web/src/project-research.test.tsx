@@ -100,4 +100,26 @@ describe("ProjectResearch",()=>{
     expect(html).toContain("打开项目论文")
     expect(html).toContain("显示暂不考虑")
   })
+
+  it("renders the project README workspace in a dedicated notes tab",()=>{
+    const html=renderToStaticMarkup(<ProjectResearchView
+      tab="notes"
+      papers={[]}
+      candidates={[]}
+      searches={[]}
+      includeDismissed={false}
+      busy={false}
+      error=""
+      onTab={()=>{}}
+      onOpenCandidate={()=>{}}
+      onOpenPaper={()=>{}}
+      onRemovePaper={()=>{}}
+      onToggleDismissed={()=>{}}
+      actions={createCandidateActions("project-a",async()=>{},()=>{})}
+      onOpenSearch={()=>{}}
+      notes={<div>README editor</div>}
+    />)
+    expect(html).toContain("项目笔记")
+    expect(html).toContain("README editor")
+  })
 })
