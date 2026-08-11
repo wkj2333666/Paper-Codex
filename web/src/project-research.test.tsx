@@ -99,6 +99,7 @@ describe("ProjectResearch",()=>{
     expect(html).toContain("正在导入")
     expect(html).toContain("打开项目论文")
     expect(html).toContain("显示暂不考虑")
+    expect(html).toContain("全部添加（1）")
   })
 
   it("renders the project README workspace in a dedicated notes tab",()=>{

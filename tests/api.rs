@@ -1399,6 +1399,96 @@ async fn candidate_import_reuses_an_existing_paper_only_after_authenticated_conf
 }
 
 #[tokio::test]
+async fn candidate_bulk_import_processes_every_pending_candidate_without_stopping_on_failure() {
+    let (app, db, research) = research_test_app().await;
+    let project = db
+        .create_project("bulk-import", "Bulk import", "")
+        .await
+        .unwrap();
+    let importable = research
+        .store()
+        .upsert_work(candidate_work("10.1000/bulk-ready"))
+        .await
+        .unwrap();
+    let failing = research
+        .store()
+        .upsert_work(candidate_work("10.1000/bulk-failing"))
+        .await
+        .unwrap();
+    let dismissed = research
+        .store()
+        .upsert_work(candidate_work("10.1000/bulk-dismissed"))
+        .await
+        .unwrap();
+    for work in [&importable, &failing, &dismissed] {
+        research
+            .save_candidate(&project, &work.id, "直接相关", &[], None, None)
+            .await
+            .unwrap();
+    }
+    research
+        .dismiss_candidate(&project, &dismissed.id)
+        .await
+        .unwrap();
+    db.insert_paper("paper:bulk-ready", "Ready paper")
+        .await
+        .unwrap();
+    sqlx::query("UPDATE papers SET doi='10.1000/bulk-ready' WHERE id='paper:bulk-ready'")
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+    let token = login_token(&app).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project}/candidates/import-all"))
+                .header("x-paper-codex-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = json_response(response).await;
+    assert_eq!(payload["total"], 2);
+    assert_eq!(payload["succeeded"], 1);
+    assert_eq!(payload["failed"], 1);
+    assert_eq!(payload["items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        research
+            .store()
+            .get_candidate(&project, &importable.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        CandidateStatus::Imported
+    );
+    assert_eq!(
+        research
+            .store()
+            .get_candidate(&project, &failing.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        CandidateStatus::Candidate
+    );
+    assert_eq!(
+        research
+            .store()
+            .get_candidate(&project, &dismissed.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        CandidateStatus::Dismissed
+    );
+}
+
+#[tokio::test]
 async fn removing_an_imported_paper_from_a_project_restores_its_candidate_state() {
     let (app, db, research) = research_test_app().await;
     let project = db
