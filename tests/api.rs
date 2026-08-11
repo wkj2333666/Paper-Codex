@@ -537,7 +537,9 @@ async fn conversation_compact_api_uses_the_native_codex_thread() {
                 .uri(format!("/api/conversations/{}/goal", conversation.id))
                 .header("content-type", "application/json")
                 .header("x-paper-codex-token", &token)
-                .body(Body::from(r#"{"objective":"整理上下文","status":"paused"}"#))
+                .body(Body::from(
+                    r#"{"objective":"整理上下文","status":"paused"}"#,
+                ))
                 .unwrap(),
         )
         .await
