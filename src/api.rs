@@ -5,6 +5,7 @@ use crate::{
     db::Database,
     domain::TaskEvent,
     login_limiter::LoginLimiter,
+    project_readme::{ProjectReadmeError, ProjectReadmeStore},
     research::{CandidateStatus, ResearchMode},
     research_service::ResearchService,
     research_store::ResearchStore,
@@ -167,6 +168,10 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(delete_project),
         )
         .route("/api/projects/{id}/impact", get(project_impact))
+        .route(
+            "/api/projects/{id}/readme",
+            get(get_project_readme).put(update_project_readme),
+        )
         .route("/api/projects/{id}/goals", get(project_goals))
         .route(
             "/api/projects/{id}/candidates",
@@ -409,6 +414,11 @@ async fn create_project(
         format!("# {}\n\n{}\n", project.name, project.purpose).as_bytes(),
     )
     .await?;
+    crate::workspace::atomic_write(
+        &project_dir.join("README.md"),
+        format!("# {}\n\n{}\n", project.name, project.purpose).as_bytes(),
+    )
+    .await?;
     crate::workspace::atomic_write(&project_dir.join("papers.md"), b"# Papers\n").await?;
     state
         .search
@@ -430,6 +440,76 @@ async fn get_project(
             status: StatusCode::NOT_FOUND,
             message: "项目不存在".into(),
         })
+}
+
+#[derive(Deserialize)]
+struct UpdateProjectReadmeRequest {
+    markdown: String,
+    expected_revision: String,
+}
+
+async fn get_project_readme(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::project_readme::ProjectReadme>, ProjectReadmeApiError> {
+    Ok(Json(
+        ProjectReadmeStore::new(state.db, state.workspace)
+            .read(&id)
+            .await?,
+    ))
+}
+
+async fn update_project_readme(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateProjectReadmeRequest>,
+) -> Result<Json<crate::project_readme::ProjectReadme>, ProjectReadmeApiError> {
+    Ok(Json(
+        ProjectReadmeStore::new(state.db, state.workspace)
+            .write(&id, &request.markdown, &request.expected_revision)
+            .await?,
+    ))
+}
+
+struct ProjectReadmeApiError(ProjectReadmeError);
+
+impl From<ProjectReadmeError> for ProjectReadmeApiError {
+    fn from(error: ProjectReadmeError) -> Self {
+        Self(error)
+    }
+}
+
+impl IntoResponse for ProjectReadmeApiError {
+    fn into_response(self) -> Response {
+        match self.0 {
+            ProjectReadmeError::ProjectNotFound => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"项目不存在"})),
+            )
+                .into_response(),
+            ProjectReadmeError::InvalidProjectSlug => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"项目路径无效"})),
+            )
+                .into_response(),
+            ProjectReadmeError::Conflict { current_revision } => (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error":"项目笔记已在其他位置更新",
+                    "current_revision":current_revision,
+                })),
+            )
+                .into_response(),
+            error => {
+                tracing::error!(error=%error, "project README operation failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error":"operation failed"})),
+                )
+                    .into_response()
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
