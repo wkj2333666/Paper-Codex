@@ -38,6 +38,20 @@ describe("intake status", () => {
     expect(cancelled[0].state).toBe("cancelled")
   })
 
+  it("never lets a late stage event reopen a terminal task", () => {
+    for (const state of ["done", "failed", "cancelled"]) {
+      const terminal = task({ state })
+      const merged = mergeIntakeTaskEvent([terminal], {
+        id: 7,
+        type: "stage",
+        task_id: "task-1",
+        payload: { state: "analyzing" },
+        created_at: "later",
+      })
+      expect(merged[0].state).toBe(state)
+    }
+  })
+
   it("keeps model fallback and analysis warnings visible on the matching task", () => {
     const switched = mergeIntakeTaskEvent([task()], {
       id: 4,
