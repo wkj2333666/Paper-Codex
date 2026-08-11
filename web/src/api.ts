@@ -1,4 +1,4 @@
-import type { Annotation, AnnotationAnchor, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ProjectReadme, ProjectReadmeSaveRequest, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
+import type { Annotation, AnnotationAnchor, CandidateBulkImportOutcome, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ProjectReadme, ProjectReadmeSaveRequest, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
 
 export class ApiError extends Error { constructor(public status:number,message:string,public body:Record<string,unknown>={}){super(message)} }
 const TOKEN_KEY = "paper-codex-token"
@@ -38,6 +38,7 @@ export const api = {
   updateCandidate:(projectId:string,workId:string,value:{status:Extract<CandidateStatus,"candidate"|"dismissed">})=>request<ProjectCandidate>(`/api/projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(workId)}`,{method:"PATCH",body:JSON.stringify(value)}),
   removeCandidate:(projectId:string,workId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(workId)}`,{method:"DELETE"}),
   importCandidate:(projectId:string,workId:string)=>request<ImportCandidateOutcome>(`/api/projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(workId)}/import`,{method:"POST"}),
+  importAllCandidates:(projectId:string)=>request<CandidateBulkImportOutcome>(`/api/projects/${encodeURIComponent(projectId)}/candidates/import-all`,{method:"POST"}),
   projectLiteratureSearches:(projectId:string)=>request<LiteratureSearchRun[]>(`/api/projects/${encodeURIComponent(projectId)}/literature-searches`),
   literatureSearch:(projectId:string,id:string)=>request<LiteratureSearchDetail>(`/api/projects/${encodeURIComponent(projectId)}/literature-searches/${encodeURIComponent(id)}`),
   trash:()=>request<Paper[]>("/api/trash"),

@@ -16,7 +16,7 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use futures::future::join_all;
+use futures::{future::join_all, stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -104,6 +104,21 @@ pub enum ImportCandidateOutcome {
     AlreadyInProject { paper_id: String },
     LinkedExisting { paper_id: String },
     Enqueued { task_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateBulkImportItem {
+    pub work_id: String,
+    pub outcome: Option<ImportCandidateOutcome>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateBulkImportOutcome {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub items: Vec<CandidateBulkImportItem>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1005,6 +1020,46 @@ impl ResearchService {
             return Err(error);
         }
         Ok(ImportCandidateOutcome::Enqueued { task_id })
+    }
+
+    pub async fn import_all_candidates(
+        &self,
+        project_id: &str,
+        engine: Option<&TaskEngine>,
+    ) -> Result<CandidateBulkImportOutcome> {
+        let work_ids = self
+            .store
+            .list_project_candidates(project_id, false)
+            .await?
+            .into_iter()
+            .filter(|candidate| candidate.status == CandidateStatus::Candidate)
+            .map(|candidate| candidate.work.id)
+            .collect::<Vec<_>>();
+        let items = stream::iter(work_ids.into_iter().map(|work_id| async move {
+            match self.import_candidate(project_id, &work_id, engine).await {
+                Ok(outcome) => CandidateBulkImportItem {
+                    work_id,
+                    outcome: Some(outcome),
+                    error: None,
+                },
+                Err(error) => CandidateBulkImportItem {
+                    work_id,
+                    outcome: None,
+                    error: Some(error.to_string()),
+                },
+            }
+        }))
+        .buffered(2)
+        .collect::<Vec<_>>()
+        .await;
+        let succeeded = items.iter().filter(|item| item.outcome.is_some()).count();
+        let total = items.len();
+        Ok(CandidateBulkImportOutcome {
+            total,
+            succeeded,
+            failed: total - succeeded,
+            items,
+        })
     }
 
     pub async fn recover_interrupted_runs(&self) -> Result<()> {

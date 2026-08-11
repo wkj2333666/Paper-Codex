@@ -178,6 +178,10 @@ pub fn build_router(state: AppState) -> Router {
             get(list_project_candidates),
         )
         .route(
+            "/api/projects/{id}/candidates/import-all",
+            post(import_all_project_candidates),
+        )
+        .route(
             "/api/projects/{id}/candidates/{work_id}",
             axum::routing::patch(update_project_candidate).delete(remove_project_candidate),
         )
@@ -626,6 +630,18 @@ async fn import_project_candidate(
     let research = require_research(&state)?;
     let outcome = research
         .import_candidate(&project_id, &work_id, state.engine.as_deref())
+        .await
+        .map_err(map_research_error)?;
+    Ok(Json(json!(outcome)))
+}
+
+async fn import_all_project_candidates(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let research = require_research(&state)?;
+    let outcome = research
+        .import_all_candidates(&project_id, state.engine.as_deref())
         .await
         .map_err(map_research_error)?;
     Ok(Json(json!(outcome)))

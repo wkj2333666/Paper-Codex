@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   BookOpen,
+  BookPlus,
   CheckCircle2,
   Clock3,
   ExternalLink,
@@ -18,6 +19,7 @@ import { api } from "./api"
 import { ProjectOverview } from "./ProjectOverview"
 import type { ResolvedTheme } from "./theme"
 import type {
+  CandidateBulkImportOutcome,
   GraphPayload,
   LiteratureSearchDetail,
   LiteratureSearchRun,
@@ -99,6 +101,9 @@ export interface ProjectResearchViewProps {
   onOpenSearch:(search:LiteratureSearchRun)=>void
   overview?:ReactNode
   notes?:ReactNode
+  bulkBusy?:boolean
+  bulkResult?:CandidateBulkImportOutcome|null
+  onImportAll?:()=>void
 }
 
 const evidenceLabel=(value:ProjectCandidate["evidence_level"])=>({
@@ -117,8 +122,10 @@ const candidateStatusLabel=(value:ProjectCandidate["status"])=>({
 export function ProjectResearchView({
   tab,papers,candidates,searches,includeDismissed,busy,error,actions,onTab,
   onOpenCandidate,onOpenPaper,onRemovePaper,onToggleDismissed,onOpenSearch,overview,notes,
+  bulkBusy=false,bulkResult=null,onImportAll,
 }:ProjectResearchViewProps){
   const activeSearches=searches.filter(item=>item.state==="running").length
+  const pendingCandidates=candidates.filter(item=>item.status==="candidate").length
   return <section className="project-research" aria-label="项目研究资料">
     <nav className="project-research-tabs" aria-label="项目资料分类">
       <button className={tab==="overview"?"active":""} onClick={()=>onTab("overview")}><LayoutDashboard/>综合视图</button>
@@ -136,7 +143,7 @@ export function ProjectResearchView({
       <button className="icon-action" aria-label={`移出项目：${paper.title}`} onClick={()=>onRemovePaper(paper.id)}><X/></button>
     </article>)}</div>:<ResearchEmpty title="这个项目还没有正式论文" text="让 Codex 检索候选，确认后再加入项目并分析。"/>)}
     {!busy&&tab==="candidates"&&<>
-      <div className="candidate-toolbar"><p>候选只属于当前项目；确认导入后才会成为正式论文。</p><button onClick={onToggleDismissed}>{includeDismissed?"隐藏暂不考虑":"显示暂不考虑"}</button></div>
+      <div className="candidate-toolbar"><div><p>候选只属于当前项目；确认导入后才会成为正式论文。</p>{bulkResult&&<small className={bulkResult.failed?"has-failures":""}>已处理 {bulkResult.total} 篇：成功 {bulkResult.succeeded} 篇{bulkResult.failed?`，失败 ${bulkResult.failed} 篇`:""}</small>}</div><div>{pendingCandidates>0&&<button className="candidate-import-all" disabled={bulkBusy||!onImportAll} onClick={onImportAll}>{bulkBusy?<LoaderCircle className="spin"/>:<BookPlus/>}全部添加（{pendingCandidates}）</button>}<button onClick={onToggleDismissed}>{includeDismissed?"隐藏暂不考虑":"显示暂不考虑"}</button></div></div>
       {candidates.length?<div className="candidate-grid">{candidates.map(candidate=><CandidateCard key={candidate.work.id} candidate={candidate} actions={actions} onOpen={()=>onOpenCandidate(candidate)} onOpenPaper={onOpenPaper}/>)}</div>:<ResearchEmpty title="还没有候选论文" text="在右侧 Codex 项目对话中讨论选题，并开启文献检索。"/>}
     </>}
     {!busy&&tab==="searches"&&(searches.length?<div className="research-history">{searches.map(search=><button key={search.id} onClick={()=>onOpenSearch(search)}>
@@ -208,6 +215,8 @@ export function ProjectResearch({project,papers,theme,researchRevision=0,focusWo
   const [selectedCandidate,setSelectedCandidate]=useState<ProjectCandidate|null>(null)
   const [searchDetail,setSearchDetail]=useState<LiteratureSearchDetail|null>(null)
   const [loadedProjectId,setLoadedProjectId]=useState<string|null>(null)
+  const [bulkBusy,setBulkBusy]=useState(false)
+  const [bulkResult,setBulkResult]=useState<CandidateBulkImportOutcome|null>(null)
   const loadedResearchRevision=useRef({projectId,revision:researchRevision})
   const reloadCoordinator=useRef(new ProjectResearchReloadCoordinator())
   const load=useCallback(async()=>{
@@ -226,7 +235,7 @@ export function ProjectResearch({project,papers,theme,researchRevision=0,focusWo
       value=>{setError(value instanceof Error?value.message:"加载项目候选失败");setBusy(false)},
     )
   },[includeDismissed,projectId])
-  useEffect(()=>{reloadCoordinator.current.invalidate();loadedResearchRevision.current={projectId,revision:researchRevision};setTab("overview");setCandidates([]);setSearches([]);setGoals([]);setGraph({nodes:[],edges:[]});setSelectedCandidate(null);setSearchDetail(null);setLoadedProjectId(null)},[projectId])
+  useEffect(()=>{reloadCoordinator.current.invalidate();loadedResearchRevision.current={projectId,revision:researchRevision};setTab("overview");setCandidates([]);setSearches([]);setGoals([]);setGraph({nodes:[],edges:[]});setSelectedCandidate(null);setSearchDetail(null);setLoadedProjectId(null);setBulkBusy(false);setBulkResult(null)},[projectId])
   useEffect(()=>{setBusy(true);void load()},[load])
   useEffect(()=>{
     const signal={type:"project-research-revised",payload:{project_id:projectId,revision:researchRevision}}
@@ -263,8 +272,16 @@ export function ProjectResearch({project,papers,theme,researchRevision=0,focusWo
   const openSearch=async(search:LiteratureSearchRun)=>{
     setSearchDetail(await api.literatureSearch(projectId,search.id))
   }
+  const importAll=async()=>{
+    const count=candidates.filter(candidate=>candidate.status==="candidate").length
+    if(!count||!window.confirm(`将当前项目的 ${count} 篇候选论文全部加入并开始分析，是否继续？`))return
+    setBulkBusy(true);setBulkResult(null)
+    try{setBulkResult(await api.importAllCandidates(projectId));await refresh()}
+    catch(value){setError(value instanceof Error?value.message:"批量添加候选论文失败")}
+    finally{setBulkBusy(false)}
+  }
   return <>
-    <ProjectResearchView tab={tab} papers={papers} candidates={candidates} searches={searches} includeDismissed={includeDismissed} busy={busy} error={error} actions={actions} onTab={setTab} onOpenCandidate={setSelectedCandidate} onOpenPaper={onOpenPaper} onRemovePaper={paperId=>void onRemovePaper(paperId)} onToggleDismissed={()=>setIncludeDismissed(value=>!value)} onOpenSearch={search=>void openSearch(search)} overview={<ProjectOverview project={project} papers={papers} candidates={candidates} searches={searches} goals={goals} graph={graph} theme={theme} onOpenPaper={onOpenPaper}/>} notes={<Suspense fallback={<div className="project-readme-loading"><LoaderCircle className="spin"/>正在载入笔记编辑器…</div>}><ProjectReadmeEditor key={projectId} projectId={projectId}/></Suspense>}/>
+    <ProjectResearchView tab={tab} papers={papers} candidates={candidates} searches={searches} includeDismissed={includeDismissed} busy={busy} error={error} actions={actions} onTab={setTab} onOpenCandidate={setSelectedCandidate} onOpenPaper={onOpenPaper} onRemovePaper={paperId=>void onRemovePaper(paperId)} onToggleDismissed={()=>setIncludeDismissed(value=>!value)} onOpenSearch={search=>void openSearch(search)} overview={<ProjectOverview project={project} papers={papers} candidates={candidates} searches={searches} goals={goals} graph={graph} theme={theme} onOpenPaper={onOpenPaper}/>} notes={<Suspense fallback={<div className="project-readme-loading"><LoaderCircle className="spin"/>正在载入笔记编辑器…</div>}><ProjectReadmeEditor key={projectId} projectId={projectId}/></Suspense>} bulkBusy={bulkBusy} bulkResult={bulkResult} onImportAll={()=>void importAll()}/>
     {selectedCandidate&&<CandidateDrawer candidate={selectedCandidate} actions={actions} onClose={()=>setSelectedCandidate(null)} onOpenPaper={onOpenPaper}/>}
     {searchDetail&&<SearchDrawer detail={searchDetail} onClose={()=>setSearchDetail(null)}/>}
   </>

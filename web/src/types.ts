@@ -50,6 +50,8 @@ export interface LiteratureSearchResult { search_run_id:string; work:DiscoveredW
 export interface LiteratureSearchDetail { run:LiteratureSearchRun; results:LiteratureSearchResult[] }
 export interface CandidateCitation { id:string; message_id?:string; project_id?:string; work_id:string; title:string; source_url:string; evidence_level:EvidenceLevel; quote:string; explanation:string; created_at?:string }
 export type ImportCandidateOutcome={state:"already_in_project"|"linked_existing";paper_id:string}|{state:"enqueued";task_id:string}
+export interface CandidateBulkImportItem {work_id:string;outcome:ImportCandidateOutcome|null;error:string|null}
+export interface CandidateBulkImportOutcome {total:number;succeeded:number;failed:number;items:CandidateBulkImportItem[]}
 export interface Annotation { id:string; citation_id:string; paper_id:string; revision:string; source_message_id:string; kind:string; body:string; state:"visible"|"hidden"; availability:"available"|"revision-stale"|"paper-missing"; created_at:string; updated_at:string }
 export interface AnnotationAnchor { annotation_id:string; page:number; rect_index:number; x:number; y:number; width:number; height:number }
 export interface PaperAnnotation { annotation:Annotation; citation:MessageCitation; anchors:AnnotationAnchor[] }
