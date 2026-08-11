@@ -516,6 +516,49 @@ async fn conversation_goal_api_creates_reads_pauses_resumes_and_clears_native_go
 }
 
 #[tokio::test]
+async fn conversation_compact_api_uses_the_native_codex_thread() {
+    let (app, db) = conversation_test_app().await;
+    let token = login_token(&app).await;
+    let conversation = db.create_conversation("需要压缩的长对话").await.unwrap();
+    db.replace_conversation_scopes(
+        &conversation.id,
+        &[paper_codex::conversations::ConversationScopeInput {
+            scope_type: "project".into(),
+            scope_id: Some("default".into()),
+        }],
+    )
+    .await
+    .unwrap();
+    let initialized = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/conversations/{}/goal", conversation.id))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(r#"{"objective":"整理上下文","status":"paused"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(initialized.status(), StatusCode::OK);
+
+    let compacted = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/conversations/{}/compact", conversation.id))
+                .header("x-paper-codex-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(compacted.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
 async fn conversation_api_exposes_and_persists_codex_run_settings() {
     let (app, _db) = conversation_test_app().await;
     let token = login_token(&app).await;

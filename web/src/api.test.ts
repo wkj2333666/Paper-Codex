@@ -123,6 +123,14 @@ test("native conversation goals use the dedicated goal endpoint", async()=>{
   })
 })
 
+test("native conversation compaction uses the dedicated thread endpoint", async()=>{
+  await api.compactConversation("conversation/one")
+  expect(capturedRequests.at(-1)).toMatchObject({
+    method:"POST",
+    url:"/api/conversations/conversation%2Fone/compact",
+  })
+})
+
 test("conversation messages send explicit project research mode", async()=>{
   await api.sendConversationMessage("conversation/1","查找相关工作","explicit",{
     name:"paper-research",

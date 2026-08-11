@@ -20,7 +20,7 @@ describe("native Codex goal and work surfaces", () => {
     expect(html).toContain('aria-label="清除目标"')
   })
 
-  it("renders only the latest readable thought while active and hides tool details", () => {
+  it("renders the latest readable thought and native plan while hiding tool details", () => {
     const html = renderToStaticMarkup(<CodexWorklog active worklog={{
       summaries: [
         { item_id: "reasoning-1", summary_index: 0, text: "旧的思考" },
@@ -34,7 +34,8 @@ describe("native Codex goal and work surfaces", () => {
     }} />)
     expect(html).toContain("正在核对论文证据")
     expect(html).not.toContain("旧的思考")
-    expect(html).not.toContain("组织回答")
+    expect(html).toContain("定位证据")
+    expect(html).toContain("组织回答")
     expect(html).not.toContain("检索论文")
     expect(html).not.toContain("raw hidden reasoning")
   })
