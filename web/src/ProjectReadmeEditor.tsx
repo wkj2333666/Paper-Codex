@@ -1,33 +1,58 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react"
 import { AlertTriangle, Check, Cloud, LoaderCircle, RefreshCcw, Save } from "lucide-react"
 import { Crepe } from "@milkdown/crepe"
+import { replaceAll } from "@milkdown/kit/utils"
 import "@milkdown/crepe/theme/common/style.css"
 import "@milkdown/crepe/theme/frame.css"
 import { ApiError, api } from "./api"
-import { initialProjectReadmeState, projectReadmeReducer, type ProjectReadmeDraft } from "./project-readme-state"
+import { initialProjectReadmeState, normalizeProjectMarkdown, projectReadmeReducer, type ProjectReadmeDraft } from "./project-readme-state"
 import "./project-readme.css"
 
-function MarkdownSurface({initialMarkdown,onChange,onFailure}:{initialMarkdown:string;onChange:(markdown:string)=>void;onFailure:(message:string)=>void}){
+function replaceEditorMarkdown(editor:Crepe,markdown:string,replacing:{current:string|null}){
+  const normalized=normalizeProjectMarkdown(markdown)
+  if(normalizeProjectMarkdown(editor.getMarkdown())===normalized)return
+  replacing.current=normalized
+  editor.editor.action(replaceAll(markdown))
+}
+
+function MarkdownSurface({markdown,onChange,onFailure}:{markdown:string;onChange:(markdown:string)=>void;onFailure:(message:string)=>void}){
   const root=useRef<HTMLDivElement>(null)
-  const initial=useRef(initialMarkdown)
+  const editor=useRef<Crepe|null>(null)
+  const desired=useRef(normalizeProjectMarkdown(markdown))
+  const replacing=useRef<string|null>(null)
   const change=useRef(onChange)
   const failure=useRef(onFailure)
+  desired.current=normalizeProjectMarkdown(markdown)
   change.current=onChange
   failure.current=onFailure
   useEffect(()=>{
     if(!root.current)return
+    let active=true
     const crepe=new Crepe({
       root:root.current,
-      defaultValue:initial.current,
+      defaultValue:desired.current,
       features:{
         [Crepe.Feature.AI]:false,
         [Crepe.Feature.ImageBlock]:false,
       },
     })
-    crepe.on(listener=>listener.markdownUpdated((_ctx,markdown)=>change.current(markdown)))
-    void crepe.create().catch(error=>failure.current(error instanceof Error?error.message:"编辑器初始化失败"))
-    return()=>{void crepe.destroy()}
+    crepe.on(listener=>listener.markdownUpdated((_ctx,value)=>{
+      const next=normalizeProjectMarkdown(value)
+      if(replacing.current!==null){
+        const expected=replacing.current
+        replacing.current=null
+        if(next===expected)return
+      }
+      change.current(next)
+    }))
+    void crepe.create().then(()=>{
+      if(!active)return
+      editor.current=crepe
+      replaceEditorMarkdown(crepe,desired.current,replacing)
+    }).catch(error=>{if(active)failure.current(error instanceof Error?error.message:"编辑器初始化失败")})
+    return()=>{active=false;if(editor.current===crepe)editor.current=null;void crepe.destroy()}
   },[])
+  useEffect(()=>{if(editor.current)replaceEditorMarkdown(editor.current,markdown,replacing)},[markdown])
   return <div className="project-readme-crepe" ref={root}/>
 }
 
@@ -55,7 +80,7 @@ export default function ProjectReadmeEditor({projectId}:{projectId:string}){
     const id=++requestId.current
     dispatch({type:"saving",requestId:id})
     try{
-      const value=await api.saveProjectReadme(projectId,{markdown,expected_revision:revision})
+      const value=await api.saveProjectReadme(projectId,{markdown:normalizeProjectMarkdown(markdown),expected_revision:revision})
       dispatch({type:"saved",requestId:id,value})
     }catch(error){
       if(error instanceof ApiError&&error.status===409){
@@ -100,7 +125,7 @@ export default function ProjectReadmeEditor({projectId}:{projectId:string}){
     </header>
     {state.status==="conflict"&&<div className="project-readme-conflict" role="alert"><AlertTriangle/><div><strong>服务器上有更新</strong><p>{reloadError||"请选择载入服务器版本，或明确以当前内容覆盖。"}</p></div><button onClick={()=>void reloadFromServer()}><RefreshCcw/>载入服务器版本</button><button className="danger" onClick={()=>void overwrite()}><Save/>以当前内容覆盖</button></div>}
     {state.status==="error"&&<div className="project-readme-conflict" role="alert"><AlertTriangle/><div><strong>笔记暂未保存</strong><p>{state.error}</p></div><button onClick={()=>void save(state.markdown,state.revision)}><RefreshCcw/>重试</button></div>}
-    <MarkdownSurface initialMarkdown={state.markdown} onChange={markdown=>{const existing=readDraft(projectId);writeDraft(projectId,{markdown,baseRevision:state.status==="conflict"&&existing?existing.baseRevision:state.revision});dispatch({type:"edit",markdown})}} onFailure={message=>{const id=++requestId.current;dispatch({type:"saving",requestId:id});dispatch({type:"failed",requestId:id,error:message})}}/>
+    <MarkdownSurface markdown={state.markdown} onChange={markdown=>{const existing=readDraft(projectId);writeDraft(projectId,{markdown,baseRevision:state.status==="conflict"&&existing?existing.baseRevision:state.revision});dispatch({type:"edit",markdown})}} onFailure={message=>{const id=++requestId.current;dispatch({type:"saving",requestId:id});dispatch({type:"failed",requestId:id,error:message})}}/>
   </section>
 }
 

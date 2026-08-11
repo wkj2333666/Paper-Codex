@@ -32,35 +32,51 @@ export const initialProjectReadmeState:ProjectReadmeState={
   savingMarkdown:null,conflictRevision:null,error:null,
 }
 
+export function normalizeProjectMarkdown(markdown:string):string{
+  return markdown
+    .replace(/\r\n?/g,"\n")
+    .split("\n")
+    .filter(line=>!/^\s*<br\s*\/?>\s*$/i.test(line))
+    .join("\n")
+}
+
 export function projectReadmeReducer(state:ProjectReadmeState,action:ProjectReadmeAction):ProjectReadmeState{
   if(action.type==="loading")return {...initialProjectReadmeState}
   if(action.type==="loaded"){
     const draft=action.draft
-    if(!draft||draft.markdown===action.value.markdown)return {
-      ...initialProjectReadmeState,status:"saved",markdown:action.value.markdown,
-      savedMarkdown:action.value.markdown,revision:action.value.revision,
+    const savedMarkdown=normalizeProjectMarkdown(action.value.markdown)
+    const draftMarkdown=draft?normalizeProjectMarkdown(draft.markdown):null
+    if(!draft||draftMarkdown===savedMarkdown)return {
+      ...initialProjectReadmeState,status:"saved",markdown:savedMarkdown,
+      savedMarkdown,revision:action.value.revision,
     }
     const matches=draft.baseRevision===action.value.revision
     return {
-      ...initialProjectReadmeState,status:matches?"dirty":"conflict",markdown:draft.markdown,
-      savedMarkdown:action.value.markdown,revision:action.value.revision,
+      ...initialProjectReadmeState,status:matches?"dirty":"conflict",markdown:draftMarkdown!,
+      savedMarkdown,revision:action.value.revision,
       conflictRevision:matches?null:action.value.revision,
       error:matches?null:"项目笔记已在其他位置更新",
     }
   }
-  if(action.type==="edit")return {
-    ...state,markdown:action.markdown,
-    status:state.status==="conflict"?"conflict":state.status==="saving"?"saving":action.markdown===state.savedMarkdown?"saved":"dirty",
-    error:null,
+  if(action.type==="edit"){
+    const markdown=normalizeProjectMarkdown(action.markdown)
+    return {
+      ...state,markdown,
+      status:state.status==="conflict"?"conflict":state.status==="saving"?"saving":markdown===state.savedMarkdown?"saved":"dirty",
+      error:null,
+    }
   }
   if(action.type==="saving")return {
     ...state,status:"saving",requestId:action.requestId,savingMarkdown:state.markdown,error:null,
   }
   if(action.requestId!==state.requestId)return state
-  if(action.type==="saved")return {
-    ...state,status:state.markdown===action.value.markdown?"saved":"dirty",
-    savedMarkdown:action.value.markdown,revision:action.value.revision,
-    savingMarkdown:null,conflictRevision:null,error:null,
+  if(action.type==="saved"){
+    const savedMarkdown=normalizeProjectMarkdown(action.value.markdown)
+    return {
+      ...state,status:state.markdown===savedMarkdown?"saved":"dirty",
+      savedMarkdown,revision:action.value.revision,
+      savingMarkdown:null,conflictRevision:null,error:null,
+    }
   }
   if(action.type==="conflict")return {
     ...state,status:"conflict",savingMarkdown:null,
