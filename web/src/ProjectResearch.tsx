@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   BookOpen,
   CheckCircle2,
@@ -26,6 +26,8 @@ import type {
   ProjectCandidate,
   ProjectGoalSummary,
 } from "./types"
+
+const ProjectReadmeEditor=lazy(()=>import("./ProjectReadmeEditor"))
 
 export type ProjectResearchTab="overview"|"notes"|"papers"|"candidates"|"searches"
 
@@ -262,7 +264,7 @@ export function ProjectResearch({project,papers,theme,researchRevision=0,focusWo
     setSearchDetail(await api.literatureSearch(projectId,search.id))
   }
   return <>
-    <ProjectResearchView tab={tab} papers={papers} candidates={candidates} searches={searches} includeDismissed={includeDismissed} busy={busy} error={error} actions={actions} onTab={setTab} onOpenCandidate={setSelectedCandidate} onOpenPaper={onOpenPaper} onRemovePaper={paperId=>void onRemovePaper(paperId)} onToggleDismissed={()=>setIncludeDismissed(value=>!value)} onOpenSearch={search=>void openSearch(search)} overview={<ProjectOverview project={project} papers={papers} candidates={candidates} searches={searches} goals={goals} graph={graph} theme={theme} onOpenPaper={onOpenPaper}/>}/>
+    <ProjectResearchView tab={tab} papers={papers} candidates={candidates} searches={searches} includeDismissed={includeDismissed} busy={busy} error={error} actions={actions} onTab={setTab} onOpenCandidate={setSelectedCandidate} onOpenPaper={onOpenPaper} onRemovePaper={paperId=>void onRemovePaper(paperId)} onToggleDismissed={()=>setIncludeDismissed(value=>!value)} onOpenSearch={search=>void openSearch(search)} overview={<ProjectOverview project={project} papers={papers} candidates={candidates} searches={searches} goals={goals} graph={graph} theme={theme} onOpenPaper={onOpenPaper}/>} notes={<Suspense fallback={<div className="project-readme-loading"><LoaderCircle className="spin"/>正在载入笔记编辑器…</div>}><ProjectReadmeEditor key={projectId} projectId={projectId}/></Suspense>}/>
     {selectedCandidate&&<CandidateDrawer candidate={selectedCandidate} actions={actions} onClose={()=>setSelectedCandidate(null)} onOpenPaper={onOpenPaper}/>}
     {searchDetail&&<SearchDrawer detail={searchDetail} onClose={()=>setSearchDetail(null)}/>}
   </>
