@@ -335,7 +335,9 @@ mod tests {
             .refresh("conversation", &scopes)
             .await
             .unwrap();
-        let summary = tokio::fs::read_to_string(bundle.summary_path).await.unwrap();
+        let summary = tokio::fs::read_to_string(bundle.summary_path)
+            .await
+            .unwrap();
 
         assert!(summary.contains("## 可读项目目录"));
         assert!(summary.contains("父项目 / 当前子项目"));
