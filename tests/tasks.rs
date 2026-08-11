@@ -29,6 +29,23 @@ async fn persists_task_events_and_replays_them_in_order() {
 }
 
 #[tokio::test]
+async fn cancellation_is_a_terminal_compare_and_set_transition() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let id = db
+        .create_task("ingest", r#"{"source":"paper"}"#)
+        .await
+        .unwrap();
+
+    assert!(db.cancel_task(&id).await.unwrap());
+    assert!(!db.cancel_task(&id).await.unwrap());
+    assert!(db
+        .transition_task(&id, TaskState::Resolving, None)
+        .await
+        .is_err());
+    assert_eq!(db.get_task(&id).await.unwrap().unwrap().state, "cancelled");
+}
+
+#[tokio::test]
 async fn dismisses_only_terminal_tasks() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     let failed = db

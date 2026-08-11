@@ -5,6 +5,7 @@ use crate::{
     conversation_context::ConversationContextBuilder,
     conversations::ConversationScope,
     extraction::extract_pdf,
+    project_context::project_path,
     research::{
         CandidateStatus, DiscoveredWork, EvidenceLevel, ProjectCandidate, ResearchProvider,
         ResearchQuery, ResearchTrigger, SearchRunState,
@@ -105,6 +106,21 @@ pub enum ImportCandidateOutcome {
     Enqueued { task_id: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateBulkImportItem {
+    pub work_id: String,
+    pub outcome: Option<ImportCandidateOutcome>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateBulkImportOutcome {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub items: Vec<CandidateBulkImportItem>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PruneOutcome {
     pub removed_files: usize,
@@ -135,7 +151,7 @@ struct ProjectImportPipeline {
 }
 
 impl ProjectResearchToolHandler {
-    pub const DEFINITIONS_VERSION: i64 = 2;
+    pub const DEFINITIONS_VERSION: i64 = 3;
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -179,6 +195,16 @@ impl ProjectResearchToolHandler {
 
     pub fn definitions() -> Vec<DynamicToolDefinition> {
         vec![
+            DynamicToolDefinition {
+                name: "research_read_project".into(),
+                description: "读取任意项目的层级、目标、直接论文和候选概况。所有项目可读，但只有当前对话绑定项目可写。".into(),
+                input_schema: serde_json::json!({
+                    "type":"object",
+                    "additionalProperties":false,
+                    "required":["project_id"],
+                    "properties":{"project_id":{"type":"string"}}
+                }),
+            },
             DynamicToolDefinition {
                 name: "research_search".into(),
                 description: "检索与当前项目问题相关的外部学术论文；返回候选 work_id。".into(),
@@ -316,6 +342,49 @@ impl ProjectResearchToolHandler {
             bail!("当前项目和本轮检索中不存在该候选论文");
         }
         Ok(())
+    }
+
+    async fn read_project(&self, project_id: &str) -> Result<Vec<Value>> {
+        let database = self.research.store().database();
+        let project = database
+            .get_project(project_id)
+            .await?
+            .context("项目不存在")?;
+        let projects = database.list_projects().await?;
+        let path = project_path(&projects, project_id)
+            .into_iter()
+            .map(|item| item.name)
+            .collect::<Vec<_>>();
+        let mut papers = Vec::new();
+        for paper_id in database.project_paper_ids(project_id).await? {
+            if let Some(paper) = database.get_paper(&paper_id).await? {
+                papers.push(serde_json::json!({
+                    "paper_id":paper.id,
+                    "title":paper.title,
+                    "year":paper.year,
+                    "doi":paper.doi,
+                    "arxiv_id":paper.arxiv_id,
+                }));
+            }
+        }
+        let candidates = self
+            .research
+            .store()
+            .list_project_candidates(project_id, false)
+            .await?;
+        Ok(vec![serde_json::json!({
+            "project":project,
+            "path":path,
+            "writable":project_id == self.project_id,
+            "write_project_id":self.project_id,
+            "direct_papers":papers,
+            "candidates":candidates.into_iter().map(|candidate| serde_json::json!({
+                "work_id":candidate.work.id,
+                "title":candidate.work.metadata.title,
+                "status":candidate.status,
+                "relevance_reason":candidate.relevance_reason,
+            })).collect::<Vec<_>>(),
+        })])
     }
 
     fn progress(&self, kind: &str, payload: Value) {
@@ -471,6 +540,12 @@ struct ResearchSearchArguments {
     limit: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResearchReadProjectArguments {
+    project_id: String,
+}
+
 fn default_research_limit() -> usize {
     10
 }
@@ -503,6 +578,11 @@ impl DynamicToolHandler for ProjectResearchToolHandler {
     async fn call(&self, call: DynamicToolCall) -> Result<Vec<Value>> {
         self.require_research_scope().await?;
         match call.tool.as_str() {
+            "research_read_project" => {
+                let arguments: ResearchReadProjectArguments =
+                    serde_json::from_value(call.arguments).context("项目读取参数无效")?;
+                self.read_project(&arguments.project_id).await
+            }
             "research_search" => {
                 let arguments: ResearchSearchArguments =
                     serde_json::from_value(call.arguments).context("研究检索参数无效")?;
@@ -879,6 +959,17 @@ impl ResearchService {
         work_id: &str,
         engine: Option<&TaskEngine>,
     ) -> Result<ImportCandidateOutcome> {
+        self.import_candidate_with_gate(project_id, work_id, engine, false)
+            .await
+    }
+
+    async fn import_candidate_with_gate(
+        &self,
+        project_id: &str,
+        work_id: &str,
+        engine: Option<&TaskEngine>,
+        bulk_import: bool,
+    ) -> Result<ImportCandidateOutcome> {
         let candidate = self
             .store
             .get_candidate(project_id, work_id)
@@ -924,13 +1015,13 @@ impl ResearchService {
             .or_else(|| candidate.work.metadata.pdf_url.clone())
             .context("candidate has no importable source")?;
         let engine = engine.context("paper import service is unavailable")?;
-        let task_id = engine
-            .create_ingest(IngestInput {
-                source,
-                project_id: Some(project_id.to_owned()),
-                upload_path: None,
-            })
-            .await?;
+        let input = IngestInput {
+            source,
+            project_id: Some(project_id.to_owned()),
+            upload_path: None,
+            bulk_import,
+        };
+        let task_id = engine.create_ingest(input).await?;
         if let Err(error) = self
             .store
             .mark_candidate_importing(project_id, work_id, &task_id)
@@ -940,6 +1031,48 @@ impl ResearchService {
             return Err(error);
         }
         Ok(ImportCandidateOutcome::Enqueued { task_id })
+    }
+
+    pub async fn import_all_candidates(
+        &self,
+        project_id: &str,
+        engine: Option<&TaskEngine>,
+    ) -> Result<CandidateBulkImportOutcome> {
+        let work_ids = self
+            .store
+            .list_project_candidates(project_id, false)
+            .await?
+            .into_iter()
+            .filter(|candidate| candidate.status == CandidateStatus::Candidate)
+            .map(|candidate| candidate.work.id)
+            .collect::<Vec<_>>();
+        let mut items = Vec::with_capacity(work_ids.len());
+        for work_id in work_ids {
+            let item = match self
+                .import_candidate_with_gate(project_id, &work_id, engine, true)
+                .await
+            {
+                Ok(outcome) => CandidateBulkImportItem {
+                    work_id,
+                    outcome: Some(outcome),
+                    error: None,
+                },
+                Err(error) => CandidateBulkImportItem {
+                    work_id,
+                    outcome: None,
+                    error: Some(error.to_string()),
+                },
+            };
+            items.push(item);
+        }
+        let succeeded = items.iter().filter(|item| item.outcome.is_some()).count();
+        let total = items.len();
+        Ok(CandidateBulkImportOutcome {
+            total,
+            succeeded,
+            failed: total - succeeded,
+            items,
+        })
     }
 
     pub async fn recover_interrupted_runs(&self) -> Result<()> {
@@ -967,6 +1100,36 @@ impl ResearchService {
             })
             .collect::<String>();
         self.cache_dir.join("works").join(safe_id)
+    }
+}
+
+#[cfg(test)]
+mod project_tool_definition_tests {
+    use super::ProjectResearchToolHandler;
+
+    #[test]
+    fn project_tools_expose_cross_project_reads_but_no_cross_project_writes() {
+        let definitions = ProjectResearchToolHandler::definitions();
+        let read = definitions
+            .iter()
+            .find(|definition| definition.name == "research_read_project")
+            .expect("read-only project tool");
+        assert!(read.input_schema["properties"].get("project_id").is_some());
+
+        for name in [
+            "research_search",
+            "research_save",
+            "research_add_to_project",
+            "research_import",
+        ] {
+            let definition = definitions
+                .iter()
+                .find(|definition| definition.name == name)
+                .unwrap();
+            assert!(definition.input_schema["properties"]
+                .get("project_id")
+                .is_none());
+        }
     }
 }
 

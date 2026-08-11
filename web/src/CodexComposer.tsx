@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { FormEvent } from "react"
-import { Gauge, LoaderCircle, Search, Send, Settings2, Sparkles, Square, Wrench, X } from "lucide-react"
+import { Gauge, LoaderCircle, Minimize2, Search, Send, Settings2, Sparkles, Square, Target, Wrench, X } from "lucide-react"
 import { CodexToolPicker } from "./CodexToolPicker"
+import { applyCodexCommand, codexCommandCompletion, type CodexCommandCompletion, type CodexCommandDefinition } from "./codex-commands"
 import {
   applyCompletion,
   buildCodexToolCatalog,
@@ -119,6 +120,8 @@ export function CodexComposer({
   const [toolPickerMode, setToolPickerMode] = useState<"button" | "completion">("button")
   const [toolQuery, setToolQuery] = useState("")
   const [toolActiveIndex, setToolActiveIndex] = useState(0)
+  const [commandCompletion, setCommandCompletion] = useState<CodexCommandCompletion | null>(null)
+  const [commandActiveIndex, setCommandActiveIndex] = useState(0)
   const settingsRef = useRef<HTMLDetailsElement | null>(null)
   const settingsSummaryRef = useRef<HTMLElement | null>(null)
   const formRef = useRef<HTMLFormElement | null>(null)
@@ -135,6 +138,13 @@ export function CodexComposer({
   const closeToolPicker = () => {
     setToolPickerOpen(false)
     completionRef.current = null
+  }
+  const syncCommandCompletion = (value:string,cursor:number) => {
+    const completion=codexCommandCompletion(value,cursor)
+    setCommandCompletion(completion)
+    setCommandActiveIndex(0)
+    if(completion)closeToolPicker()
+    return completion
   }
   const requestToolCatalog = () => {
     onRequestIntegrations()
@@ -190,6 +200,13 @@ export function CodexComposer({
     closeToolPicker()
     restoreTextarea(nextCursor)
   }
+  const chooseCommand=(command:CodexCommandDefinition)=>{
+    if(!commandCompletion)return
+    const next=applyCodexCommand(text,commandCompletion,command.name)
+    onText(next.text)
+    setCommandCompletion(null)
+    restoreTextarea(next.cursor)
+  }
 
   useEffect(() => {
     if (!settingsOpen) return
@@ -222,8 +239,13 @@ export function CodexComposer({
       onBlur={(event) => {
         if (toolPickerOpen && settingsTargetIsOutside(event.currentTarget, event.relatedTarget))
           closeToolPicker()
+        if(commandCompletion&&settingsTargetIsOutside(event.currentTarget,event.relatedTarget))setCommandCompletion(null)
       }}
     >
+      {commandCompletion&&<div className="codex-command-picker" role="listbox" aria-label="Codex 命令">
+        <header><strong>命令</strong><span>原生 Codex 工作流</span></header>
+        {commandCompletion.items.length?commandCompletion.items.map((command,index)=><button type="button" role="option" aria-selected={index===commandActiveIndex} className={index===commandActiveIndex?"active":""} key={command.name} onMouseDown={event=>event.preventDefault()} onClick={()=>chooseCommand(command)}>{command.name==="goal"?<Target/>:<Minimize2/>}<span><strong>/{command.name}</strong><small>{command.label} · {command.description}</small></span></button>):<p>没有匹配的命令</p>}
+      </div>}
       <CodexToolPicker
         open={toolPickerOpen}
         items={toolCatalog}
@@ -284,14 +306,24 @@ export function CodexComposer({
         value={text}
         onChange={(event) => {
           onText(event.target.value)
-          syncCompletion(event.target.value, event.target.selectionStart)
+          if(!syncCommandCompletion(event.target.value,event.target.selectionStart))syncCompletion(event.target.value, event.target.selectionStart)
         }}
-        onClick={(event) => syncCompletion(event.currentTarget.value, event.currentTarget.selectionStart)}
+        onClick={(event) => {if(!syncCommandCompletion(event.currentTarget.value,event.currentTarget.selectionStart))syncCompletion(event.currentTarget.value, event.currentTarget.selectionStart)}}
         onKeyUp={(event) => {
           if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
             syncCompletion(event.currentTarget.value, event.currentTarget.selectionStart)
         }}
         onKeyDown={(event) => {
+          if(commandCompletion){
+            if(event.key==="Escape"){event.preventDefault();setCommandCompletion(null);return}
+            if(["ArrowDown","ArrowUp","Enter","Tab"].includes(event.key)){
+              event.preventDefault()
+              if(!commandCompletion.items.length)return
+              if(event.key==="ArrowDown"){setCommandActiveIndex((commandActiveIndex+1)%commandCompletion.items.length);return}
+              if(event.key==="ArrowUp"){setCommandActiveIndex((commandActiveIndex-1+commandCompletion.items.length)%commandCompletion.items.length);return}
+              chooseCommand(commandCompletion.items[commandActiveIndex]??commandCompletion.items[0]);return
+            }
+          }
           if (toolPickerOpen) {
             const pickerIntent = toolPickerKeyIntent(event.key, event.shiftKey)
             if (pickerIntent !== "ignore") {

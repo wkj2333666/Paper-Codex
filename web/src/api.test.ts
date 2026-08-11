@@ -66,6 +66,19 @@ test("project lifecycle, trash, and graph methods use encoded scoped endpoints",
   ])
 })
 
+test("project README reads and saves with an expected revision", async()=>{
+  await api.projectReadme("project/one")
+  await api.saveProjectReadme("project/one",{markdown:"# Updated",expected_revision:"revision-1"})
+  expect(capturedRequests.slice(-2).map(request=>[request.method,request.url])).toEqual([
+    ["GET","/api/projects/project%2Fone/readme"],
+    ["PUT","/api/projects/project%2Fone/readme"],
+  ])
+  expect(JSON.parse(String(capturedRequests.at(-1)?.body))).toEqual({
+    markdown:"# Updated",
+    expected_revision:"revision-1",
+  })
+})
+
 test("task cancellation and dismissal use separate encoded endpoints", async()=>{
   await api.cancelTask("task/one")
   await api.dismissTask("task/one")
@@ -110,6 +123,14 @@ test("native conversation goals use the dedicated goal endpoint", async()=>{
   })
 })
 
+test("native conversation compaction uses the dedicated thread endpoint", async()=>{
+  await api.compactConversation("conversation/one")
+  expect(capturedRequests.at(-1)).toMatchObject({
+    method:"POST",
+    url:"/api/conversations/conversation%2Fone/compact",
+  })
+})
+
 test("conversation messages send explicit project research mode", async()=>{
   await api.sendConversationMessage("conversation/1","查找相关工作","explicit",{
     name:"paper-research",
@@ -142,6 +163,7 @@ test("project literature methods encode both project and work identifiers", asyn
   await api.updateCandidate("project/one","doi:10.1/work",{status:"dismissed"})
   await api.removeCandidate("project/one","doi:10.1/work")
   await api.importCandidate("project/one","doi:10.1/work")
+  await api.importAllCandidates("project/one")
   await api.projectLiteratureSearches("project/one")
   await api.literatureSearch("project/one","run/one")
   expect(capturedRequests.map(request=>[request.method,request.url])).toEqual([
@@ -149,6 +171,7 @@ test("project literature methods encode both project and work identifiers", asyn
     ["PATCH","/api/projects/project%2Fone/candidates/doi%3A10.1%2Fwork"],
     ["DELETE","/api/projects/project%2Fone/candidates/doi%3A10.1%2Fwork"],
     ["POST","/api/projects/project%2Fone/candidates/doi%3A10.1%2Fwork/import"],
+    ["POST","/api/projects/project%2Fone/candidates/import-all"],
     ["GET","/api/projects/project%2Fone/literature-searches"],
     ["GET","/api/projects/project%2Fone/literature-searches/run%2Fone"],
   ])

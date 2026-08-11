@@ -16,6 +16,8 @@ const STATE_LABELS: Record<string, string> = {
   cancelled: "已取消",
 }
 
+const TERMINAL_STATES = new Set(["done", "failed", "cancelled"])
+
 export function intakeStateLabel(state: string): string {
   return STATE_LABELS[state] ?? `处理阶段 · ${state}`
 }
@@ -34,6 +36,7 @@ export function mergeIntakeTaskEvent(tasks: Task[], event: StreamEvent): Task[] 
   return tasks.map(task => {
     if (task.id !== event.task_id || task.kind !== "ingest") return task
     if (event.type === "stage" && typeof event.payload.state === "string") {
+      if (TERMINAL_STATES.has(task.state)) return task
       return { ...task, state: event.payload.state, updated_at: event.created_at || task.updated_at }
     }
     if (event.type === "model-switch" && typeof event.payload.from === "string" && typeof event.payload.to === "string") {

@@ -5,6 +5,7 @@ use crate::{
     db::Database,
     domain::TaskEvent,
     login_limiter::LoginLimiter,
+    project_readme::{ProjectReadmeError, ProjectReadmeStore},
     research::{CandidateStatus, ResearchMode},
     research_service::ResearchService,
     research_store::ResearchStore,
@@ -167,10 +168,18 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(delete_project),
         )
         .route("/api/projects/{id}/impact", get(project_impact))
+        .route(
+            "/api/projects/{id}/readme",
+            get(get_project_readme).put(update_project_readme),
+        )
         .route("/api/projects/{id}/goals", get(project_goals))
         .route(
             "/api/projects/{id}/candidates",
             get(list_project_candidates),
+        )
+        .route(
+            "/api/projects/{id}/candidates/import-all",
+            post(import_all_project_candidates),
         )
         .route(
             "/api/projects/{id}/candidates/{work_id}",
@@ -238,6 +247,10 @@ pub fn build_router(state: AppState) -> Router {
             get(get_conversation_goal)
                 .put(set_conversation_goal)
                 .delete(clear_conversation_goal),
+        )
+        .route(
+            "/api/conversations/{id}/compact",
+            post(compact_conversation),
         )
         .route("/api/conversations/{id}/cancel", post(cancel_conversation))
         .route("/api/conversations/{id}/events", get(conversation_events))
@@ -409,6 +422,11 @@ async fn create_project(
         format!("# {}\n\n{}\n", project.name, project.purpose).as_bytes(),
     )
     .await?;
+    crate::workspace::atomic_write(
+        &project_dir.join("README.md"),
+        format!("# {}\n\n{}\n", project.name, project.purpose).as_bytes(),
+    )
+    .await?;
     crate::workspace::atomic_write(&project_dir.join("papers.md"), b"# Papers\n").await?;
     state
         .search
@@ -430,6 +448,74 @@ async fn get_project(
             status: StatusCode::NOT_FOUND,
             message: "项目不存在".into(),
         })
+}
+
+#[derive(Deserialize)]
+struct UpdateProjectReadmeRequest {
+    markdown: String,
+    expected_revision: String,
+}
+
+async fn get_project_readme(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::project_readme::ProjectReadme>, ProjectReadmeApiError> {
+    Ok(Json(
+        ProjectReadmeStore::new(state.db, state.workspace)
+            .read(&id)
+            .await?,
+    ))
+}
+
+async fn update_project_readme(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateProjectReadmeRequest>,
+) -> Result<Json<crate::project_readme::ProjectReadme>, ProjectReadmeApiError> {
+    Ok(Json(
+        ProjectReadmeStore::new(state.db, state.workspace)
+            .write(&id, &request.markdown, &request.expected_revision)
+            .await?,
+    ))
+}
+
+struct ProjectReadmeApiError(ProjectReadmeError);
+
+impl From<ProjectReadmeError> for ProjectReadmeApiError {
+    fn from(error: ProjectReadmeError) -> Self {
+        Self(error)
+    }
+}
+
+impl IntoResponse for ProjectReadmeApiError {
+    fn into_response(self) -> Response {
+        match self.0 {
+            ProjectReadmeError::ProjectNotFound => {
+                (StatusCode::NOT_FOUND, Json(json!({"error":"项目不存在"}))).into_response()
+            }
+            ProjectReadmeError::InvalidProjectSlug => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"项目路径无效"})),
+            )
+                .into_response(),
+            ProjectReadmeError::Conflict { current_revision } => (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error":"项目笔记已在其他位置更新",
+                    "current_revision":current_revision,
+                })),
+            )
+                .into_response(),
+            error => {
+                tracing::error!(error=%error, "project README operation failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error":"operation failed"})),
+                )
+                    .into_response()
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -548,6 +634,18 @@ async fn import_project_candidate(
     let research = require_research(&state)?;
     let outcome = research
         .import_candidate(&project_id, &work_id, state.engine.as_deref())
+        .await
+        .map_err(map_research_error)?;
+    Ok(Json(json!(outcome)))
+}
+
+async fn import_all_project_candidates(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let research = require_research(&state)?;
+    let outcome = research
+        .import_all_candidates(&project_id, state.engine.as_deref())
         .await
         .map_err(map_research_error)?;
     Ok(Json(json!(outcome)))
@@ -954,6 +1052,7 @@ async fn create_intake(
             source: request.source,
             project_id: request.project_id,
             upload_path: None,
+            bulk_import: false,
         })
         .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({"task_id":id}))))
@@ -1008,6 +1107,7 @@ async fn upload_pdf(
             source: filename,
             project_id: project_id.filter(|v| !v.is_empty()),
             upload_path: Some(path),
+            bulk_import: false,
         })
         .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({"task_id":id}))))
@@ -1374,6 +1474,20 @@ async fn clear_conversation_goal(
         .as_ref()
         .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
         .clear_conversation_goal(&id)
+        .await
+        .map_err(conversation_api_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn compact_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .conversation_engine
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("conversation engine unavailable"))?
+        .compact_conversation(&id)
         .await
         .map_err(conversation_api_error)?;
     Ok(StatusCode::NO_CONTENT)

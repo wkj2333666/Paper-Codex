@@ -1,6 +1,6 @@
-import type { Annotation, AnnotationAnchor, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
+import type { Annotation, AnnotationAnchor, CandidateBulkImportOutcome, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ProjectReadme, ProjectReadmeSaveRequest, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
 
-export class ApiError extends Error { constructor(public status:number,message:string){super(message)} }
+export class ApiError extends Error { constructor(public status:number,message:string,public body:Record<string,unknown>={}){super(message)} }
 const TOKEN_KEY = "paper-codex-token"
 const TOKEN_HEADER = "x-paper-codex-token"
 export const session = { get:()=>localStorage.getItem(TOKEN_KEY), set:(token:string)=>localStorage.setItem(TOKEN_KEY,token), clear:()=>localStorage.removeItem(TOKEN_KEY) }
@@ -11,7 +11,7 @@ async function request<T>(path:string,init:RequestInit={}):Promise<T> {
   const headers = new Headers(init.headers); const token=session.get(); if(token) headers.set(TOKEN_HEADER,token)
   if(init.body && !(init.body instanceof FormData)) headers.set("content-type","application/json")
   const response=await fetch(path,{...init,headers});
-  if(!response.ok){ if(response.status===401) session.clear(); const body=await response.json().catch(()=>({})); throw new ApiError(response.status,body.error ?? `HTTP ${response.status}`) }
+  if(!response.ok){ if(response.status===401) session.clear(); const body=await response.json().catch(()=>({})) as Record<string,unknown>; throw new ApiError(response.status,typeof body.error==="string"?body.error:`HTTP ${response.status}`,body) }
   if(response.status===204) return undefined as T
   return response.json() as Promise<T>
 }
@@ -29,6 +29,8 @@ export const api = {
   updateProject:(id:string,value:{name:string;purpose:string;parent_id:string|null})=>request<Project>(`/api/projects/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(value)}),
   deleteProject:(id:string,subtree=false)=>request<void>(`/api/projects/${encodeURIComponent(id)}${subtree?"?mode=subtree":""}`,{method:"DELETE"}),
   projectImpact:(id:string)=>request<ProjectImpact>(`/api/projects/${encodeURIComponent(id)}/impact`),
+  projectReadme:(id:string)=>request<ProjectReadme>(`/api/projects/${encodeURIComponent(id)}/readme`),
+  saveProjectReadme:(id:string,value:ProjectReadmeSaveRequest)=>request<ProjectReadme>(`/api/projects/${encodeURIComponent(id)}/readme`,{method:"PUT",body:JSON.stringify(value)}),
   projectGoals:(id:string)=>request<ProjectGoalSummary[]>(`/api/projects/${encodeURIComponent(id)}/goals`),
   addPaper:(projectId:string,paperId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`,{method:"POST"}),
   removePaper:(projectId:string,paperId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`,{method:"DELETE"}),
@@ -36,6 +38,7 @@ export const api = {
   updateCandidate:(projectId:string,workId:string,value:{status:Extract<CandidateStatus,"candidate"|"dismissed">})=>request<ProjectCandidate>(`/api/projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(workId)}`,{method:"PATCH",body:JSON.stringify(value)}),
   removeCandidate:(projectId:string,workId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(workId)}`,{method:"DELETE"}),
   importCandidate:(projectId:string,workId:string)=>request<ImportCandidateOutcome>(`/api/projects/${encodeURIComponent(projectId)}/candidates/${encodeURIComponent(workId)}/import`,{method:"POST"}),
+  importAllCandidates:(projectId:string)=>request<CandidateBulkImportOutcome>(`/api/projects/${encodeURIComponent(projectId)}/candidates/import-all`,{method:"POST"}),
   projectLiteratureSearches:(projectId:string)=>request<LiteratureSearchRun[]>(`/api/projects/${encodeURIComponent(projectId)}/literature-searches`),
   literatureSearch:(projectId:string,id:string)=>request<LiteratureSearchDetail>(`/api/projects/${encodeURIComponent(projectId)}/literature-searches/${encodeURIComponent(id)}`),
   trash:()=>request<Paper[]>("/api/trash"),
@@ -63,6 +66,7 @@ export const api = {
   conversationGoal:(id:string)=>request<CodexGoal|null>(`/api/conversations/${encodeURIComponent(id)}/goal`),
   setConversationGoal:(id:string,value:CodexGoalRequest)=>request<CodexGoal>(`/api/conversations/${encodeURIComponent(id)}/goal`,{method:"PUT",body:JSON.stringify(value)}),
   clearConversationGoal:(id:string)=>request<void>(`/api/conversations/${encodeURIComponent(id)}/goal`,{method:"DELETE"}),
+  compactConversation:(id:string)=>request<void>(`/api/conversations/${encodeURIComponent(id)}/compact`,{method:"POST"}),
   replaceConversationScopes:(id:string,scopes:ConversationScope[])=>request<ConversationScope[]>(`/api/conversations/${encodeURIComponent(id)}/scopes`,{method:"PUT",body:JSON.stringify({scopes})}),
   sendConversationMessage:(id:string,content:string,researchMode:ResearchMode="auto",skill?:CodexSkillSelection|null,toolPreferences:CodexToolPreference[]=[])=>request<{message_id:string;status:string}>(`/api/conversations/${encodeURIComponent(id)}/messages`,{method:"POST",body:JSON.stringify({content,research_mode:researchMode,...(skill?{skill}:{}),...(toolPreferences.length?{tool_preferences:toolPreferences}:{})})}),
   cancelConversation:(id:string)=>request<void>(`/api/conversations/${encodeURIComponent(id)}/cancel`,{method:"POST"}),

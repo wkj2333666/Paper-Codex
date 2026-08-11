@@ -21,7 +21,37 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use tokio::sync::{broadcast, mpsc, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, watch, Mutex, OwnedSemaphorePermit, Semaphore};
+
+const BULK_IMPORT_CONCURRENCY: usize = 2;
+
+#[derive(Clone)]
+struct TaskExecutionGate {
+    bulk_import: Arc<Semaphore>,
+}
+
+impl Default for TaskExecutionGate {
+    fn default() -> Self {
+        Self {
+            bulk_import: Arc::new(Semaphore::new(BULK_IMPORT_CONCURRENCY)),
+        }
+    }
+}
+
+impl TaskExecutionGate {
+    async fn acquire_bulk(
+        &self,
+        cancel: &mut watch::Receiver<bool>,
+    ) -> Option<OwnedSemaphorePermit> {
+        tokio::select! {
+            permit = self.bulk_import.clone().acquire_owned() => permit.ok(),
+            changed = cancel.changed() => {
+                let _ = changed;
+                None
+            }
+        }
+    }
+}
 
 struct PaperAnalysisRun {
     outcome: CodexOutcome,
@@ -33,6 +63,8 @@ pub struct IngestInput {
     pub source: String,
     pub project_id: Option<String>,
     pub upload_path: Option<PathBuf>,
+    #[serde(default)]
+    pub bulk_import: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +85,7 @@ pub struct TaskEngine {
     events: broadcast::Sender<TaskEvent>,
     cancellations: Mutex<HashMap<String, watch::Sender<bool>>>,
     active: Mutex<HashSet<String>>,
+    execution_gate: TaskExecutionGate,
     research: Option<ResearchStore>,
 }
 
@@ -86,13 +119,10 @@ impl TaskEngine {
             events,
             cancellations: Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
+            execution_gate: TaskExecutionGate::default(),
             research,
         });
         engine.knowledge.recover().await?;
-        for id in engine.db.resumable_task_ids().await? {
-            engine.db.reset_task_for_resume(&id).await?;
-            engine.queue.send(id).await?;
-        }
         let dispatcher = engine.clone();
         tokio::spawn(async move {
             while let Some(id) = receiver.recv().await {
@@ -102,6 +132,10 @@ impl TaskEngine {
                 });
             }
         });
+        for id in engine.db.resumable_task_ids().await? {
+            engine.db.reset_task_for_resume(&id).await?;
+            engine.queue.send(id).await?;
+        }
         Ok(engine)
     }
 
@@ -171,38 +205,65 @@ impl TaskEngine {
     }
 
     pub async fn cancel(&self, id: &str) -> Result<()> {
+        self.db.get_task(id).await?.context("task not found")?;
+        let cancelled = self.db.cancel_task(id).await?;
         if let Some(sender) = self.cancellations.lock().await.get(id) {
             let _ = sender.send(true);
         }
-        let task = self.db.get_task(id).await?.context("task not found")?;
-        let state: TaskState = task.state.parse().map_err(anyhow::Error::msg)?;
-        if !matches!(
-            state,
-            TaskState::Done | TaskState::Failed | TaskState::Cancelled
-        ) {
-            self.db
-                .force_task_state(id, TaskState::Cancelled, None)
-                .await?;
+        if cancelled {
             self.emit(id, "cancelled", serde_json::json!({})).await?;
-        }
-        if let Some(research) = &self.research {
-            research.fail_candidate_import(id).await?;
+            if let Some(research) = &self.research {
+                research.fail_candidate_import(id).await?;
+            }
         }
         Ok(())
     }
 
     async fn execute(self: Arc<Self>, id: String) {
+        let Some(task) = self.db.get_task(&id).await.ok().flatten() else {
+            return;
+        };
+        if task.state == "cancelled" {
+            return;
+        }
+        let bulk_import = task.kind == "ingest"
+            && serde_json::from_str::<IngestInput>(&task.input_json)
+                .is_ok_and(|input| input.bulk_import);
         {
             let mut active = self.active.lock().await;
             if !active.insert(id.clone()) {
                 return;
             }
         }
-        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
         self.cancellations
             .lock()
             .await
             .insert(id.clone(), cancel_tx);
+        if self
+            .db
+            .get_task(&id)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|task| task.state == "cancelled")
+        {
+            self.cancellations.lock().await.remove(&id);
+            self.active.lock().await.remove(&id);
+            return;
+        }
+        let _execution_permit = if bulk_import {
+            match self.execution_gate.acquire_bulk(&mut cancel_rx).await {
+                Some(permit) => Some(permit),
+                None => {
+                    self.cancellations.lock().await.remove(&id);
+                    self.active.lock().await.remove(&id);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let result = self.execute_inner(&id, cancel_rx).await;
         if let Err(error) = result {
             if let Some(research) = &self.research {
@@ -211,13 +272,16 @@ impl TaskEngine {
             let task = self.db.get_task(&id).await.ok().flatten();
             if task.as_ref().is_some_and(|task| task.state != "cancelled") {
                 let message = redact_error(&error.to_string());
-                let _ = self
+                if self
                     .db
-                    .force_task_state(&id, TaskState::Failed, Some(&message))
-                    .await;
-                let _ = self
-                    .emit(&id, "failed", serde_json::json!({"message":message}))
-                    .await;
+                    .transition_task(&id, TaskState::Failed, Some(&message))
+                    .await
+                    .is_ok()
+                {
+                    let _ = self
+                        .emit(&id, "failed", serde_json::json!({"message":message}))
+                        .await;
+                }
             }
         }
         self.cancellations.lock().await.remove(&id);
@@ -785,5 +849,76 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn ingest_input_persists_the_bulk_execution_class() {
+        let legacy: IngestInput = serde_json::from_str(
+            r#"{"source":"arxiv:1","project_id":"project","upload_path":null}"#,
+        )
+        .unwrap();
+        assert!(!legacy.bulk_import);
+        let bulk = IngestInput {
+            source: "arxiv:2".into(),
+            project_id: Some("project".into()),
+            upload_path: None,
+            bulk_import: true,
+        };
+        let restored: IngestInput =
+            serde_json::from_str(&serde_json::to_string(&bulk).unwrap()).unwrap();
+        assert!(restored.bulk_import);
+    }
+
+    #[tokio::test]
+    async fn the_global_bulk_gate_limits_batches_and_wakes_cancelled_waiters() {
+        let gate = TaskExecutionGate::default();
+        let (_first_tx, mut first_rx) = watch::channel(false);
+        let (_second_tx, mut second_rx) = watch::channel(false);
+        let first = gate.acquire_bulk(&mut first_rx).await.unwrap();
+        let second = gate.acquire_bulk(&mut second_rx).await.unwrap();
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
+        let mut third = tokio::spawn({
+            let gate = gate.clone();
+            async move { gate.acquire_bulk(&mut cancel_rx).await }
+        });
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut third)
+                .await
+                .is_err()
+        );
+        cancel_tx.send(true).unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), third)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        drop(first);
+        drop(second);
+    }
+
+    #[tokio::test]
+    async fn startup_recovers_more_tasks_than_the_queue_capacity() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::initialize(root.path()).await.unwrap();
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        for _ in 0..129 {
+            db.create_task("unsupported", "{}").await.unwrap();
+        }
+        let codex = CodexRuntime::spawn(fake_command()).await.unwrap();
+
+        let started = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            TaskEngine::start(db, workspace, Acquirer::new(1024 * 1024).unwrap(), codex),
+        )
+        .await;
+
+        assert!(
+            started.is_ok(),
+            "task recovery blocked before the dispatcher started"
+        );
+        assert!(started.unwrap().is_ok());
     }
 }

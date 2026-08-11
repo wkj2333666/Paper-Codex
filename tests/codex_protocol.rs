@@ -467,6 +467,15 @@ async fn manages_native_thread_goals_without_a_parallel_local_state_machine() {
 }
 
 #[tokio::test]
+async fn starts_native_thread_compaction() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let thread_id = runtime.create_thread(root.path()).await.unwrap();
+
+    runtime.compact_thread(&thread_id).await.unwrap();
+}
+
+#[tokio::test]
 async fn streams_readable_work_updates_but_never_raw_reasoning_text() {
     let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
     let (_cancel_tx, cancel_rx) = watch::channel(false);

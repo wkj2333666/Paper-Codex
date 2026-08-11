@@ -1,6 +1,7 @@
 use crate::{
     conversations::ConversationScope,
     db::Database,
+    project_context::project_path,
     research::{CandidateStatus, EvidenceLevel},
     research_store::ResearchStore,
     workspace::{atomic_write, safe_key, Workspace},
@@ -193,6 +194,29 @@ impl ConversationContextBuilder {
             summary.push_str(&scope_summary.join("\n"));
             summary.push('\n');
         }
+        let projects = self.db.list_projects().await?;
+        if !projects.is_empty() {
+            summary.push_str("\n## 可读项目目录\n\n");
+            summary
+                .push_str("当前对话只能写入其绑定项目；以下所有项目均可作为只读研究上下文。\n\n");
+            for project in &projects {
+                let path = project_path(&projects, &project.id)
+                    .into_iter()
+                    .map(|item| item.name)
+                    .collect::<Vec<_>>()
+                    .join(" / ");
+                summary.push_str(&format!(
+                    "- `{}`：{}\n  - 研究目标：{}\n",
+                    project.id,
+                    path,
+                    if project.purpose.trim().is_empty() {
+                        "未填写"
+                    } else {
+                        project.purpose.trim()
+                    }
+                ));
+            }
+        }
         if let (Some(research), Some(project_id)) = (&self.research, exact_project_scope(scopes)) {
             let candidates = research.list_project_candidates(project_id, false).await?;
             if !candidates.is_empty() {
@@ -301,5 +325,46 @@ fn append_analysis_summary(summary: &mut String, analysis: &Value) {
                 summary.push_str(&format!("\n  - {label}：{}", value.trim()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn conversation_context_lists_every_project_with_ancestry() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::initialize(root.path()).await.unwrap();
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let parent = db
+            .create_project("parent", "父项目", "父项目目标")
+            .await
+            .unwrap();
+        let child = db
+            .create_project_with_parent("child", "当前子项目", "当前目标", Some(&parent))
+            .await
+            .unwrap();
+        db.create_project("other", "其他可读项目", "其他目标")
+            .await
+            .unwrap();
+        let scopes = vec![ConversationScope {
+            conversation_id: "conversation".into(),
+            scope_type: "project".into(),
+            scope_id: Some(child),
+            added_at: String::new(),
+        }];
+
+        let bundle = ConversationContextBuilder::new(db, workspace)
+            .refresh("conversation", &scopes)
+            .await
+            .unwrap();
+        let summary = tokio::fs::read_to_string(bundle.summary_path)
+            .await
+            .unwrap();
+
+        assert!(summary.contains("## 可读项目目录"));
+        assert!(summary.contains("父项目 / 当前子项目"));
+        assert!(summary.contains("其他可读项目"));
     }
 }

@@ -516,6 +516,51 @@ async fn conversation_goal_api_creates_reads_pauses_resumes_and_clears_native_go
 }
 
 #[tokio::test]
+async fn conversation_compact_api_uses_the_native_codex_thread() {
+    let (app, db) = conversation_test_app().await;
+    let token = login_token(&app).await;
+    let conversation = db.create_conversation("需要压缩的长对话").await.unwrap();
+    db.replace_conversation_scopes(
+        &conversation.id,
+        &[paper_codex::conversations::ConversationScopeInput {
+            scope_type: "project".into(),
+            scope_id: Some("default".into()),
+        }],
+    )
+    .await
+    .unwrap();
+    let initialized = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/conversations/{}/goal", conversation.id))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(
+                    r#"{"objective":"整理上下文","status":"paused"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(initialized.status(), StatusCode::OK);
+
+    let compacted = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/conversations/{}/compact", conversation.id))
+                .header("x-paper-codex-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(compacted.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
 async fn conversation_api_exposes_and_persists_codex_run_settings() {
     let (app, _db) = conversation_test_app().await;
     let token = login_token(&app).await;
@@ -1395,6 +1440,96 @@ async fn candidate_import_reuses_an_existing_paper_only_after_authenticated_conf
             .unwrap()
             .status,
         CandidateStatus::Imported
+    );
+}
+
+#[tokio::test]
+async fn candidate_bulk_import_processes_every_pending_candidate_without_stopping_on_failure() {
+    let (app, db, research) = research_test_app().await;
+    let project = db
+        .create_project("bulk-import", "Bulk import", "")
+        .await
+        .unwrap();
+    let importable = research
+        .store()
+        .upsert_work(candidate_work("10.1000/bulk-ready"))
+        .await
+        .unwrap();
+    let failing = research
+        .store()
+        .upsert_work(candidate_work("10.1000/bulk-failing"))
+        .await
+        .unwrap();
+    let dismissed = research
+        .store()
+        .upsert_work(candidate_work("10.1000/bulk-dismissed"))
+        .await
+        .unwrap();
+    for work in [&importable, &failing, &dismissed] {
+        research
+            .save_candidate(&project, &work.id, "直接相关", &[], None, None)
+            .await
+            .unwrap();
+    }
+    research
+        .dismiss_candidate(&project, &dismissed.id)
+        .await
+        .unwrap();
+    db.insert_paper("paper:bulk-ready", "Ready paper")
+        .await
+        .unwrap();
+    sqlx::query("UPDATE papers SET doi='10.1000/bulk-ready' WHERE id='paper:bulk-ready'")
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+    let token = login_token(&app).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project}/candidates/import-all"))
+                .header("x-paper-codex-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = json_response(response).await;
+    assert_eq!(payload["total"], 2);
+    assert_eq!(payload["succeeded"], 1);
+    assert_eq!(payload["failed"], 1);
+    assert_eq!(payload["items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        research
+            .store()
+            .get_candidate(&project, &importable.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        CandidateStatus::Imported
+    );
+    assert_eq!(
+        research
+            .store()
+            .get_candidate(&project, &failing.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        CandidateStatus::Candidate
+    );
+    assert_eq!(
+        research
+            .store()
+            .get_candidate(&project, &dismissed.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        CandidateStatus::Dismissed
     );
 }
 

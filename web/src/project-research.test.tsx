@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { api } from "./api"
 import {
   createCandidateActions,
+  ProjectResearchScopeCoordinator,
   ProjectResearchReloadCoordinator,
   ProjectResearchView,
   shouldReloadProjectResearch,
@@ -77,6 +78,18 @@ describe("ProjectResearch",()=>{
     expect(applied).toEqual(["retried"])
   })
 
+  it("invalidates async project operations across switches, including A to B to A",()=>{
+    const scope=new ProjectResearchScopeCoordinator()
+    const firstA=scope.select("project-a")
+    expect(scope.isCurrent(firstA)).toBe(true)
+    const projectB=scope.select("project-b")
+    expect(scope.isCurrent(firstA)).toBe(false)
+    expect(scope.isCurrent(projectB)).toBe(true)
+    const secondA=scope.select("project-a")
+    expect(scope.isCurrent(firstA)).toBe(false)
+    expect(scope.isCurrent(secondA)).toBe(true)
+  })
+
   it("distinguishes candidate, importing, and imported actions",()=>{
     const html=renderToStaticMarkup(<ProjectResearchView
       tab="candidates"
@@ -99,5 +112,76 @@ describe("ProjectResearch",()=>{
     expect(html).toContain("正在导入")
     expect(html).toContain("打开项目论文")
     expect(html).toContain("显示暂不考虑")
+    expect(html).toContain("全部添加（1）")
+  })
+
+  it("renders the project README workspace in a dedicated notes tab",()=>{
+    const html=renderToStaticMarkup(<ProjectResearchView
+      tab="notes"
+      papers={[]}
+      candidates={[]}
+      searches={[]}
+      includeDismissed={false}
+      busy={false}
+      error=""
+      onTab={()=>{}}
+      onOpenCandidate={()=>{}}
+      onOpenPaper={()=>{}}
+      onRemovePaper={()=>{}}
+      onToggleDismissed={()=>{}}
+      actions={createCandidateActions("project-a",async()=>{},()=>{})}
+      onOpenSearch={()=>{}}
+      notes={<div>README editor</div>}
+    />)
+    expect(html).toContain("项目笔记")
+    expect(html).toContain("README editor")
+  })
+
+  it("keeps the project README mounted while another project tab is visible",()=>{
+    const html=renderToStaticMarkup(<ProjectResearchView
+      tab="overview"
+      papers={[]}
+      candidates={[]}
+      searches={[]}
+      includeDismissed={false}
+      busy={false}
+      error=""
+      onTab={()=>{}}
+      onOpenCandidate={()=>{}}
+      onOpenPaper={()=>{}}
+      onRemovePaper={()=>{}}
+      onToggleDismissed={()=>{}}
+      actions={createCandidateActions("project-a",async()=>{},()=>{})}
+      onOpenSearch={()=>{}}
+      overview={<div>Overview</div>}
+      notes={<div>README editor</div>}
+    />)
+    expect(html).toContain("Overview")
+    expect(html).toContain("README editor")
+    expect(html).toContain("project-notes-panel")
+    expect(html).toContain("hidden")
+  })
+
+  it("shows per-paper failures after adding every candidate",()=>{
+    const html=renderToStaticMarkup(<ProjectResearchView
+      tab="candidates"
+      papers={[]}
+      candidates={[candidate()]}
+      searches={[]}
+      includeDismissed={false}
+      busy={false}
+      error=""
+      onTab={()=>{}}
+      onOpenCandidate={()=>{}}
+      onOpenPaper={()=>{}}
+      onRemovePaper={()=>{}}
+      onToggleDismissed={()=>{}}
+      actions={createCandidateActions("project-a",async()=>{},()=>{})}
+      onOpenSearch={()=>{}}
+      bulkResult={{total:1,succeeded:0,failed:1,items:[{work_id:"work/1",outcome:null,error:"PDF 地址不可用"}]}}
+    />)
+    expect(html).toContain("批量添加失败明细")
+    expect(html).toContain("Rule Complexity for Games")
+    expect(html).toContain("PDF 地址不可用")
   })
 })
