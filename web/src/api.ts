@@ -1,6 +1,6 @@
-import type { Annotation, AnnotationAnchor, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
+import type { Annotation, AnnotationAnchor, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ProjectReadme, ProjectReadmeSaveRequest, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
 
-export class ApiError extends Error { constructor(public status:number,message:string){super(message)} }
+export class ApiError extends Error { constructor(public status:number,message:string,public body:Record<string,unknown>={}){super(message)} }
 const TOKEN_KEY = "paper-codex-token"
 const TOKEN_HEADER = "x-paper-codex-token"
 export const session = { get:()=>localStorage.getItem(TOKEN_KEY), set:(token:string)=>localStorage.setItem(TOKEN_KEY,token), clear:()=>localStorage.removeItem(TOKEN_KEY) }
@@ -11,7 +11,7 @@ async function request<T>(path:string,init:RequestInit={}):Promise<T> {
   const headers = new Headers(init.headers); const token=session.get(); if(token) headers.set(TOKEN_HEADER,token)
   if(init.body && !(init.body instanceof FormData)) headers.set("content-type","application/json")
   const response=await fetch(path,{...init,headers});
-  if(!response.ok){ if(response.status===401) session.clear(); const body=await response.json().catch(()=>({})); throw new ApiError(response.status,body.error ?? `HTTP ${response.status}`) }
+  if(!response.ok){ if(response.status===401) session.clear(); const body=await response.json().catch(()=>({})) as Record<string,unknown>; throw new ApiError(response.status,typeof body.error==="string"?body.error:`HTTP ${response.status}`,body) }
   if(response.status===204) return undefined as T
   return response.json() as Promise<T>
 }
@@ -29,6 +29,8 @@ export const api = {
   updateProject:(id:string,value:{name:string;purpose:string;parent_id:string|null})=>request<Project>(`/api/projects/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(value)}),
   deleteProject:(id:string,subtree=false)=>request<void>(`/api/projects/${encodeURIComponent(id)}${subtree?"?mode=subtree":""}`,{method:"DELETE"}),
   projectImpact:(id:string)=>request<ProjectImpact>(`/api/projects/${encodeURIComponent(id)}/impact`),
+  projectReadme:(id:string)=>request<ProjectReadme>(`/api/projects/${encodeURIComponent(id)}/readme`),
+  saveProjectReadme:(id:string,value:ProjectReadmeSaveRequest)=>request<ProjectReadme>(`/api/projects/${encodeURIComponent(id)}/readme`,{method:"PUT",body:JSON.stringify(value)}),
   projectGoals:(id:string)=>request<ProjectGoalSummary[]>(`/api/projects/${encodeURIComponent(id)}/goals`),
   addPaper:(projectId:string,paperId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`,{method:"POST"}),
   removePaper:(projectId:string,paperId:string)=>request<void>(`/api/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`,{method:"DELETE"}),
