@@ -197,7 +197,8 @@ impl ConversationContextBuilder {
         let projects = self.db.list_projects().await?;
         if !projects.is_empty() {
             summary.push_str("\n## 可读项目目录\n\n");
-            summary.push_str("当前对话只能写入其绑定项目；以下所有项目均可作为只读研究上下文。\n\n");
+            summary
+                .push_str("当前对话只能写入其绑定项目；以下所有项目均可作为只读研究上下文。\n\n");
             for project in &projects {
                 let path = project_path(&projects, &project.id)
                     .into_iter()
