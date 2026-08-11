@@ -1088,13 +1088,13 @@ impl Database {
         let updated = sqlx::query(
             "UPDATE tasks SET state=?,error=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND state=?",
         )
-            .bind(next.as_str())
-            .bind(error)
-            .bind(id)
-            .bind(current.as_str())
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
+        .bind(next.as_str())
+        .bind(error)
+        .bind(id)
+        .bind(current.as_str())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
         if updated == 0 {
             let actual: Option<String> = sqlx::query_scalar("SELECT state FROM tasks WHERE id=?")
                 .bind(id)
