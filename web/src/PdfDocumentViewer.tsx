@@ -5,6 +5,7 @@ import { api } from "./api"
 import { matchCitationText, type CitationMatchStatus } from "./citation-matcher"
 import { equationNumber, formulaOutlineRegion, locateEquationRegion } from "./equation-locator"
 import { mergeHighlightRects, pdfTextRangeToPageRect, textLayerScaleStyle, textLayerViewportScale } from "./pdf-highlight-geometry"
+import { PdfFullscreenButton, togglePdfFullscreen } from "./PdfFullscreenButton"
 import { visiblePageWindow } from "./pdf-window"
 import type { ResolvedTheme } from "./theme"
 import type { MessageCitation, PaperAnnotation } from "./types"
@@ -31,6 +32,7 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
   const [visible, setVisible] = useState({ first: 1, last: 1 })
   const [matches, setMatches] = useState<Record<string, VisualMatch>>({})
   const [error, setError] = useState("")
+  const [fullscreen, setFullscreen] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   const savedAnchorSignatures = useRef<Record<string, string>>({})
   const annotationByCitation = useMemo(() => new Map(annotations.filter(annotation => annotation.annotation.state === "visible").map(annotation => [annotation.citation.id, annotation])), [annotations])
@@ -39,6 +41,12 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
     citations.forEach(citation => pages.set(citation.page, [...(pages.get(citation.page) ?? []), citation]))
     return pages
   }, [citations])
+
+  useEffect(() => {
+    const updateFullscreen = () => setFullscreen(document.fullscreenElement === scroller.current)
+    document.addEventListener("fullscreenchange", updateFullscreen)
+    return () => document.removeEventListener("fullscreenchange", updateFullscreen)
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -87,8 +95,16 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
     if (hits.length) setVisible({ first: Math.min(...hits), last: Math.max(...hits) })
   }
 
+  const toggleFullscreen = async () => {
+    if (!scroller.current) return
+    await togglePdfFullscreen(scroller.current)
+  }
+
   if (error) return <div className="pdf-error">无法显示 PDF：{error}</div>
   return <div className={`pdf-viewer ${theme === "dark" ? "dark-reader " : ""}${className}`} ref={scroller} onScroll={updateVisible}>
+    <div className="pdf-reader-toolbar">
+      <PdfFullscreenButton fullscreen={fullscreen} onToggle={toggleFullscreen}/>
+    </div>
     {!pdfDocument || !sizes.length
       ? <div className="pdf-loading">正在加载论文原文…</div>
       : sizes.map((size, index) => {
