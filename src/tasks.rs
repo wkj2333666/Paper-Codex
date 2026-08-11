@@ -901,4 +901,29 @@ mod tests {
         drop(first);
         drop(second);
     }
+
+    #[tokio::test]
+    async fn startup_recovers_more_tasks_than_the_queue_capacity() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::initialize(root.path()).await.unwrap();
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        for _ in 0..129 {
+            db.create_task("unsupported", "{}").await.unwrap();
+        }
+        let codex = CodexRuntime::spawn(fake_command()).await.unwrap();
+
+        let started = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            TaskEngine::start(
+                db,
+                workspace,
+                Acquirer::new(1024 * 1024).unwrap(),
+                codex,
+            ),
+        )
+        .await;
+
+        assert!(started.is_ok(), "task recovery blocked before the dispatcher started");
+        assert!(started.unwrap().is_ok());
+    }
 }
