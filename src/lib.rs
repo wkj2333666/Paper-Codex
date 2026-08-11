@@ -15,6 +15,7 @@ pub mod knowledge;
 pub mod login_limiter;
 pub mod pdf_range;
 pub mod prompts;
+pub mod project_context;
 pub mod research;
 pub mod research_providers;
 pub mod research_service;

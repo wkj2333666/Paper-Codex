@@ -1,6 +1,7 @@
 use crate::{
     conversations::ConversationScope,
     db::Database,
+    project_context::project_path,
     research::{CandidateStatus, EvidenceLevel},
     research_store::ResearchStore,
     workspace::{atomic_write, safe_key, Workspace},
@@ -192,6 +193,28 @@ impl ConversationContextBuilder {
             summary.push_str("\n## 对话范围\n\n");
             summary.push_str(&scope_summary.join("\n"));
             summary.push('\n');
+        }
+        let projects = self.db.list_projects().await?;
+        if !projects.is_empty() {
+            summary.push_str("\n## 可读项目目录\n\n");
+            summary.push_str("当前对话只能写入其绑定项目；以下所有项目均可作为只读研究上下文。\n\n");
+            for project in &projects {
+                let path = project_path(&projects, &project.id)
+                    .into_iter()
+                    .map(|item| item.name)
+                    .collect::<Vec<_>>()
+                    .join(" / ");
+                summary.push_str(&format!(
+                    "- `{}`：{}\n  - 研究目标：{}\n",
+                    project.id,
+                    path,
+                    if project.purpose.trim().is_empty() {
+                        "未填写"
+                    } else {
+                        project.purpose.trim()
+                    }
+                ));
+            }
         }
         if let (Some(research), Some(project_id)) = (&self.research, exact_project_scope(scopes)) {
             let candidates = research.list_project_candidates(project_id, false).await?;
