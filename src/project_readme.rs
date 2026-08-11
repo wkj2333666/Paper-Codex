@@ -41,10 +41,11 @@ impl ProjectReadmeStore {
 
     pub async fn read(&self, project_id: &str) -> Result<ProjectReadme, ProjectReadmeError> {
         let (path, initial) = self.resolve(project_id).await?;
-        if tokio::fs::metadata(&path).await.is_err() {
-            atomic_write(&path, initial.as_bytes()).await?;
+        if tokio::fs::metadata(&path).await.is_ok() {
+            return self.read_path(&path).await;
         }
-        self.read_path(&path).await
+        let _guard = self.workspace.lock_project_readme().await;
+        self.read_or_initialize(&path, &initial).await
     }
 
     pub async fn write(
@@ -54,15 +55,26 @@ impl ProjectReadmeStore {
         expected_revision: &str,
     ) -> Result<ProjectReadme, ProjectReadmeError> {
         let _guard = self.workspace.lock_project_readme().await;
-        let current = self.read(project_id).await?;
+        let (path, initial) = self.resolve(project_id).await?;
+        let current = self.read_or_initialize(&path, &initial).await?;
         if current.revision != expected_revision {
             return Err(ProjectReadmeError::Conflict {
                 current_revision: current.revision,
             });
         }
-        let (path, _) = self.resolve(project_id).await?;
         atomic_write(&path, markdown.as_bytes()).await?;
         self.read_path(&path).await
+    }
+
+    async fn read_or_initialize(
+        &self,
+        path: &Path,
+        initial: &str,
+    ) -> Result<ProjectReadme, ProjectReadmeError> {
+        if tokio::fs::metadata(path).await.is_err() {
+            atomic_write(path, initial.as_bytes()).await?;
+        }
+        self.read_path(path).await
     }
 
     async fn resolve(
