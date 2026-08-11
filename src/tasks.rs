@@ -21,7 +21,27 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use tokio::sync::{broadcast, mpsc, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, watch, Mutex, OwnedSemaphorePermit, Semaphore};
+
+#[derive(Default)]
+struct TaskExecutionGates {
+    by_task: Mutex<HashMap<String, Arc<Semaphore>>>,
+}
+
+impl TaskExecutionGates {
+    async fn register(&self, task_id: String, gate: Arc<Semaphore>) {
+        self.by_task.lock().await.insert(task_id, gate);
+    }
+
+    async fn remove(&self, task_id: &str) {
+        self.by_task.lock().await.remove(task_id);
+    }
+
+    async fn acquire(&self, task_id: &str) -> Option<OwnedSemaphorePermit> {
+        let gate = self.by_task.lock().await.remove(task_id)?;
+        gate.acquire_owned().await.ok()
+    }
+}
 
 struct PaperAnalysisRun {
     outcome: CodexOutcome,
@@ -53,6 +73,7 @@ pub struct TaskEngine {
     events: broadcast::Sender<TaskEvent>,
     cancellations: Mutex<HashMap<String, watch::Sender<bool>>>,
     active: Mutex<HashSet<String>>,
+    execution_gates: TaskExecutionGates,
     research: Option<ResearchStore>,
 }
 
@@ -86,6 +107,7 @@ impl TaskEngine {
             events,
             cancellations: Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
+            execution_gates: TaskExecutionGates::default(),
             research,
         });
         engine.knowledge.recover().await?;
@@ -145,13 +167,35 @@ impl TaskEngine {
     }
 
     pub async fn create_ingest(&self, input: IngestInput) -> Result<String> {
+        self.create_ingest_inner(input, None).await
+    }
+
+    pub async fn create_ingest_with_gate(
+        &self,
+        input: IngestInput,
+        gate: Arc<Semaphore>,
+    ) -> Result<String> {
+        self.create_ingest_inner(input, Some(gate)).await
+    }
+
+    async fn create_ingest_inner(
+        &self,
+        input: IngestInput,
+        gate: Option<Arc<Semaphore>>,
+    ) -> Result<String> {
         let id = self
             .db
             .create_task("ingest", &serde_json::to_string(&input)?)
             .await?;
         self.emit(&id, "queued", serde_json::json!({"source":input.source}))
             .await?;
-        self.queue.send(id.clone()).await?;
+        if let Some(gate) = gate {
+            self.execution_gates.register(id.clone(), gate).await;
+        }
+        if let Err(error) = self.queue.send(id.clone()).await {
+            self.execution_gates.remove(&id).await;
+            return Err(error.into());
+        }
         Ok(id)
     }
 
@@ -192,6 +236,17 @@ impl TaskEngine {
     }
 
     async fn execute(self: Arc<Self>, id: String) {
+        let _execution_permit = self.execution_gates.acquire(&id).await;
+        if self
+            .db
+            .get_task(&id)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|task| task.state == "cancelled")
+        {
+            return;
+        }
         {
             let mut active = self.active.lock().await;
             if !active.insert(id.clone()) {
@@ -801,9 +856,11 @@ mod tests {
             async move { gates.acquire("third").await }
         });
 
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), &mut third)
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut third)
+                .await
+                .is_err()
+        );
         drop(first);
         assert!(third.await.unwrap().is_some());
         drop(second);

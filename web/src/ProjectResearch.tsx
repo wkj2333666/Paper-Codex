@@ -126,6 +126,8 @@ export function ProjectResearchView({
 }:ProjectResearchViewProps){
   const activeSearches=searches.filter(item=>item.state==="running").length
   const pendingCandidates=candidates.filter(item=>item.status==="candidate").length
+  const failedBulkItems=bulkResult?.items.filter(item=>item.error)??[]
+  const candidateTitles=new Map(candidates.map(item=>[item.work.id,item.work.title]))
   return <section className="project-research" aria-label="项目研究资料">
     <nav className="project-research-tabs" aria-label="项目资料分类">
       <button className={tab==="overview"?"active":""} onClick={()=>onTab("overview")}><LayoutDashboard/>综合视图</button>
@@ -144,6 +146,7 @@ export function ProjectResearchView({
     </article>)}</div>:<ResearchEmpty title="这个项目还没有正式论文" text="让 Codex 检索候选，确认后再加入项目并分析。"/>)}
     {!busy&&tab==="candidates"&&<>
       <div className="candidate-toolbar"><div><p>候选只属于当前项目；确认导入后才会成为正式论文。</p>{bulkResult&&<small className={bulkResult.failed?"has-failures":""}>已处理 {bulkResult.total} 篇：成功 {bulkResult.succeeded} 篇{bulkResult.failed?`，失败 ${bulkResult.failed} 篇`:""}</small>}</div><div>{pendingCandidates>0&&<button className="candidate-import-all" disabled={bulkBusy||!onImportAll} onClick={onImportAll}>{bulkBusy?<LoaderCircle className="spin"/>:<BookPlus/>}全部添加（{pendingCandidates}）</button>}<button onClick={onToggleDismissed}>{includeDismissed?"隐藏暂不考虑":"显示暂不考虑"}</button></div></div>
+      {failedBulkItems.length>0&&<div className="candidate-bulk-errors" role="alert"><strong>批量添加失败明细</strong><ul>{failedBulkItems.map(item=><li key={item.work_id}><span>{candidateTitles.get(item.work_id)??item.work_id}</span><small>{item.error}</small></li>)}</ul></div>}
       {candidates.length?<div className="candidate-grid">{candidates.map(candidate=><CandidateCard key={candidate.work.id} candidate={candidate} actions={actions} onOpen={()=>onOpenCandidate(candidate)} onOpenPaper={onOpenPaper}/>)}</div>:<ResearchEmpty title="还没有候选论文" text="在右侧 Codex 项目对话中讨论选题，并开启文献检索。"/>}
     </>}
     {!busy&&tab==="searches"&&(searches.length?<div className="research-history">{searches.map(search=><button key={search.id} onClick={()=>onOpenSearch(search)}>

@@ -16,7 +16,7 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use futures::{future::join_all, stream, StreamExt};
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -959,6 +959,17 @@ impl ResearchService {
         work_id: &str,
         engine: Option<&TaskEngine>,
     ) -> Result<ImportCandidateOutcome> {
+        self.import_candidate_with_gate(project_id, work_id, engine, None)
+            .await
+    }
+
+    async fn import_candidate_with_gate(
+        &self,
+        project_id: &str,
+        work_id: &str,
+        engine: Option<&TaskEngine>,
+        execution_gate: Option<Arc<Semaphore>>,
+    ) -> Result<ImportCandidateOutcome> {
         let candidate = self
             .store
             .get_candidate(project_id, work_id)
@@ -1004,13 +1015,15 @@ impl ResearchService {
             .or_else(|| candidate.work.metadata.pdf_url.clone())
             .context("candidate has no importable source")?;
         let engine = engine.context("paper import service is unavailable")?;
-        let task_id = engine
-            .create_ingest(IngestInput {
-                source,
-                project_id: Some(project_id.to_owned()),
-                upload_path: None,
-            })
-            .await?;
+        let input = IngestInput {
+            source,
+            project_id: Some(project_id.to_owned()),
+            upload_path: None,
+        };
+        let task_id = match execution_gate {
+            Some(gate) => engine.create_ingest_with_gate(input, gate).await?,
+            None => engine.create_ingest(input).await?,
+        };
         if let Err(error) = self
             .store
             .mark_candidate_importing(project_id, work_id, &task_id)
@@ -1035,8 +1048,18 @@ impl ResearchService {
             .filter(|candidate| candidate.status == CandidateStatus::Candidate)
             .map(|candidate| candidate.work.id)
             .collect::<Vec<_>>();
-        let items = stream::iter(work_ids.into_iter().map(|work_id| async move {
-            match self.import_candidate(project_id, &work_id, engine).await {
+        let execution_gate = Arc::new(Semaphore::new(2));
+        let mut items = Vec::with_capacity(work_ids.len());
+        for work_id in work_ids {
+            let item = match self
+                .import_candidate_with_gate(
+                    project_id,
+                    &work_id,
+                    engine,
+                    Some(execution_gate.clone()),
+                )
+                .await
+            {
                 Ok(outcome) => CandidateBulkImportItem {
                     work_id,
                     outcome: Some(outcome),
@@ -1047,11 +1070,9 @@ impl ResearchService {
                     outcome: None,
                     error: Some(error.to_string()),
                 },
-            }
-        }))
-        .buffered(2)
-        .collect::<Vec<_>>()
-        .await;
+            };
+            items.push(item);
+        }
         let succeeded = items.iter().filter(|item| item.outcome.is_some()).count();
         let total = items.len();
         Ok(CandidateBulkImportOutcome {
