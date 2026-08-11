@@ -102,6 +102,5 @@ impl ProjectReadmeStore {
 
 fn single_normal_component(value: &str) -> bool {
     let mut components = Path::new(value).components();
-    matches!(components.next(), Some(Component::Normal(_)))
-        && components.next().is_none()
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }

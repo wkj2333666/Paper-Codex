@@ -482,11 +482,9 @@ impl From<ProjectReadmeError> for ProjectReadmeApiError {
 impl IntoResponse for ProjectReadmeApiError {
     fn into_response(self) -> Response {
         match self.0 {
-            ProjectReadmeError::ProjectNotFound => (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error":"项目不存在"})),
-            )
-                .into_response(),
+            ProjectReadmeError::ProjectNotFound => {
+                (StatusCode::NOT_FOUND, Json(json!({"error":"项目不存在"}))).into_response()
+            }
             ProjectReadmeError::InvalidProjectSlug => (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error":"项目路径无效"})),
