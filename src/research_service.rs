@@ -354,6 +354,7 @@ impl ProjectResearchToolHandler {
         }
         let candidates = self
             .research
+            .store()
             .list_project_candidates(project_id, false)
             .await?;
         Ok(vec![serde_json::json!({
