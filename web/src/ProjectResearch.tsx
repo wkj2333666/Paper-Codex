@@ -9,6 +9,7 @@ import {
   History,
   LoaderCircle,
   LayoutDashboard,
+  NotebookPen,
   RotateCcw,
   Trash2,
   X,
@@ -26,7 +27,7 @@ import type {
   ProjectGoalSummary,
 } from "./types"
 
-export type ProjectResearchTab="overview"|"papers"|"candidates"|"searches"
+export type ProjectResearchTab="overview"|"notes"|"papers"|"candidates"|"searches"
 
 export function shouldReloadProjectResearch(event:{type:string;payload:Record<string,unknown>},projectId:string){
   return event.type==="project-research-revised"&&event.payload.project_id===projectId
@@ -95,6 +96,7 @@ export interface ProjectResearchViewProps {
   onToggleDismissed:()=>void
   onOpenSearch:(search:LiteratureSearchRun)=>void
   overview?:ReactNode
+  notes?:ReactNode
 }
 
 const evidenceLabel=(value:ProjectCandidate["evidence_level"])=>({
@@ -112,12 +114,13 @@ const candidateStatusLabel=(value:ProjectCandidate["status"])=>({
 
 export function ProjectResearchView({
   tab,papers,candidates,searches,includeDismissed,busy,error,actions,onTab,
-  onOpenCandidate,onOpenPaper,onRemovePaper,onToggleDismissed,onOpenSearch,overview,
+  onOpenCandidate,onOpenPaper,onRemovePaper,onToggleDismissed,onOpenSearch,overview,notes,
 }:ProjectResearchViewProps){
   const activeSearches=searches.filter(item=>item.state==="running").length
   return <section className="project-research" aria-label="项目研究资料">
     <nav className="project-research-tabs" aria-label="项目资料分类">
       <button className={tab==="overview"?"active":""} onClick={()=>onTab("overview")}><LayoutDashboard/>综合视图</button>
+      <button className={tab==="notes"?"active":""} onClick={()=>onTab("notes")}><NotebookPen/>项目笔记</button>
       <button className={tab==="papers"?"active":""} onClick={()=>onTab("papers")}><BookOpen/>项目论文 <em>{papers.length}</em></button>
       <button className={tab==="candidates"?"active":""} onClick={()=>onTab("candidates")}><FileSearch/>候选论文 <em>{candidates.filter(item=>item.status!=="dismissed").length}</em></button>
       <button className={tab==="searches"?"active":""} onClick={()=>onTab("searches")}><History/>检索历史 {activeSearches>0&&<em>{activeSearches}</em>}</button>
@@ -125,6 +128,7 @@ export function ProjectResearchView({
     {error&&<p className="project-research-error" role="alert">{error}</p>}
     {busy&&<div className="project-research-loading" role="status"><LoaderCircle className="spin"/>正在加载项目研究资料…</div>}
     {!busy&&tab==="overview"&&overview}
+    {!busy&&tab==="notes"&&notes}
     {!busy&&tab==="papers"&&(papers.length?<div className="project-paper-list">{papers.map(paper=><article key={paper.id}>
       <button className="project-paper-main" onClick={()=>onOpenPaper(paper.id)}><FileText/><span><strong>{paper.title}</strong><small>{paper.year??"年份未知"} · {paper.doi??paper.arxiv_id??paper.id}</small></span></button>
       <button className="icon-action" aria-label={`移出项目：${paper.title}`} onClick={()=>onRemovePaper(paper.id)}><X/></button>
