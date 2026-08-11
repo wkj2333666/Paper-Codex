@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { api } from "./api"
 import {
   createCandidateActions,
+  ProjectResearchScopeCoordinator,
   ProjectResearchReloadCoordinator,
   ProjectResearchView,
   shouldReloadProjectResearch,
@@ -75,6 +76,18 @@ describe("ProjectResearch",()=>{
     const applied:string[]=[]
     expect(await coordinator.run(async()=>"retried",value=>applied.push(value))).toBe(true)
     expect(applied).toEqual(["retried"])
+  })
+
+  it("invalidates async project operations across switches, including A to B to A",()=>{
+    const scope=new ProjectResearchScopeCoordinator()
+    const firstA=scope.select("project-a")
+    expect(scope.isCurrent(firstA)).toBe(true)
+    const projectB=scope.select("project-b")
+    expect(scope.isCurrent(firstA)).toBe(false)
+    expect(scope.isCurrent(projectB)).toBe(true)
+    const secondA=scope.select("project-a")
+    expect(scope.isCurrent(firstA)).toBe(false)
+    expect(scope.isCurrent(secondA)).toBe(true)
   })
 
   it("distinguishes candidate, importing, and imported actions",()=>{
