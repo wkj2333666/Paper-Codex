@@ -842,18 +842,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ingest_input_persists_the_bulk_execution_class() {
+        let legacy: IngestInput = serde_json::from_str(
+            r#"{"source":"arxiv:1","project_id":"project","upload_path":null}"#,
+        )
+        .unwrap();
+        assert!(!legacy.bulk_import);
+        let bulk = IngestInput {
+            source: "arxiv:2".into(),
+            project_id: Some("project".into()),
+            upload_path: None,
+            bulk_import: true,
+        };
+        let restored: IngestInput =
+            serde_json::from_str(&serde_json::to_string(&bulk).unwrap()).unwrap();
+        assert!(restored.bulk_import);
+    }
+
     #[tokio::test]
-    async fn a_shared_execution_gate_limits_the_full_task_lifetime() {
-        let gates = Arc::new(TaskExecutionGates::default());
-        let shared = Arc::new(Semaphore::new(2));
-        for id in ["first", "second", "third"] {
-            gates.register(id.to_owned(), shared.clone()).await;
-        }
-        let first = gates.acquire("first").await.unwrap();
-        let second = gates.acquire("second").await.unwrap();
+    async fn the_global_bulk_gate_limits_batches_and_wakes_cancelled_waiters() {
+        let gate = TaskExecutionGate::default();
+        let (_first_tx, mut first_rx) = watch::channel(false);
+        let (_second_tx, mut second_rx) = watch::channel(false);
+        let first = gate.acquire_bulk(&mut first_rx).await.unwrap();
+        let second = gate.acquire_bulk(&mut second_rx).await.unwrap();
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
         let mut third = tokio::spawn({
-            let gates = gates.clone();
-            async move { gates.acquire("third").await }
+            let gate = gate.clone();
+            async move { gate.acquire_bulk(&mut cancel_rx).await }
         });
 
         assert!(
@@ -861,8 +878,15 @@ mod tests {
                 .await
                 .is_err()
         );
+        cancel_tx.send(true).unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), third)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
         drop(first);
-        assert!(third.await.unwrap().is_some());
         drop(second);
     }
 }
