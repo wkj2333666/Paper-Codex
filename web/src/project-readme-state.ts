@@ -33,11 +33,7 @@ export const initialProjectReadmeState:ProjectReadmeState={
 }
 
 export function normalizeProjectMarkdown(markdown:string):string{
-  return markdown
-    .replace(/\r\n?/g,"\n")
-    .split("\n")
-    .filter(line=>!/^\s*<br\s*\/?>\s*$/i.test(line))
-    .join("\n")
+  return markdown.replace(/\r\n?/g,"\n")
 }
 
 export function projectReadmeReducer(state:ProjectReadmeState,action:ProjectReadmeAction):ProjectReadmeState{

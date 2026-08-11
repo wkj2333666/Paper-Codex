@@ -16,7 +16,7 @@
 .pdf-zoom-controls button svg{width:16px;height:16px}
 .pdf-zoom-controls input{width:120px;accent-color:var(--green);cursor:pointer}
 .pdf-zoom-controls .pdf-zoom-value{width:52px;font-size:11px;font-variant-numeric:tabular-nums}
-.pdf-viewer:fullscreen{width:100vw;height:100vh;max-height:none;min-height:100vh;border:0;border-radius:0;padding:22px}
+.pdf-viewer:fullscreen{width:100vw;height:100vh;max-height:none;min-height:100vh;border:0;border-radius:0;padding:22px;justify-items:safe center}
 .pdf-viewer:fullscreen .pdf-reader-toolbar{position:fixed;top:14px;right:16px;width:auto;height:auto}
 .pdf-viewer:fullscreen .pdf-page-row{width:max-content;max-width:none}
 .pdf-viewer:fullscreen .pdf-page-shell{flex:none;max-width:none}
