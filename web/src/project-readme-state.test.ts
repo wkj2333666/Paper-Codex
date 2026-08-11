@@ -35,4 +35,14 @@ describe("project README editor state",()=>{
     const conflict=projectReadmeReducer(saving,{type:"conflict",requestId:4,currentRevision:"revision-server"})
     expect(conflict).toMatchObject({status:"conflict",markdown:"# Local",conflictRevision:"revision-server"})
   })
+
+  it("restores a local draft against the revision it was based on",()=>{
+    const restored=projectReadmeReducer(initialProjectReadmeState,{type:"loaded",value:loaded,draft:{markdown:"# Local draft",baseRevision:"revision-1"}})
+    expect(restored).toMatchObject({status:"dirty",markdown:"# Local draft",savedMarkdown:"# Original",revision:"revision-1"})
+  })
+
+  it("keeps a stale local draft as an explicit conflict",()=>{
+    const restored=projectReadmeReducer(initialProjectReadmeState,{type:"loaded",value:loaded,draft:{markdown:"# Offline draft",baseRevision:"older-revision"}})
+    expect(restored).toMatchObject({status:"conflict",markdown:"# Offline draft",savedMarkdown:"# Original",revision:"revision-1",conflictRevision:"revision-1"})
+  })
 })

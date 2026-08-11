@@ -123,4 +123,29 @@ describe("ProjectResearch",()=>{
     expect(html).toContain("项目笔记")
     expect(html).toContain("README editor")
   })
+
+  it("keeps the project README mounted while another project tab is visible",()=>{
+    const html=renderToStaticMarkup(<ProjectResearchView
+      tab="overview"
+      papers={[]}
+      candidates={[]}
+      searches={[]}
+      includeDismissed={false}
+      busy={false}
+      error=""
+      onTab={()=>{}}
+      onOpenCandidate={()=>{}}
+      onOpenPaper={()=>{}}
+      onRemovePaper={()=>{}}
+      onToggleDismissed={()=>{}}
+      actions={createCandidateActions("project-a",async()=>{},()=>{})}
+      onOpenSearch={()=>{}}
+      overview={<div>Overview</div>}
+      notes={<div>README editor</div>}
+    />)
+    expect(html).toContain("Overview")
+    expect(html).toContain("README editor")
+    expect(html).toContain("project-notes-panel")
+    expect(html).toContain("hidden")
+  })
 })
