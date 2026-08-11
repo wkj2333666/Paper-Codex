@@ -303,3 +303,42 @@ fn append_analysis_summary(summary: &mut String, analysis: &Value) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn conversation_context_lists_every_project_with_ancestry() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::initialize(root.path()).await.unwrap();
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let parent = db
+            .create_project("parent", "父项目", "父项目目标")
+            .await
+            .unwrap();
+        let child = db
+            .create_project_with_parent("child", "当前子项目", "当前目标", Some(&parent))
+            .await
+            .unwrap();
+        db.create_project("other", "其他可读项目", "其他目标")
+            .await
+            .unwrap();
+        let scopes = vec![ConversationScope {
+            conversation_id: "conversation".into(),
+            scope_type: "project".into(),
+            scope_id: Some(child),
+            added_at: String::new(),
+        }];
+
+        let bundle = ConversationContextBuilder::new(db, workspace)
+            .refresh("conversation", &scopes)
+            .await
+            .unwrap();
+        let summary = tokio::fs::read_to_string(bundle.summary_path).await.unwrap();
+
+        assert!(summary.contains("## 可读项目目录"));
+        assert!(summary.contains("父项目 / 当前子项目"));
+        assert!(summary.contains("其他可读项目"));
+    }
+}

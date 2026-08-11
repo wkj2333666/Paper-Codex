@@ -970,6 +970,36 @@ impl ResearchService {
     }
 }
 
+#[cfg(test)]
+mod project_tool_definition_tests {
+    use super::ProjectResearchToolHandler;
+
+    #[test]
+    fn project_tools_expose_cross_project_reads_but_no_cross_project_writes() {
+        let definitions = ProjectResearchToolHandler::definitions();
+        let read = definitions
+            .iter()
+            .find(|definition| definition.name == "research_read_project")
+            .expect("read-only project tool");
+        assert!(read.input_schema["properties"].get("project_id").is_some());
+
+        for name in [
+            "research_search",
+            "research_save",
+            "research_add_to_project",
+            "research_import",
+        ] {
+            let definition = definitions
+                .iter()
+                .find(|definition| definition.name == name)
+                .unwrap();
+            assert!(definition.input_schema["properties"]
+                .get("project_id")
+                .is_none());
+        }
+    }
+}
+
 fn abstract_inspection(work: DiscoveredWork) -> InspectionOutcome {
     let (evidence_level, text) = match work.metadata.abstract_text.clone() {
         Some(abstract_text) => (EvidenceLevel::Abstract, abstract_text),
