@@ -9,5 +9,6 @@ import "./pdf-reader.css"
 import "./annotation-overlay.css"
 import "./theme.css"
 import "./project-research.css"
+import "./project-context.css"
 import "./viewport.css"
 createRoot(document.getElementById("root")!).render(<StrictMode><App/></StrictMode>)
