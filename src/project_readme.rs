@@ -105,3 +105,32 @@ fn single_normal_component(value: &str) -> bool {
     let mut components = Path::new(value).components();
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{sync::Arc, time::Duration};
+
+    #[tokio::test]
+    async fn first_read_waits_for_the_initialization_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::initialize(root.path()).await.unwrap();
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let project_id = db
+            .create_project("locked-initialization", "Locked", "")
+            .await
+            .unwrap();
+        let store = Arc::new(ProjectReadmeStore::new(db, workspace.clone()));
+        let guard = workspace.lock_project_readme().await;
+        let mut read = tokio::spawn({
+            let store = store.clone();
+            async move { store.read(&project_id).await }
+        });
+
+        assert!(tokio::time::timeout(Duration::from_millis(100), &mut read)
+            .await
+            .is_err());
+        drop(guard);
+        assert!(read.await.unwrap().is_ok());
+    }
+}
