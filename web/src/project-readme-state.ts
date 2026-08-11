@@ -35,7 +35,7 @@ export function projectReadmeReducer(state:ProjectReadmeState,action:ProjectRead
   }
   if(action.type==="edit")return {
     ...state,markdown:action.markdown,
-    status:state.status==="conflict"?"conflict":action.markdown===state.savedMarkdown?"saved":"dirty",
+    status:state.status==="conflict"?"conflict":state.status==="saving"?"saving":action.markdown===state.savedMarkdown?"saved":"dirty",
     error:null,
   }
   if(action.type==="saving")return {
