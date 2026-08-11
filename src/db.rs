@@ -1085,13 +1085,38 @@ impl Database {
         if !current.can_transition_to(next) {
             anyhow::bail!("illegal task transition {current} -> {next}");
         }
-        sqlx::query("UPDATE tasks SET state=?,error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        let updated = sqlx::query(
+            "UPDATE tasks SET state=?,error=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND state=?",
+        )
             .bind(next.as_str())
             .bind(error)
             .bind(id)
+            .bind(current.as_str())
             .execute(&self.pool)
-            .await?;
+            .await?
+            .rows_affected();
+        if updated == 0 {
+            let actual: Option<String> = sqlx::query_scalar("SELECT state FROM tasks WHERE id=?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+            anyhow::bail!(
+                "task state changed concurrently from {current} to {}",
+                actual.as_deref().unwrap_or("missing")
+            );
+        }
         Ok(())
+    }
+
+    pub async fn cancel_task(&self, id: &str) -> Result<bool> {
+        let updated = sqlx::query(
+            "UPDATE tasks SET state='cancelled',error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND state NOT IN ('done','cancelled','failed')",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(updated == 1)
     }
 
     pub async fn force_task_state(

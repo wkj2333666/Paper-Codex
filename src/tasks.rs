@@ -123,10 +123,6 @@ impl TaskEngine {
             research,
         });
         engine.knowledge.recover().await?;
-        for id in engine.db.resumable_task_ids().await? {
-            engine.db.reset_task_for_resume(&id).await?;
-            engine.queue.send(id).await?;
-        }
         let dispatcher = engine.clone();
         tokio::spawn(async move {
             while let Some(id) = receiver.recv().await {
@@ -136,6 +132,10 @@ impl TaskEngine {
                 });
             }
         });
+        for id in engine.db.resumable_task_ids().await? {
+            engine.db.reset_task_for_resume(&id).await?;
+            engine.queue.send(id).await?;
+        }
         Ok(engine)
     }
 
@@ -205,22 +205,16 @@ impl TaskEngine {
     }
 
     pub async fn cancel(&self, id: &str) -> Result<()> {
+        self.db.get_task(id).await?.context("task not found")?;
+        let cancelled = self.db.cancel_task(id).await?;
         if let Some(sender) = self.cancellations.lock().await.get(id) {
             let _ = sender.send(true);
         }
-        let task = self.db.get_task(id).await?.context("task not found")?;
-        let state: TaskState = task.state.parse().map_err(anyhow::Error::msg)?;
-        if !matches!(
-            state,
-            TaskState::Done | TaskState::Failed | TaskState::Cancelled
-        ) {
-            self.db
-                .force_task_state(id, TaskState::Cancelled, None)
-                .await?;
+        if cancelled {
             self.emit(id, "cancelled", serde_json::json!({})).await?;
-        }
-        if let Some(research) = &self.research {
-            research.fail_candidate_import(id).await?;
+            if let Some(research) = &self.research {
+                research.fail_candidate_import(id).await?;
+            }
         }
         Ok(())
     }
@@ -278,13 +272,16 @@ impl TaskEngine {
             let task = self.db.get_task(&id).await.ok().flatten();
             if task.as_ref().is_some_and(|task| task.state != "cancelled") {
                 let message = redact_error(&error.to_string());
-                let _ = self
+                if self
                     .db
-                    .force_task_state(&id, TaskState::Failed, Some(&message))
-                    .await;
-                let _ = self
-                    .emit(&id, "failed", serde_json::json!({"message":message}))
-                    .await;
+                    .transition_task(&id, TaskState::Failed, Some(&message))
+                    .await
+                    .is_ok()
+                {
+                    let _ = self
+                        .emit(&id, "failed", serde_json::json!({"message":message}))
+                        .await;
+                }
             }
         }
         self.cancellations.lock().await.remove(&id);
@@ -914,16 +911,14 @@ mod tests {
 
         let started = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            TaskEngine::start(
-                db,
-                workspace,
-                Acquirer::new(1024 * 1024).unwrap(),
-                codex,
-            ),
+            TaskEngine::start(db, workspace, Acquirer::new(1024 * 1024).unwrap(), codex),
         )
         .await;
 
-        assert!(started.is_ok(), "task recovery blocked before the dispatcher started");
+        assert!(
+            started.is_ok(),
+            "task recovery blocked before the dispatcher started"
+        );
         assert!(started.unwrap().is_ok());
     }
 }
