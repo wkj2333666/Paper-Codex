@@ -8,13 +8,14 @@ const projectViewSource = readFileSync(new URL("./App.tsx", import.meta.url), "u
 const readmeStyles = readFileSync(new URL("./project-readme.css", import.meta.url), "utf8").replace(/\s+/g, " ")
 
 describe("project README rendering", () => {
-  it("normalizes editor-only blank breaks without changing inline HTML breaks", () => {
+  it("normalizes line endings without deleting valid HTML or code", () => {
     const normalize = (readmeState as unknown as { normalizeProjectMarkdown?: (markdown: string) => string }).normalizeProjectMarkdown
     expect(normalize).toBeTypeOf("function")
     if (!normalize) return
 
-    expect(normalize("# Title\r\n\r\n<br />\r\n")).toBe("# Title\n\n")
+    expect(normalize("# Title\r\n\r\n<br />\r\n")).toBe("# Title\n\n<br />\n")
     expect(normalize("first<br />second\r\n")).toBe("first<br />second\n")
+    expect(normalize("```html\r\n<br />\r\n```\r\n")).toBe("```html\n<br />\n```\n")
   })
 
   it("replaces the mounted editor document when server markdown changes", () => {

@@ -69,6 +69,7 @@ describe("PDF fullscreen controls", () => {
   })
 
   it("lets zoomed fullscreen pages exceed the viewport without flex shrinking", () => {
+    expect(pdfReaderStyles).toMatch(/\.pdf-viewer:fullscreen\s*\{[^}]*justify-items:\s*safe center/)
     expect(pdfReaderStyles).toMatch(/\.pdf-viewer:fullscreen \.pdf-page-row\s*\{[^}]*width:\s*max-content[^}]*max-width:\s*none/)
     expect(pdfReaderStyles).toMatch(/\.pdf-viewer:fullscreen \.pdf-page-shell\s*\{[^}]*flex:\s*none[^}]*max-width:\s*none/)
   })
