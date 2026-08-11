@@ -1052,6 +1052,7 @@ async fn create_intake(
             source: request.source,
             project_id: request.project_id,
             upload_path: None,
+            bulk_import: false,
         })
         .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({"task_id":id}))))
@@ -1106,6 +1107,7 @@ async fn upload_pdf(
             source: filename,
             project_id: project_id.filter(|v| !v.is_empty()),
             upload_path: Some(path),
+            bulk_import: false,
         })
         .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({"task_id":id}))))

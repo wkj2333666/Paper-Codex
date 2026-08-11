@@ -23,23 +23,33 @@ use std::{
 };
 use tokio::sync::{broadcast, mpsc, watch, Mutex, OwnedSemaphorePermit, Semaphore};
 
-#[derive(Default)]
-struct TaskExecutionGates {
-    by_task: Mutex<HashMap<String, Arc<Semaphore>>>,
+const BULK_IMPORT_CONCURRENCY: usize = 2;
+
+#[derive(Clone)]
+struct TaskExecutionGate {
+    bulk_import: Arc<Semaphore>,
 }
 
-impl TaskExecutionGates {
-    async fn register(&self, task_id: String, gate: Arc<Semaphore>) {
-        self.by_task.lock().await.insert(task_id, gate);
+impl Default for TaskExecutionGate {
+    fn default() -> Self {
+        Self {
+            bulk_import: Arc::new(Semaphore::new(BULK_IMPORT_CONCURRENCY)),
+        }
     }
+}
 
-    async fn remove(&self, task_id: &str) {
-        self.by_task.lock().await.remove(task_id);
-    }
-
-    async fn acquire(&self, task_id: &str) -> Option<OwnedSemaphorePermit> {
-        let gate = self.by_task.lock().await.remove(task_id)?;
-        gate.acquire_owned().await.ok()
+impl TaskExecutionGate {
+    async fn acquire_bulk(
+        &self,
+        cancel: &mut watch::Receiver<bool>,
+    ) -> Option<OwnedSemaphorePermit> {
+        tokio::select! {
+            permit = self.bulk_import.clone().acquire_owned() => permit.ok(),
+            changed = cancel.changed() => {
+                let _ = changed;
+                None
+            }
+        }
     }
 }
 
@@ -53,6 +63,8 @@ pub struct IngestInput {
     pub source: String,
     pub project_id: Option<String>,
     pub upload_path: Option<PathBuf>,
+    #[serde(default)]
+    pub bulk_import: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +85,7 @@ pub struct TaskEngine {
     events: broadcast::Sender<TaskEvent>,
     cancellations: Mutex<HashMap<String, watch::Sender<bool>>>,
     active: Mutex<HashSet<String>>,
-    execution_gates: TaskExecutionGates,
+    execution_gate: TaskExecutionGate,
     research: Option<ResearchStore>,
 }
 
@@ -107,7 +119,7 @@ impl TaskEngine {
             events,
             cancellations: Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
-            execution_gates: TaskExecutionGates::default(),
+            execution_gate: TaskExecutionGate::default(),
             research,
         });
         engine.knowledge.recover().await?;
@@ -167,35 +179,13 @@ impl TaskEngine {
     }
 
     pub async fn create_ingest(&self, input: IngestInput) -> Result<String> {
-        self.create_ingest_inner(input, None).await
-    }
-
-    pub async fn create_ingest_with_gate(
-        &self,
-        input: IngestInput,
-        gate: Arc<Semaphore>,
-    ) -> Result<String> {
-        self.create_ingest_inner(input, Some(gate)).await
-    }
-
-    async fn create_ingest_inner(
-        &self,
-        input: IngestInput,
-        gate: Option<Arc<Semaphore>>,
-    ) -> Result<String> {
         let id = self
             .db
             .create_task("ingest", &serde_json::to_string(&input)?)
             .await?;
         self.emit(&id, "queued", serde_json::json!({"source":input.source}))
             .await?;
-        if let Some(gate) = gate {
-            self.execution_gates.register(id.clone(), gate).await;
-        }
-        if let Err(error) = self.queue.send(id.clone()).await {
-            self.execution_gates.remove(&id).await;
-            return Err(error.into());
-        }
+        self.queue.send(id.clone()).await?;
         Ok(id)
     }
 
@@ -236,7 +226,26 @@ impl TaskEngine {
     }
 
     async fn execute(self: Arc<Self>, id: String) {
-        let _execution_permit = self.execution_gates.acquire(&id).await;
+        let Some(task) = self.db.get_task(&id).await.ok().flatten() else {
+            return;
+        };
+        if task.state == "cancelled" {
+            return;
+        }
+        let bulk_import = task.kind == "ingest"
+            && serde_json::from_str::<IngestInput>(&task.input_json)
+                .is_ok_and(|input| input.bulk_import);
+        {
+            let mut active = self.active.lock().await;
+            if !active.insert(id.clone()) {
+                return;
+            }
+        }
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
+        self.cancellations
+            .lock()
+            .await
+            .insert(id.clone(), cancel_tx);
         if self
             .db
             .get_task(&id)
@@ -245,19 +254,22 @@ impl TaskEngine {
             .flatten()
             .is_some_and(|task| task.state == "cancelled")
         {
+            self.cancellations.lock().await.remove(&id);
+            self.active.lock().await.remove(&id);
             return;
         }
-        {
-            let mut active = self.active.lock().await;
-            if !active.insert(id.clone()) {
-                return;
+        let _execution_permit = if bulk_import {
+            match self.execution_gate.acquire_bulk(&mut cancel_rx).await {
+                Some(permit) => Some(permit),
+                None => {
+                    self.cancellations.lock().await.remove(&id);
+                    self.active.lock().await.remove(&id);
+                    return;
+                }
             }
-        }
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        self.cancellations
-            .lock()
-            .await
-            .insert(id.clone(), cancel_tx);
+        } else {
+            None
+        };
         let result = self.execute_inner(&id, cancel_rx).await;
         if let Err(error) = result {
             if let Some(research) = &self.research {

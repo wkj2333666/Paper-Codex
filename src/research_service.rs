@@ -959,7 +959,7 @@ impl ResearchService {
         work_id: &str,
         engine: Option<&TaskEngine>,
     ) -> Result<ImportCandidateOutcome> {
-        self.import_candidate_with_gate(project_id, work_id, engine, None)
+        self.import_candidate_with_gate(project_id, work_id, engine, false)
             .await
     }
 
@@ -968,7 +968,7 @@ impl ResearchService {
         project_id: &str,
         work_id: &str,
         engine: Option<&TaskEngine>,
-        execution_gate: Option<Arc<Semaphore>>,
+        bulk_import: bool,
     ) -> Result<ImportCandidateOutcome> {
         let candidate = self
             .store
@@ -1019,11 +1019,9 @@ impl ResearchService {
             source,
             project_id: Some(project_id.to_owned()),
             upload_path: None,
+            bulk_import,
         };
-        let task_id = match execution_gate {
-            Some(gate) => engine.create_ingest_with_gate(input, gate).await?,
-            None => engine.create_ingest(input).await?,
-        };
+        let task_id = engine.create_ingest(input).await?;
         if let Err(error) = self
             .store
             .mark_candidate_importing(project_id, work_id, &task_id)
@@ -1048,16 +1046,10 @@ impl ResearchService {
             .filter(|candidate| candidate.status == CandidateStatus::Candidate)
             .map(|candidate| candidate.work.id)
             .collect::<Vec<_>>();
-        let execution_gate = Arc::new(Semaphore::new(2));
         let mut items = Vec::with_capacity(work_ids.len());
         for work_id in work_ids {
             let item = match self
-                .import_candidate_with_gate(
-                    project_id,
-                    &work_id,
-                    engine,
-                    Some(execution_gate.clone()),
-                )
+                .import_candidate_with_gate(project_id, &work_id, engine, true)
                 .await
             {
                 Ok(outcome) => CandidateBulkImportItem {
