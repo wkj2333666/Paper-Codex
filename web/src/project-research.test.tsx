@@ -148,4 +148,27 @@ describe("ProjectResearch",()=>{
     expect(html).toContain("project-notes-panel")
     expect(html).toContain("hidden")
   })
+
+  it("shows per-paper failures after adding every candidate",()=>{
+    const html=renderToStaticMarkup(<ProjectResearchView
+      tab="candidates"
+      papers={[]}
+      candidates={[candidate()]}
+      searches={[]}
+      includeDismissed={false}
+      busy={false}
+      error=""
+      onTab={()=>{}}
+      onOpenCandidate={()=>{}}
+      onOpenPaper={()=>{}}
+      onRemovePaper={()=>{}}
+      onToggleDismissed={()=>{}}
+      actions={createCandidateActions("project-a",async()=>{},()=>{})}
+      onOpenSearch={()=>{}}
+      bulkResult={{total:1,succeeded:0,failed:1,items:[{work_id:"work/1",outcome:null,error:"PDF 地址不可用"}]}}
+    />)
+    expect(html).toContain("批量添加失败明细")
+    expect(html).toContain("Rule Complexity for Games")
+    expect(html).toContain("PDF 地址不可用")
+  })
 })

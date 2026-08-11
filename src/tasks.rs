@@ -786,4 +786,26 @@ mod tests {
             2
         );
     }
+
+    #[tokio::test]
+    async fn a_shared_execution_gate_limits_the_full_task_lifetime() {
+        let gates = Arc::new(TaskExecutionGates::default());
+        let shared = Arc::new(Semaphore::new(2));
+        for id in ["first", "second", "third"] {
+            gates.register(id.to_owned(), shared.clone()).await;
+        }
+        let first = gates.acquire("first").await.unwrap();
+        let second = gates.acquire("second").await.unwrap();
+        let mut third = tokio::spawn({
+            let gates = gates.clone();
+            async move { gates.acquire("third").await }
+        });
+
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), &mut third)
+            .await
+            .is_err());
+        drop(first);
+        assert!(third.await.unwrap().is_some());
+        drop(second);
+    }
 }
