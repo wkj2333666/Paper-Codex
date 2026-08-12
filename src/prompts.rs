@@ -169,12 +169,10 @@ pub fn validate_conversation_answer_with_candidates(
         if citation.source_url != inspected.source_url {
             bail!("candidate citation source URL does not match inspected evidence");
         }
-        if citation.title != inspected.title {
-            bail!("candidate citation title does not match inspected evidence");
-        }
         if inspected.evidence_level.strongest(citation.evidence_level) != inspected.evidence_level {
             bail!("candidate citation claims stronger evidence than was inspected");
         }
+        citation.title = clean_control_characters(&inspected.title);
         if citation.quote.trim().is_empty() {
             bail!("candidate citation quote cannot be empty");
         }
