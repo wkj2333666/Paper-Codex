@@ -11,8 +11,9 @@ interface MarkdownNode {
   }
 }
 
-const punctuation = /^\p{P}$/u
+const punctuation = /^[\p{P}\p{S}]$/u
 const ordinaryText = /^[\p{L}\p{N}]$/u
+const whitespace = /^\p{White_Space}$/u
 
 function codePointBefore(source: string, index: number): string {
   return Array.from(source.slice(0, index)).at(-1) ?? ""
@@ -31,6 +32,19 @@ function nextStrongDelimiter(source: string, from: number): number {
   return index
 }
 
+function canOpenStrong(source: string, opening: number): boolean {
+  const beforeOpening = codePointBefore(source, opening)
+  const afterOpening = codePointAt(source, opening + 2)
+  return (
+    Boolean(afterOpening) &&
+    !whitespace.test(afterOpening) &&
+    (!punctuation.test(afterOpening) ||
+      !beforeOpening ||
+      whitespace.test(beforeOpening) ||
+      punctuation.test(beforeOpening))
+  )
+}
+
 function compatibleStrongText(source: string): MarkdownNode[] {
   const nodes: MarkdownNode[] = []
   let scanCursor = 0
@@ -41,13 +55,12 @@ function compatibleStrongText(source: string): MarkdownNode[] {
     const closing = nextStrongDelimiter(source, opening + 2)
     if (closing < 0) break
     const content = source.slice(opening + 2, closing)
-    const firstContent = codePointAt(source, opening + 2)
     const beforeClosing = codePointBefore(source, closing)
     const afterClosing = codePointAt(source, closing + 2)
     const compatible =
       content.length > 0 &&
       !content.includes("\n") &&
-      !/^\s$/u.test(firstContent) &&
+      canOpenStrong(source, opening) &&
       punctuation.test(beforeClosing) &&
       ordinaryText.test(afterClosing)
     if (!compatible) {
