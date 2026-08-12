@@ -528,13 +528,8 @@ mod tests {
         let mut answer = candidate_answer("DINO v2");
         answer.candidate_citations[0].source_url = "https://example.com/wrong".into();
 
-        let error = validate_conversation_answer_with_candidates(
-            answer,
-            "问题",
-            &[],
-            &evidence,
-        )
-        .unwrap_err();
+        let error = validate_conversation_answer_with_candidates(answer, "问题", &[], &evidence)
+            .unwrap_err();
 
         assert_eq!(
             error.to_string(),
@@ -549,13 +544,8 @@ mod tests {
         let mut answer = candidate_answer("DINO v2");
         answer.candidate_citations[0].evidence_level = EvidenceLevel::Fulltext;
 
-        let error = validate_conversation_answer_with_candidates(
-            answer,
-            "问题",
-            &[],
-            &evidence,
-        )
-        .unwrap_err();
+        let error = validate_conversation_answer_with_candidates(answer, "问题", &[], &evidence)
+            .unwrap_err();
 
         assert_eq!(
             error.to_string(),
