@@ -1,6 +1,6 @@
 use paper_codex::{
     conversation_context::ConversationContextBuilder,
-    conversations::ConversationScope,
+    conversations::{ConversationScope, ConversationScopeInput},
     db::Database,
     research::{EvidenceLevel, WorkMetadata},
     research_store::ResearchStore,
