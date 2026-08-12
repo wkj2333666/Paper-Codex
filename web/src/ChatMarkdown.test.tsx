@@ -38,4 +38,9 @@ describe("ChatMarkdown", () => {
       '<a href="https://example.test/**a.**b">链接</a>',
     )
   })
+
+  it("leaves escaped and triple-star delimiters unchanged", () => {
+    expect(renderMarkdown("\\**结论。**目前")).toContain("**结论。**目前")
+    expect(renderMarkdown("***结论。***目前")).not.toContain("<strong>结论。</strong>")
+  })
 })

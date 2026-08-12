@@ -1,7 +1,7 @@
 import { Bot, CircleAlert, LoaderCircle } from "lucide-react"
 import type { ChatMessage, MessageCitation } from "./types"
 import { ChatMarkdown } from "./ChatMarkdown"
-import { CodexWorklog } from "./CodexWorklog"
+import { CodexWorklog, hasVisibleCodexWorklog } from "./CodexWorklog"
 
 const researchLabels: Partial<Record<NonNullable<ChatMessage["progress_phase"]>, string>> = {
   "research-planning": "正在生成检索式…",
@@ -64,6 +64,7 @@ export function CodexMessage({
   }
 
   const live = ["queued", "running", "streaming"].includes(message.status)
+  const visibleWorklog = hasVisibleCodexWorklog(message.worklog)
   return (
     <article className="codex-turn codex-answer">
       <header className="codex-answer-author">
@@ -75,8 +76,7 @@ export function CodexMessage({
       {live ? (
         <>
           <div className="codex-worklog">
-            {message.worklog&&<CodexWorklog worklog={message.worklog} active/>}
-            {!message.worklog&&<ConversationProgress phase={message.progress_phase} label={message.progress_label} />}
+            {visibleWorklog&&message.worklog?<CodexWorklog worklog={message.worklog} active/>:<ConversationProgress phase={message.progress_phase} label={message.progress_label} />}
           </div>
           {message.live_content && (
             <div className="codex-markdown conversation-live-output">
