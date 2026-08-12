@@ -386,6 +386,35 @@ pub fn conversation_question_prompt_with_research(
 mod tests {
     use super::*;
 
+    fn inspected_candidate() -> CandidateSource {
+        CandidateSource {
+            work_id: "work-1".into(),
+            title: "DINOv2: Learning Robust Visual Features without Supervision".into(),
+            source_url: "https://arxiv.org/abs/2304.07193".into(),
+            evidence_level: EvidenceLevel::Abstract,
+            abstract_text: Some("Robust visual features.".into()),
+            pdf_url: None,
+        }
+    }
+
+    fn candidate_answer(title: &str) -> ConversationAnswer {
+        ConversationAnswer {
+            title: Some("相关工作".into()),
+            answer_markdown: "DINOv2 提供了稳健视觉特征。".into(),
+            citations: vec![],
+            candidate_citations: vec![ConversationCandidateCitation {
+                id: "candidate-1".into(),
+                work_id: "work-1".into(),
+                title: title.into(),
+                source_url: "https://arxiv.org/abs/2304.07193".into(),
+                evidence_level: EvidenceLevel::Abstract,
+                quote: "Robust visual features.".into(),
+                explanation: "提供通用视觉表征。".into(),
+            }],
+            annotation_intents: vec![],
+        }
+    }
+
     #[test]
     fn conversation_schema_requires_a_summary_title() {
         let schema = conversation_answer_schema();
@@ -471,6 +500,67 @@ mod tests {
 
         assert_eq!(normalized.answer_markdown, "可以参考 外部候选。");
         assert!(normalized.candidate_citations.is_empty());
+    }
+
+    #[test]
+    fn inspected_candidate_uses_authoritative_title() {
+        let mut evidence = HashMap::new();
+        evidence.insert("work-1".into(), inspected_candidate());
+
+        let normalized = validate_conversation_answer_with_candidates(
+            candidate_answer("DINO v2"),
+            "问题",
+            &[],
+            &evidence,
+        )
+        .unwrap();
+
+        assert_eq!(
+            normalized.candidate_citations[0].title,
+            inspected_candidate().title
+        );
+    }
+
+    #[test]
+    fn inspected_candidate_rejects_source_url_mismatch() {
+        let mut evidence = HashMap::new();
+        evidence.insert("work-1".into(), inspected_candidate());
+        let mut answer = candidate_answer("DINO v2");
+        answer.candidate_citations[0].source_url = "https://example.com/wrong".into();
+
+        let error = validate_conversation_answer_with_candidates(
+            answer,
+            "问题",
+            &[],
+            &evidence,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "candidate citation source URL does not match inspected evidence"
+        );
+    }
+
+    #[test]
+    fn inspected_candidate_rejects_inflated_evidence_level() {
+        let mut evidence = HashMap::new();
+        evidence.insert("work-1".into(), inspected_candidate());
+        let mut answer = candidate_answer("DINO v2");
+        answer.candidate_citations[0].evidence_level = EvidenceLevel::Fulltext;
+
+        let error = validate_conversation_answer_with_candidates(
+            answer,
+            "问题",
+            &[],
+            &evidence,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "candidate citation claims stronger evidence than was inspected"
+        );
     }
 
     #[test]
