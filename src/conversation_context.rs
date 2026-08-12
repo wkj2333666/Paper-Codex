@@ -328,10 +328,7 @@ impl ConversationContextBuilder {
                 if content.is_empty() {
                     continue;
                 }
-                let entry = bounded_chars(
-                    &format!("- {label}：{content}\n"),
-                    remaining,
-                );
+                let entry = bounded_chars(&format!("- {label}：{content}\n"), remaining);
                 remaining = remaining.saturating_sub(entry.chars().count());
                 rendered.push_str(&entry);
             }

@@ -261,7 +261,10 @@ async fn project_notes_and_chat_memory_are_bounded() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = Workspace::initialize(temp.path()).await.unwrap();
     let db = Database::connect("sqlite::memory:").await.unwrap();
-    let project = db.create_project("bounded-memory", "有限上下文", "").await.unwrap();
+    let project = db
+        .create_project("bounded-memory", "有限上下文", "")
+        .await
+        .unwrap();
     tokio::fs::create_dir_all(temp.path().join("projects/bounded-memory"))
         .await
         .unwrap();
