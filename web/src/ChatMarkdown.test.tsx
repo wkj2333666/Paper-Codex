@@ -43,4 +43,10 @@ describe("ChatMarkdown", () => {
     expect(renderMarkdown("\\**结论。**目前")).toContain("**结论。**目前")
     expect(renderMarkdown("***结论。***目前")).not.toContain("<strong>结论。</strong>")
   })
+
+  it("does not repair a delimiter that cannot open strong emphasis", () => {
+    const html = renderMarkdown("a**.foo.**bar")
+    expect(html).toContain("a**.foo.**bar")
+    expect(html).not.toContain("<strong>")
+  })
 })
