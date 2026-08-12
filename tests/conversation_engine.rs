@@ -77,6 +77,22 @@ async fn new_conversations_default_to_the_research_quality_model() {
     assert_eq!(conversation.service_tier, None);
 }
 
+#[tokio::test]
+async fn research_conversations_prefer_highest_available_reasoning_effort() {
+    let (engine, _temp) = harness().await;
+    let conversation = engine
+        .create_conversation(
+            "高质量教学",
+            vec![ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(conversation.reasoning_effort.as_deref(), Some("high"));
+}
+
 async fn harness() -> (Arc<ConversationEngine>, tempfile::TempDir) {
     let temp = tempfile::tempdir().unwrap();
     let workspace = Workspace::initialize(temp.path()).await.unwrap();
