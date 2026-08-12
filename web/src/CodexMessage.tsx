@@ -1,7 +1,6 @@
 import { Bot, CircleAlert, LoaderCircle } from "lucide-react"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
 import type { ChatMessage, MessageCitation } from "./types"
+import { ChatMarkdown } from "./ChatMarkdown"
 import { CodexWorklog } from "./CodexWorklog"
 
 const researchLabels: Partial<Record<NonNullable<ChatMessage["progress_phase"]>, string>> = {
@@ -58,7 +57,7 @@ export function CodexMessage({
           {message.skill_name && <span className="codex-message-skill">Skill · {message.skill_name}</span>}
         </div>
         <div className="codex-user-prompt">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+          <ChatMarkdown>{message.content}</ChatMarkdown>
         </div>
       </article>
     )
@@ -74,17 +73,19 @@ export function CodexMessage({
         <strong>Codex</strong>
       </header>
       {live ? (
-        <div className="codex-worklog">
+        <>
+          <div className="codex-worklog">
+            {message.worklog&&<CodexWorklog worklog={message.worklog} active/>}
+            {!message.worklog&&<ConversationProgress phase={message.progress_phase} label={message.progress_label} />}
+          </div>
           {message.live_content && (
-            <div className="conversation-live-output">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.live_content}</ReactMarkdown>
+            <div className="codex-markdown conversation-live-output">
+              <ChatMarkdown>{message.live_content}</ChatMarkdown>
             </div>
           )}
-          {message.worklog&&<CodexWorklog worklog={message.worklog} active/>}
-          {!message.worklog&&<ConversationProgress phase={message.progress_phase} label={message.progress_label} />}
-        </div>
+        </>
       ) : (
-        <div className="codex-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>
+        <div className="codex-markdown"><ChatMarkdown>{message.content}</ChatMarkdown></div>
       )}
       {message.status === "failed" && (
         <p className="message-error">

@@ -417,22 +417,6 @@
 
 .conversation-live-output {
   position: relative;
-  max-height: 180px;
-  overflow: auto;
-  padding: 1px 1px 8px 18px;
-  color: color-mix(in srgb, var(--ink) 84%, var(--muted));
-  font-size: 11px;
-  line-height: 1.55;
-}
-
-.conversation-live-output::before {
-  position: absolute;
-  top: 7px;
-  bottom: 9px;
-  left: 4px;
-  width: 1px;
-  content: "";
-  background: color-mix(in srgb, var(--green) 42%, transparent);
 }
 
 .conversation-live-output::after {
