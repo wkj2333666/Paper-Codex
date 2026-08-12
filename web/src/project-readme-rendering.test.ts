@@ -31,11 +31,15 @@ describe("project README rendering", () => {
     expect(readmeStyles).toMatch(/\.project-readme-crepe \.ProseMirror pre\s*\{[^}]*overflow-x:\s*auto/)
   })
 
-  it("keeps note text compact and list markers on the first text baseline", () => {
+  it("keeps note text compact and aligns Crepe list labels with their text", () => {
     expect(readmeStyles).toMatch(/\.project-readme-crepe \.ProseMirror\s*\{[^}]*line-height:\s*1\.65/)
     expect(readmeStyles).toMatch(/\.project-readme-crepe \.ProseMirror p\s*\{[^}]*margin:\s*\.55em 0/)
     expect(readmeStyles).toMatch(/\.project-readme-crepe \.ProseMirror li\s*\{[^}]*margin:\s*\.18em 0/)
-    expect(readmeStyles).toMatch(/\.project-readme-crepe \.ProseMirror li > p\s*\{[^}]*margin:\s*0/)
+    expect(readmeStyles).toMatch(/\.project-readme-crepe \.milkdown-list-item-block > \.list-item\s*\{[^}]*gap:\s*\.55rem/)
+    expect(readmeStyles).toMatch(/\.project-readme-crepe \.milkdown-list-item-block li\s*\{[^}]*margin:\s*0/)
+    expect(readmeStyles).toMatch(/\.project-readme-crepe \.milkdown-list-item-block li \.label-wrapper,\s*\.project-readme-crepe \.milkdown-list-item-block li \.label-wrapper \.label\s*\{[^}]*height:\s*1\.65em/)
+    expect(readmeStyles).toMatch(/\.project-readme-crepe \.milkdown-list-item-block li \.label-wrapper \.label\s*\{[^}]*padding:\s*0[^}]*line-height:\s*inherit/)
+    expect(readmeStyles).toMatch(/\.project-readme-crepe \.milkdown-list-item-block li > \.children > p\s*\{[^}]*margin:\s*0[^}]*padding:\s*0[^}]*line-height:\s*inherit/)
   })
 
   it("removes the inherited-context card while retaining the project breadcrumb", () => {
