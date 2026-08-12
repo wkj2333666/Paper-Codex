@@ -1,5 +1,5 @@
 import type { FormEvent } from "react"
-import { useCallback, useEffect, useReducer, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react"
 import { Activity, Archive, Blocks, Bot, History, MessageSquarePlus, Pencil, Sparkles, X } from "lucide-react"
 import { ApiError, api, streamConversationEvents } from "./api"
 import { CodexComposer, normalizeCodexSettings } from "./CodexComposer"
@@ -9,6 +9,7 @@ import { CodexMessage } from "./CodexMessage"
 import { CodexGoalBar } from "./CodexGoalBar"
 import { conversationInitialState, conversationReducer } from "./conversation-store"
 import { selectionsEqual, selectionForScopes, shouldClearConversationForSelection, type CodexSelection } from "./conversation-scope"
+import { ConversationScrollController } from "./conversation-scroll"
 import { latestAnswerCitations } from "./citation-overlay"
 import { PanelCollapseButton } from "./PanelControls"
 import type { Activity as TaskActivity, CandidateCitation, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkill, CodexToolPreference, Conversation, ConversationScope, MessageCitation, ResearchMode } from "./types"
@@ -63,6 +64,11 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
   const [historyBusyId,setHistoryBusyId]=useState<string|null>(null)
   const preserveConversationForCitation=useRef(false)
   const historySwitchRequest=useRef(0)
+  const feedRef=useRef<HTMLDivElement|null>(null)
+  const feedContentRef=useRef<HTMLDivElement|null>(null)
+  const scrollControllerRef=useRef(new ConversationScrollController(()=>feedRef.current))
+  const scrollConversationRef=useRef<string|null>(null)
+  const positionedConversationRef=useRef<string|null>(null)
   const scopeKey=conversationStorageKey(selection)
   const scopeKeyRef=useRef(scopeKey)
   scopeKeyRef.current=scopeKey
@@ -101,6 +107,28 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
   useEffect(()=>{setSelectedSkill(null);setSelectedTools([]);setIntegrations(null);if(integrationsOpen)void loadIntegrations(true)},[projectContextId])
   useEffect(()=>{if(state.activeConversationId&&!state.scopes.length)void loadDetail(state.activeConversationId)},[state.activeConversationId,loadDetail])
   useEffect(()=>{if(!state.activeConversationId)return;const id=state.activeConversationId;void api.conversationGoal(id).then(goal=>dispatch({type:"goal-loaded",conversationId:id,goal})).catch(value=>setError(value instanceof Error?value.message:"加载目标失败"))},[state.activeConversationId])
+  useLayoutEffect(()=>{
+    const conversationId=state.activeConversationId
+    if(scrollConversationRef.current!==conversationId){
+      scrollConversationRef.current=conversationId
+      positionedConversationRef.current=null
+      scrollControllerRef.current.reset()
+    }
+    if(conversationId&&state.messageOrder.length&&positionedConversationRef.current!==conversationId){
+      scrollControllerRef.current.positionInitial()
+      positionedConversationRef.current=conversationId
+    }
+  },[state.activeConversationId,state.messageOrder.length])
+  useEffect(()=>{
+    const content=feedContentRef.current
+    if(!content||typeof ResizeObserver==="undefined")return
+    const observer=new ResizeObserver(()=>scrollControllerRef.current.followContent())
+    observer.observe(content)
+    return()=>observer.disconnect()
+  },[state.activeConversationId])
+  useEffect(()=>{
+    if(typeof ResizeObserver==="undefined")scrollControllerRef.current.followContent()
+  },[state.messages,state.messageOrder])
   useEffect(()=>{
     const pendingTarget=state.pendingSwitch?state.pendingSwitch.targetSelection:undefined
     if(state.pendingSwitch?.status==="resolved"&&pendingTarget&&selectionsEqual(pendingTarget,selection)){
@@ -180,7 +208,7 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
       </div>
     </header>
     {state.goal&&<CodexGoalBar goal={state.goal} onPause={()=>void updateGoal({status:"paused"})} onResume={()=>void updateGoal({status:"active"})} onEdit={editGoal} onClear={()=>void clearGoal()}/>}
-    <div className="conversation-feed">{state.messageOrder.length?state.messageOrder.map(id=>{const message=state.messages[id];return <div className="codex-message-group" key={id}><CodexMessage message={message} onCitation={citation=>{preserveConversationForCitation.current=true;onCitation(citation)}}/>{(message.candidate_citations?.length??0)>0&&<CandidateCitationList citations={message.candidate_citations} onCandidate={onCandidate}/>}</div>}):<div className="codex-empty-state"><span className="codex-empty-mark"><Bot/></span><h3>和 Codex 一起研究</h3><p>围绕当前内容提问、追踪证据，或继续扩展你的研究线索。</p><div className="codex-empty-prompts"><span>可以这样开始</span>{suggestions.map(suggestion=><button type="button" key={suggestion} onClick={()=>setText(suggestion)}>{suggestion}</button>)}</div></div>}</div>
+    <div className="conversation-feed" ref={feedRef} onScroll={()=>scrollControllerRef.current.handleScroll()}><div className="conversation-feed-content" ref={feedContentRef}>{state.messageOrder.length?state.messageOrder.map(id=>{const message=state.messages[id];return <div className="codex-message-group" key={id}><CodexMessage message={message} onCitation={citation=>{preserveConversationForCitation.current=true;onCitation(citation)}}/>{(message.candidate_citations?.length??0)>0&&<CandidateCitationList citations={message.candidate_citations} onCandidate={onCandidate}/>}</div>}):<div className="codex-empty-state"><span className="codex-empty-mark"><Bot/></span><h3>和 Codex 一起研究</h3><p>围绕当前内容提问、追踪证据，或继续扩展你的研究线索。</p><div className="codex-empty-prompts"><span>可以这样开始</span>{suggestions.map(suggestion=><button type="button" key={suggestion} onClick={()=>setText(suggestion)}>{suggestion}</button>)}</div></div>}<span data-testid="conversation-bottom" aria-hidden="true"/></div></div>
     {notice&&<p className="codex-notice">{notice}</p>}
     {error&&<p className="codex-error">{error}</p>}
     <CodexComposer text={text} placeholder={placeholder} busy={busy} answerRunning={answerRunning&&Boolean(state.activeConversationId)} projectResearchScope={projectResearchScope} controlledResearchAvailable={controlledResearchAvailable} researchMode={researchMode} capabilities={effectiveCapabilities} integrations={integrations} integrationsLoading={integrationsLoading} settings={effectiveSettings} selectedSkill={selectedSkill} selectedTools={selectedTools} onSelectSkill={setSelectedSkill} onClearSkill={()=>setSelectedSkill(null)} onToggleTool={toggleTool} onRequestIntegrations={requestIntegrations} onText={setText} onSubmit={submit} onCancel={()=>{if(state.activeConversationId)void api.cancelConversation(state.activeConversationId)}} onResearchMode={setResearchMode} onSettings={next=>void updateSettings(next)}/>

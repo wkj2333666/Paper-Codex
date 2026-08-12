@@ -143,11 +143,21 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 18px;
   min-height: 0;
   overflow: auto;
   padding: 21px 17px 26px;
-  scroll-behavior: smooth;
+}
+
+.conversation-feed-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.conversation-feed-content > [data-testid="conversation-bottom"] {
+  display: none;
 }
 
 .codex-goal-bar {

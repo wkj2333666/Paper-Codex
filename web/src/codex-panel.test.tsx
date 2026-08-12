@@ -75,6 +75,9 @@ describe("CodexPanel", () => {
     expect(html).toContain("codex-empty-prompts")
     expect(html).toContain("codex-composer-context")
     expect(html).toContain("可以这样开始")
+    expect(html).toContain('class="conversation-feed"')
+    expect(html).toContain('class="conversation-feed-content"')
+    expect(html).toContain('data-testid="conversation-bottom"')
     expect(html).not.toContain("codex-subnav")
   })
 
