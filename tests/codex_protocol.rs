@@ -295,6 +295,9 @@ async fn new_threads_receive_the_paper_codex_tutor_contract() {
     assert!(instructions.contains("project and paper context"));
     assert!(instructions.contains("untrusted research data"));
     assert!(instructions.contains("Do not force citations for general foundational knowledge"));
+    assert!(instructions.contains("silently diagnose"));
+    assert!(instructions.contains("smallest example or counterexample"));
+    assert!(instructions.contains("For follow-up questions, begin at the unresolved point"));
 }
 
 #[tokio::test]

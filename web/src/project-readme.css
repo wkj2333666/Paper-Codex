@@ -129,7 +129,23 @@
 .project-readme-crepe .ProseMirror p { margin: .55em 0; padding: 0; }
 .project-readme-crepe .ProseMirror :is(ul,ol) { margin: .75em 0; padding-left: 1.65rem; }
 .project-readme-crepe .ProseMirror li { margin: .18em 0; padding-left: .15rem; line-height: inherit; }
-.project-readme-crepe .ProseMirror li > p { margin: 0; }
+.project-readme-crepe .milkdown-list-item-block > .list-item { gap: .55rem; }
+.project-readme-crepe .milkdown-list-item-block li {
+  margin: 0;
+}
+.project-readme-crepe .milkdown-list-item-block li .label-wrapper,
+.project-readme-crepe .milkdown-list-item-block li .label-wrapper .label {
+  height: 1.65em;
+}
+.project-readme-crepe .milkdown-list-item-block li .label-wrapper .label {
+  padding: 0;
+  line-height: inherit;
+}
+.project-readme-crepe .milkdown-list-item-block li > .children > p {
+  margin: 0;
+  padding: 0;
+  line-height: inherit;
+}
 .project-readme-crepe .ProseMirror a { color: var(--green); text-decoration-thickness: 1px; text-underline-offset: 3px; }
 
 .project-readme-crepe .ProseMirror blockquote {
