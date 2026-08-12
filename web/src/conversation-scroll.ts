@@ -17,28 +17,37 @@ export function isConversationAtBottom(
 
 export class ConversationScrollController {
   private pinned = true
+  private lastScrollTop: number | null = null
 
   constructor(private readonly viewport: () => ConversationScrollViewport | null) {}
 
   reset(): void {
     this.pinned = true
+    this.lastScrollTop = null
   }
 
   handleScroll(): void {
     const viewport = this.viewport()
-    if (viewport) this.pinned = isConversationAtBottom(viewport)
+    if (!viewport) return
+    const atBottom = isConversationAtBottom(viewport)
+    if (atBottom) this.pinned = true
+    else if (this.lastScrollTop !== null && viewport.scrollTop < this.lastScrollTop) this.pinned = false
+    else if (this.lastScrollTop === null) this.pinned = false
+    this.lastScrollTop = viewport.scrollTop
   }
 
   positionInitial(): void {
     const viewport = this.viewport()
     if (!viewport) return
     this.pinned = true
+    this.lastScrollTop = viewport.scrollTop
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: "auto" })
   }
 
   followContent(): void {
     const viewport = this.viewport()
     if (!viewport || !this.pinned) return
+    this.lastScrollTop = viewport.scrollTop
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" })
   }
 

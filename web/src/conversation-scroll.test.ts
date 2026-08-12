@@ -56,4 +56,17 @@ describe("conversation scroll controller", () => {
     expect(controller.isPinned()).toBe(true)
     expect(fake.calls).toEqual([{ top: 1000, behavior: "smooth" }])
   })
+
+  it("does not treat downward smooth-scroll progress as a user pause", () => {
+    const fake = viewport(0)
+    const controller = new ConversationScrollController(() => fake.value)
+    controller.handleScroll()
+
+    fake.value.scrollHeight = 1200
+    controller.followContent()
+    fake.value.scrollTop = 650
+    controller.handleScroll()
+
+    expect(controller.isPinned()).toBe(true)
+  })
 })
