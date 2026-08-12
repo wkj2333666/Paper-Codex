@@ -1,6 +1,10 @@
 import { CheckCircle2, Circle, ListChecks, LoaderCircle } from "lucide-react"
 import type { CodexWorklog as Worklog } from "./types"
 
+export function hasVisibleCodexWorklog(worklog:Worklog|undefined):boolean{
+  return Boolean(worklog?.summaries.some(item=>item.text.trim())||worklog?.plan?.steps.length)
+}
+
 export function CodexWorklog({worklog,active}:{worklog:Worklog;active:boolean}){
   if(!active)return null
   const latest=[...worklog.summaries].reverse().find(item=>item.text.trim())

@@ -101,9 +101,10 @@ describe("CodexPanel", () => {
       <CodexMessage
         message={message({
           content: "",
-          live_content: "正在核对实验设置",
+          live_content: "这是正在生成的正文",
           status: "streaming",
           progress_phase: "reading",
+          progress_label: "正在核对实验设置",
         })}
         onCitation={() => {}}
       />,
@@ -113,9 +114,33 @@ describe("CodexPanel", () => {
     expect(user).toContain("paper-research")
     expect(answer).toContain("codex-answer")
     expect(answer).toContain("Codex")
-    expect(live).toContain("codex-worklog")
+    const worklogStart = live.indexOf('class="codex-worklog"')
+    const worklogEnd = live.indexOf('class="codex-markdown conversation-live-output"')
+    expect(worklogStart).toBeGreaterThanOrEqual(0)
+    expect(worklogEnd).toBeGreaterThan(worklogStart)
+    expect(live.slice(worklogStart, worklogEnd)).not.toContain("这是正在生成的正文")
     expect(live).toContain("工作过程")
     expect(live).toContain("正在核对实验设置")
+    expect(live).toContain("这是正在生成的正文")
+  })
+
+  it("falls back to progress while the native worklog is still empty", () => {
+    const html = renderToStaticMarkup(
+      <CodexMessage
+        message={message({
+          content: "",
+          live_content: "正文已经开始生成",
+          status: "streaming",
+          progress_phase: "answering",
+          progress_label: "Codex 正在生成回答…",
+          worklog: { summaries: [], items: {} },
+        })}
+        onCitation={() => {}}
+      />,
+    )
+    expect(html).toContain("工作过程")
+    expect(html).toContain("Codex 正在生成回答")
+    expect(html).toContain("正文已经开始生成")
   })
 
   it("offers controlled literature search throughout a project-scoped conversation", () => {
