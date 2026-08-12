@@ -412,7 +412,7 @@ impl ConversationEngine {
         let settings = settings
             .map(|settings| self.validate_settings(&settings))
             .transpose()?
-            .unwrap_or_else(|| self.codex.default_settings());
+            .unwrap_or_else(|| self.codex.research_conversation_settings());
         let conversation = self.db.create_conversation(title).await?;
         if let Err(error) = self
             .db
@@ -892,7 +892,7 @@ impl ConversationEngine {
                     })
                     .map(|settings| self.validate_settings(&settings))
                     .transpose()?
-                    .unwrap_or_else(|| self.codex.default_settings()),
+                    .unwrap_or_else(|| self.codex.research_conversation_settings()),
             },
             cancel,
             turn_event_tx,

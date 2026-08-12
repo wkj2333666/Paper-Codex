@@ -135,7 +135,61 @@ pub struct ProjectGoalSummary {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectConversationMemory {
+    pub conversation_id: String,
+    pub title: String,
+    pub messages: Vec<(String, String)>,
+}
+
 impl Database {
+    pub async fn recent_project_conversation_memories(
+        &self,
+        project_id: &str,
+        exclude_conversation_id: &str,
+        conversation_limit: i64,
+        message_limit: i64,
+    ) -> Result<Vec<ProjectConversationMemory>> {
+        let conversations: Vec<(String, String)> = sqlx::query_as(
+            r#"SELECT DISTINCT c.id,c.title
+               FROM conversations c
+               JOIN conversation_scopes s ON s.conversation_id=c.id
+               WHERE s.scope_type='project' AND s.scope_id=?1
+                 AND c.id<>?2 AND c.archived_at IS NULL
+                 AND EXISTS (
+                   SELECT 1 FROM chat_messages m
+                   WHERE m.conversation_id=c.id AND m.status='completed'
+                     AND m.role IN ('user','assistant') AND TRIM(m.content)<>''
+                 )
+               ORDER BY c.updated_at DESC,c.rowid DESC LIMIT ?3"#,
+        )
+        .bind(project_id)
+        .bind(exclude_conversation_id)
+        .bind(conversation_limit.clamp(1, 8))
+        .fetch_all(self.pool())
+        .await?;
+        let mut memories = Vec::with_capacity(conversations.len());
+        for (conversation_id, title) in conversations {
+            let mut messages: Vec<(String, String)> = sqlx::query_as(
+                r#"SELECT role,content FROM chat_messages
+                   WHERE conversation_id=? AND status='completed'
+                     AND role IN ('user','assistant') AND TRIM(content)<>''
+                   ORDER BY rowid DESC LIMIT ?"#,
+            )
+            .bind(&conversation_id)
+            .bind(message_limit.clamp(1, 12))
+            .fetch_all(self.pool())
+            .await?;
+            messages.reverse();
+            memories.push(ProjectConversationMemory {
+                conversation_id,
+                title,
+                messages,
+            });
+        }
+        Ok(memories)
+    }
+
     pub async fn project_goal_summaries(
         &self,
         project_id: &str,

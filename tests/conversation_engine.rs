@@ -58,6 +58,25 @@ async fn creates_conversation_with_selected_codex_settings() {
     assert_eq!(conversation.service_tier.as_deref(), Some("priority"));
 }
 
+#[tokio::test]
+async fn new_conversations_default_to_the_research_quality_model() {
+    let (engine, _temp) = harness().await;
+    let conversation = engine
+        .create_conversation(
+            "默认研究模型",
+            vec![ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            }],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(conversation.model.as_deref(), Some("gpt-5.6-sol"));
+    assert_eq!(conversation.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(conversation.service_tier, None);
+}
+
 async fn harness() -> (Arc<ConversationEngine>, tempfile::TempDir) {
     let temp = tempfile::tempdir().unwrap();
     let workspace = Workspace::initialize(temp.path()).await.unwrap();

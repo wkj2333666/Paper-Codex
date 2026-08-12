@@ -129,6 +129,183 @@ async fn project_scope_records_the_research_goal() {
 }
 
 #[tokio::test]
+async fn project_context_includes_bounded_project_notes_and_sibling_chat_memory() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = Workspace::initialize(temp.path()).await.unwrap();
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let project_id = db
+        .create_project("vision", "视觉编码器", "理解视觉表征")
+        .await
+        .unwrap();
+    tokio::fs::create_dir_all(temp.path().join("projects/vision"))
+        .await
+        .unwrap();
+    tokio::fs::write(
+        temp.path().join("projects/vision/README.md"),
+        "# 项目笔记\n\n重点比较 SigLIP 与 DINOv2 的 patch token。",
+    )
+    .await
+    .unwrap();
+
+    let earlier = db.create_conversation("DINO 入门").await.unwrap();
+    db.replace_conversation_scopes(
+        &earlier.id,
+        &[ConversationScopeInput {
+            scope_type: "project".into(),
+            scope_id: Some(project_id.clone()),
+        }],
+    )
+    .await
+    .unwrap();
+    db.append_chat_message(
+        &earlier.id,
+        "user",
+        "EMA teacher 为什么不是预训练教师？",
+        "completed",
+    )
+    .await
+    .unwrap();
+    db.append_chat_message(
+        &earlier.id,
+        "assistant",
+        "teacher 是 student 参数的指数移动平均副本。",
+        "completed",
+    )
+    .await
+    .unwrap();
+
+    let current = db.create_conversation("继续学习").await.unwrap();
+    let scope = ConversationScope {
+        conversation_id: current.id.clone(),
+        scope_type: "project".into(),
+        scope_id: Some(project_id),
+        added_at: "2026-01-01 00:00:00".into(),
+    };
+    let bundle = ConversationContextBuilder::new(db, workspace)
+        .refresh(&current.id, &[scope])
+        .await
+        .unwrap();
+    let summary = tokio::fs::read_to_string(bundle.summary_path)
+        .await
+        .unwrap();
+
+    assert!(summary.contains("## 当前项目笔记"));
+    assert!(summary.contains("重点比较 SigLIP 与 DINOv2"));
+    assert!(summary.contains("## 同项目近期对话记忆"));
+    assert!(summary.contains("DINO 入门"));
+    assert!(summary.contains("EMA teacher 为什么不是预训练教师"));
+    assert!(summary.contains("只用于承接用户认知"));
+}
+
+#[tokio::test]
+async fn project_chat_memory_never_crosses_project_boundaries_or_echoes_current_chat() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = Workspace::initialize(temp.path()).await.unwrap();
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let project = db.create_project("inside", "当前项目", "").await.unwrap();
+    let other = db.create_project("outside", "其他项目", "").await.unwrap();
+
+    for (title, project_id, text) in [
+        ("同项目旧对话", &project, "允许出现的记忆"),
+        ("其他项目对话", &other, "绝不能出现的秘密"),
+    ] {
+        let conversation = db.create_conversation(title).await.unwrap();
+        db.replace_conversation_scopes(
+            &conversation.id,
+            &[ConversationScopeInput {
+                scope_type: "project".into(),
+                scope_id: Some(project_id.clone()),
+            }],
+        )
+        .await
+        .unwrap();
+        db.append_chat_message(&conversation.id, "user", text, "completed")
+            .await
+            .unwrap();
+    }
+
+    let current = db.create_conversation("当前对话").await.unwrap();
+    db.replace_conversation_scopes(
+        &current.id,
+        &[ConversationScopeInput {
+            scope_type: "project".into(),
+            scope_id: Some(project.clone()),
+        }],
+    )
+    .await
+    .unwrap();
+    db.append_chat_message(&current.id, "user", "当前消息不应被重复注入", "completed")
+        .await
+        .unwrap();
+    let scope = ConversationScope {
+        conversation_id: current.id.clone(),
+        scope_type: "project".into(),
+        scope_id: Some(project),
+        added_at: String::new(),
+    };
+    let bundle = ConversationContextBuilder::new(db, workspace)
+        .refresh(&current.id, &[scope])
+        .await
+        .unwrap();
+    let summary = tokio::fs::read_to_string(bundle.summary_path)
+        .await
+        .unwrap();
+
+    assert!(summary.contains("允许出现的记忆"));
+    assert!(!summary.contains("绝不能出现的秘密"));
+    assert!(!summary.contains("当前消息不应被重复注入"));
+}
+
+#[tokio::test]
+async fn project_notes_and_chat_memory_are_bounded() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = Workspace::initialize(temp.path()).await.unwrap();
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let project = db.create_project("bounded-memory", "有限上下文", "").await.unwrap();
+    tokio::fs::create_dir_all(temp.path().join("projects/bounded-memory"))
+        .await
+        .unwrap();
+    tokio::fs::write(
+        temp.path().join("projects/bounded-memory/README.md"),
+        "笔".repeat(20_000),
+    )
+    .await
+    .unwrap();
+    let earlier = db.create_conversation("超长历史").await.unwrap();
+    db.replace_conversation_scopes(
+        &earlier.id,
+        &[ConversationScopeInput {
+            scope_type: "project".into(),
+            scope_id: Some(project.clone()),
+        }],
+    )
+    .await
+    .unwrap();
+    db.append_chat_message(&earlier.id, "assistant", &"忆".repeat(30_000), "completed")
+        .await
+        .unwrap();
+    let current = db.create_conversation("当前").await.unwrap();
+    let scope = ConversationScope {
+        conversation_id: current.id.clone(),
+        scope_type: "project".into(),
+        scope_id: Some(project),
+        added_at: String::new(),
+    };
+
+    let bundle = ConversationContextBuilder::new(db, workspace)
+        .refresh(&current.id, &[scope])
+        .await
+        .unwrap();
+    let summary = tokio::fs::read_to_string(bundle.summary_path)
+        .await
+        .unwrap();
+
+    assert!(summary.chars().count() < 31_000);
+    assert!(summary.contains(&format!("{}…", "笔".repeat(11_999))));
+    assert!(summary.contains(&format!("{}…", "忆".repeat(1_999))));
+}
+
+#[tokio::test]
 async fn project_context_contains_only_twenty_bounded_candidate_summaries() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = Workspace::initialize(temp.path()).await.unwrap();

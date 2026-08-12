@@ -144,6 +144,20 @@ async fn advertises_model_effort_and_speed_capabilities() {
 }
 
 #[tokio::test]
+async fn prefers_sol_high_for_new_research_conversations() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+
+    assert_eq!(
+        runtime.research_conversation_settings(),
+        CodexRunSettings {
+            model: "gpt-5.6-sol".into(),
+            reasoning_effort: "high".into(),
+            service_tier: None,
+        }
+    );
+}
+
+#[tokio::test]
 async fn accepts_current_reasoning_effort_fields_without_dropping_models() {
     let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
     let capabilities = runtime.capabilities();
@@ -248,6 +262,39 @@ async fn sends_selected_skill_as_a_structured_turn_input() {
             .to_string_lossy()
             .as_ref()
     );
+}
+
+#[tokio::test]
+async fn new_threads_receive_the_paper_codex_tutor_contract() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let events = next_test_thread_params(runtime.subscribe(), "thread/start");
+    let root = tempfile::tempdir().unwrap();
+
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    runtime
+        .run_turn(
+            CodexTurn {
+                thread_id: None,
+                cwd: root.path().to_path_buf(),
+                prompt: "observe-thread-params".into(),
+                skill: None,
+                tool_preferences: Vec::new(),
+                output_schema: None,
+                settings: standard_settings(),
+            },
+            cancel_rx,
+        )
+        .await
+        .unwrap();
+
+    let params = tokio::time::timeout(Duration::from_secs(1), events)
+        .await
+        .unwrap();
+    let instructions = params["developerInstructions"].as_str().unwrap();
+    assert!(instructions.contains("research tutor"));
+    assert!(instructions.contains("project and paper context"));
+    assert!(instructions.contains("untrusted research data"));
+    assert!(instructions.contains("Do not force citations for general foundational knowledge"));
 }
 
 #[tokio::test]
