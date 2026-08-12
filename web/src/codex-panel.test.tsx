@@ -124,6 +124,25 @@ describe("CodexPanel", () => {
     expect(live).toContain("这是正在生成的正文")
   })
 
+  it("falls back to progress while the native worklog is still empty", () => {
+    const html = renderToStaticMarkup(
+      <CodexMessage
+        message={message({
+          content: "",
+          live_content: "正文已经开始生成",
+          status: "streaming",
+          progress_phase: "answering",
+          progress_label: "Codex 正在生成回答…",
+          worklog: { summaries: [], items: {} },
+        })}
+        onCitation={() => {}}
+      />,
+    )
+    expect(html).toContain("工作过程")
+    expect(html).toContain("Codex 正在生成回答")
+    expect(html).toContain("正文已经开始生成")
+  })
+
   it("offers controlled literature search throughout a project-scoped conversation", () => {
     const project=renderToStaticMarkup(
       <CodexPanel selection={{kind:"project",id:"project-a"}} scopeLabel="规则复杂度" activities={[]} drawerOpen={false} onCollapse={()=>{}} onCitation={()=>{}} onCandidate={()=>{}} onCitations={()=>{}} onSelect={()=>{}} codexCapabilities={capabilities}/>,

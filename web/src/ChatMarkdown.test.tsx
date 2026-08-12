@@ -25,4 +25,17 @@ describe("ChatMarkdown", () => {
     expect(inline).toContain("<code>**结论。**目前</code>")
     expect(fenced).toContain("<pre><code class=\"language-text\">**结论。**目前\n</code></pre>")
   })
+
+  it("preserves multiline code spans and container fences", () => {
+    const multiline = renderMarkdown("`code\n**结论。**目前\n`")
+    const quotedFence = renderMarkdown("> ```text\n> **结论。**目前\n> ```")
+    expect(multiline).toContain("**结论。**目前")
+    expect(quotedFence).toContain("<code class=\"language-text\">**结论。**目前\n</code>")
+  })
+
+  it("never rewrites link destinations", () => {
+    expect(renderMarkdown("[链接](https://example.test/**a.**b)")).toContain(
+      '<a href="https://example.test/**a.**b">链接</a>',
+    )
+  })
 })
