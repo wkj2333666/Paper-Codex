@@ -107,7 +107,7 @@
   color: var(--ink);
   font-family: 'Literata', 'Noto Serif SC', serif;
   font-size: 16px;
-  line-height: 1.8;
+  line-height: 1.65;
 }
 
 .project-readme-crepe .ProseMirror h1,
@@ -126,10 +126,10 @@
 .project-readme-crepe .ProseMirror h2 { margin: 1.7em 0 .65em; font-size: 1.5rem; line-height: 1.3; }
 .project-readme-crepe .ProseMirror h3 { margin: 1.45em 0 .55em; font-size: 1.22rem; line-height: 1.35; }
 .project-readme-crepe .ProseMirror h4 { margin: 1.3em 0 .5em; font-size: 1.05rem; line-height: 1.4; }
-.project-readme-crepe .ProseMirror p { margin: .72em 0; padding: 0; }
+.project-readme-crepe .ProseMirror p { margin: .55em 0; padding: 0; }
 .project-readme-crepe .ProseMirror :is(ul,ol) { margin: .75em 0; padding-left: 1.65rem; }
-.project-readme-crepe .ProseMirror li { margin: .24em 0; padding-left: .15rem; }
-.project-readme-crepe .ProseMirror li > p { margin: .18em 0; }
+.project-readme-crepe .ProseMirror li { margin: .18em 0; padding-left: .15rem; line-height: inherit; }
+.project-readme-crepe .ProseMirror li > p { margin: 0; }
 .project-readme-crepe .ProseMirror a { color: var(--green); text-decoration-thickness: 1px; text-underline-offset: 3px; }
 
 .project-readme-crepe .ProseMirror blockquote {

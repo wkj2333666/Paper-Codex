@@ -31,6 +31,13 @@ describe("project README rendering", () => {
     expect(readmeStyles).toMatch(/\.project-readme-crepe \.ProseMirror pre\s*\{[^}]*overflow-x:\s*auto/)
   })
 
+  it("keeps note text compact and list markers on the first text baseline", () => {
+    expect(readmeStyles).toMatch(/\.project-readme-crepe \.ProseMirror\s*\{[^}]*line-height:\s*1\.65/)
+    expect(readmeStyles).toMatch(/\.project-readme-crepe \.ProseMirror p\s*\{[^}]*margin:\s*\.55em 0/)
+    expect(readmeStyles).toMatch(/\.project-readme-crepe \.ProseMirror li\s*\{[^}]*margin:\s*\.18em 0/)
+    expect(readmeStyles).toMatch(/\.project-readme-crepe \.ProseMirror li > p\s*\{[^}]*margin:\s*0/)
+  })
+
   it("removes the inherited-context card while retaining the project breadcrumb", () => {
     expect(projectViewSource).not.toContain("继承上下文")
     expect(projectViewSource).not.toContain("inherited-project-context")
