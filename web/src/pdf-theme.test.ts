@@ -11,7 +11,7 @@ describe("dark reading surface", () => {
     expect(viewerSource).toContain('theme === "dark" ? "dark-reader " : ""')
     expect(pdfCss).toContain(".pdf-viewer.dark-reader")
     expect(pdfCss).toContain(".pdf-viewer.dark-reader .pdf-page-shell")
-    expect(pdfCss).toContain(".pdf-viewer.dark-reader .pdf-page canvas")
+    expect(pdfCss).toContain(".pdf-viewer.dark-reader .pdf-page>canvas:not(.pdf-image-canvas)")
     expect(pdfCss).toContain(".pdf-viewer.dark-reader .pdf-page-number")
   })
 
