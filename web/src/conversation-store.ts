@@ -54,6 +54,7 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
   if(event.type==="answer-queued")next={...current,status:"queued"}
   else if(event.type==="answer-started")next={...current,status:"running",progress_phase:"reasoning",progress_label:"Codex 已开始处理问题…"}
   else if(event.type==="answer-progress")next={...current,status:"streaming",progress_phase:progressPhase(event.payload.phase)??"reasoning",progress_label:String(event.payload.label??"")||undefined}
+  else if(event.type==="answer-retry")next={...current,status:"streaming",live_content:"",worklog:undefined,progress_phase:"reasoning",progress_label:String(event.payload.label??"正在自动重试…")}
   else if(event.type==="answer-delta")next={...current,status:"streaming",live_content:`${current.live_content??""}${String(event.payload.text??"")}`,progress_phase:"answering",progress_label:"Codex 正在生成回答…"}
   else if(event.type==="work-summary-delta"||event.type==="work-summary-part"){
     const itemId=String(event.payload.item_id??"")

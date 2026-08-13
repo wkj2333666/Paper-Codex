@@ -2,6 +2,7 @@ use crate::{
     codex::{
         CodexCapabilities, CodexEvent, CodexGoal, CodexGoalRequest, CodexIntegrations,
         CodexRunSettings, CodexRuntime, CodexSkillSelection, CodexToolPreference, CodexTurn,
+        is_transport_failure,
     },
     conversation_context::ConversationContextBuilder,
     conversations::{
@@ -103,6 +104,13 @@ struct AnswerPreview {
 }
 
 impl AnswerPreview {
+    fn reset(&mut self) {
+        self.raw.clear();
+        self.visible.clear();
+        self.item_id = None;
+        self.phase = AgentMessagePhase::Unknown;
+    }
+
     fn start(&mut self, item: &Value) {
         self.raw.clear();
         self.visible.clear();
@@ -703,7 +711,17 @@ impl ConversationEngine {
                 .as_deref()
                 .is_some_and(|status| !matches!(status, "cancelled" | "completed" | "interrupted"))
             {
-                let error_text = error.to_string();
+                tracing::error!(
+                    conversation_id = %conversation_id,
+                    message_id = %message.id,
+                    error = %error,
+                    "conversation turn failed"
+                );
+                let error_text = if is_transport_failure(&error) {
+                    "Codex 连接中断，自动重试 3 次后仍未恢复，请稍后重试".to_owned()
+                } else {
+                    error.to_string()
+                };
                 let _ = self
                     .db
                     .set_message_result(&message.id, "", None, "failed", Some(&error_text))
@@ -873,44 +891,69 @@ impl ConversationEngine {
             prompt = legacy_history_handoff(prompt, &history);
         }
         let mut preview = AnswerPreview::default();
-        let turn = self.codex.run_turn_with_events_and_tools(
-            CodexTurn {
-                thread_id,
-                cwd: bundle.root.clone(),
-                prompt,
-                skill: selected_skill,
-                tool_preferences: question.tool_preferences.clone(),
-                output_schema: Some(conversation_answer_schema()),
-                settings: conversation
-                    .model
-                    .as_ref()
-                    .zip(conversation.reasoning_effort.as_ref())
-                    .map(|(model, reasoning_effort)| CodexRunSettings {
-                        model: model.clone(),
-                        reasoning_effort: reasoning_effort.clone(),
-                        service_tier: conversation.service_tier.clone(),
-                    })
-                    .map(|settings| self.validate_settings(&settings))
-                    .transpose()?
-                    .unwrap_or_else(|| self.codex.research_conversation_settings()),
-            },
-            cancel,
-            turn_event_tx,
-            research_handler.as_ref().map(|handler| handler.session()),
-        );
-        tokio::pin!(turn);
+        let turn_settings = conversation
+            .model
+            .as_ref()
+            .zip(conversation.reasoning_effort.as_ref())
+            .map(|(model, reasoning_effort)| CodexRunSettings {
+                model: model.clone(),
+                reasoning_effort: reasoning_effort.clone(),
+                service_tier: conversation.service_tier.clone(),
+            })
+            .map(|settings| self.validate_settings(&settings))
+            .transpose()?
+            .unwrap_or_else(|| self.codex.research_conversation_settings());
+        let mut attempt = 1;
         let outcome = loop {
-            tokio::select! {
-                result = &mut turn => {
-                    let outcome = result?;
-                    while let Ok(event) = turn_event_rx.try_recv() {
+            let turn = self.codex.run_turn_with_events_and_tools(
+                CodexTurn {
+                    thread_id: thread_id.clone(),
+                    cwd: bundle.root.clone(),
+                    prompt: prompt.clone(),
+                    skill: selected_skill.clone(),
+                    tool_preferences: question.tool_preferences.clone(),
+                    output_schema: Some(conversation_answer_schema()),
+                    settings: turn_settings.clone(),
+                },
+                cancel.clone(),
+                turn_event_tx.clone(),
+                research_handler.as_ref().map(|handler| handler.session()),
+            );
+            tokio::pin!(turn);
+            let result = loop {
+                tokio::select! {
+                    result = &mut turn => {
+                        while let Ok(event) = turn_event_rx.try_recv() {
+                            self.handle_turn_event(&conversation.id, &assistant.id, &mut preview, event).await?;
+                        }
+                        break result;
+                    }
+                    Some(event) = turn_event_rx.recv() => {
                         self.handle_turn_event(&conversation.id, &assistant.id, &mut preview, event).await?;
                     }
-                    break outcome;
                 }
-                Some(event) = turn_event_rx.recv() => {
-                    self.handle_turn_event(&conversation.id, &assistant.id, &mut preview, event).await?;
+            };
+            match result {
+                Ok(outcome) => break outcome,
+                Err(error)
+                    if is_transport_failure(&error) && attempt < 3 && !*cancel.borrow() =>
+                {
+                    attempt += 1;
+                    preview.reset();
+                    self.emit(
+                        &conversation.id,
+                        Some(&assistant.id),
+                        "answer-retry",
+                        json!({
+                            "attempt":attempt,
+                            "max_attempts":3,
+                            "label":format!("Codex 连接中断，正在自动重试（第 {attempt}/3 次）…")
+                        }),
+                    )
+                    .await?;
+                    continue;
                 }
+                Err(error) => return Err(error),
             }
         };
         if outcome.status != "completed" {

@@ -162,6 +162,16 @@ describe("conversation store", () => {
     expect(state.lastEventId).toBe(5)
   })
 
+  it("clears a partial live answer when automatic retry starts", () => {
+    let state = reduceConversationEvent(conversationInitialState, event(4, "answer-delta", { text: "半截回答" }))
+    state = reduceConversationEvent(state, event(5, "answer-retry", {
+      attempt: 2, max_attempts: 3, label: "Codex 连接中断，正在自动重试（第 2/3 次）…",
+    }))
+    expect(state.messages.a.live_content).toBe("")
+    expect(state.messages.a.worklog).toBeUndefined()
+    expect(state.messages.a.progress_label).toContain("自动重试")
+  })
+
   it("replaces the placeholder with the validated final answer", () => {
     let state = reduceConversationEvent(conversationInitialState, event(4, "answer-progress", { phase: "reasoning" }))
     state = reduceConversationEvent(state, event(5, "answer-completed", { answer_markdown: "最终回答", citations: [] }))

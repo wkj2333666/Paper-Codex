@@ -1103,7 +1103,16 @@ impl CodexRuntime {
             )
             .await;
         self.active_control.send_replace(None);
-        *self.session.lock().await = Some(session);
+        if outcome
+            .as_ref()
+            .err()
+            .is_none_or(|error| !is_transport_failure(error))
+        {
+            *self.session.lock().await = Some(session);
+        } else {
+            tracing::warn!("discarding Codex App Server session after transport failure");
+            *self.session.lock().await = None;
+        }
         outcome
     }
 
@@ -1368,6 +1377,29 @@ impl CodexRuntime {
         if let Some(sender) = turn_events {
             let _ = sender.send(event);
         }
+    }
+}
+
+pub(crate) fn is_transport_failure(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_error| {
+                matches!(
+                    io_error.kind(),
+                    std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::NotConnected
+                        | std::io::ErrorKind::UnexpectedEof
+                )
+            })
+    }) || {
+        let message = error.to_string().to_ascii_lowercase();
+        message.contains("codex app server exited")
+            || message.contains("broken pipe")
+            || message.contains("connection reset")
+            || message.contains("connection aborted")
     }
 }
 
@@ -1774,5 +1806,14 @@ mod integration_tests {
             Some(AutomaticSkillRequest::RemoteSsh)
         );
         assert_eq!(automatic_skill_request("帮我找找别的论文"), None);
+    }
+
+    #[test]
+    fn identifies_broken_codex_transport_errors() {
+        let error = anyhow::Error::from(std::io::Error::from(
+            std::io::ErrorKind::BrokenPipe,
+        ));
+        assert!(is_transport_failure(&error));
+        assert!(!is_transport_failure(&anyhow::anyhow!("model is at capacity")));
     }
 }
