@@ -22,10 +22,15 @@ function Loader({payload,compact,palette}:{payload:GraphPayload;compact:boolean;
   useEffect(()=>{
     const graph=buildGraph(payload,palette)
     if(graph.order>1){
-      forceAtlas2.assign(graph,{
-        iterations:compact?45:Math.min(140,70+graph.order),
-        settings:{...forceAtlas2.inferSettings(graph),gravity:1,scalingRatio:2,strongGravityMode:true,barnesHutOptimize:graph.order>40},
-      })
+      try {
+        forceAtlas2.assign(graph,{
+          iterations:compact?45:Math.min(140,70+graph.order),
+          settings:{...forceAtlas2.inferSettings(graph),gravity:1,scalingRatio:2,strongGravityMode:true,barnesHutOptimize:graph.order>40},
+        })
+      } catch(error) {
+        // Keep deterministic initial positions when layout cannot run in this browser.
+        console.error("Knowledge graph layout failed",error)
+      }
     }
     loadGraph(graph)
   },[payload,compact,loadGraph,palette])

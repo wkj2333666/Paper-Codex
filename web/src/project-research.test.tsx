@@ -137,7 +137,7 @@ describe("ProjectResearch",()=>{
     expect(html).toContain("README editor")
   })
 
-  it("keeps the project README mounted while another project tab is visible",()=>{
+  it("does not mount the project README while another project tab is visible",()=>{
     const html=renderToStaticMarkup(<ProjectResearchView
       tab="overview"
       papers={[]}
@@ -157,9 +157,8 @@ describe("ProjectResearch",()=>{
       notes={<div>README editor</div>}
     />)
     expect(html).toContain("Overview")
-    expect(html).toContain("README editor")
-    expect(html).toContain("project-notes-panel")
-    expect(html).toContain("hidden")
+    expect(html).not.toContain("project-notes-panel")
+    expect(html).not.toContain("README editor")
   })
 
   it("shows per-paper failures after adding every candidate",()=>{
