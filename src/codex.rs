@@ -1810,9 +1810,7 @@ mod integration_tests {
 
     #[test]
     fn identifies_broken_codex_transport_errors() {
-        let error = anyhow::Error::from(std::io::Error::from(
-            std::io::ErrorKind::BrokenPipe,
-        ));
+        let error = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
         assert!(is_transport_failure(&error));
         assert!(!is_transport_failure(&anyhow::anyhow!("model is at capacity")));
     }
