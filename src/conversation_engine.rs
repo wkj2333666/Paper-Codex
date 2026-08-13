@@ -1,8 +1,8 @@
 use crate::{
     codex::{
-        CodexCapabilities, CodexEvent, CodexGoal, CodexGoalRequest, CodexIntegrations,
-        CodexRunSettings, CodexRuntime, CodexSkillSelection, CodexToolPreference, CodexTurn,
-        is_transport_failure,
+        is_transport_failure, CodexCapabilities, CodexEvent, CodexGoal, CodexGoalRequest,
+        CodexIntegrations, CodexRunSettings, CodexRuntime, CodexSkillSelection,
+        CodexToolPreference, CodexTurn,
     },
     conversation_context::ConversationContextBuilder,
     conversations::{
@@ -935,9 +935,7 @@ impl ConversationEngine {
             };
             match result {
                 Ok(outcome) => break outcome,
-                Err(error)
-                    if is_transport_failure(&error) && attempt < 3 && !*cancel.borrow() =>
-                {
+                Err(error) if is_transport_failure(&error) && attempt < 3 && !*cancel.borrow() => {
                     attempt += 1;
                     preview.reset();
                     self.emit(
