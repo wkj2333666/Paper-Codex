@@ -43,6 +43,10 @@
   color: var(--green);
 }
 
+[data-theme="dark"] .project-row.active .tree-main {
+  color: var(--green);
+}
+
 [data-theme="dark"] .nav-row em,
 [data-theme="dark"] .project-row em,
 [data-theme="dark"] .tree-main em {

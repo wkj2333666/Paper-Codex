@@ -17,4 +17,8 @@ describe("dark theme surface overrides", () => {
       expect(themeCss).toContain(`[data-theme="dark"] ${selector}`)
     }
   })
+
+  it("keeps the selected project label readable in dark mode", () => {
+    expect(themeCss).toMatch(/\[data-theme="dark"\] \.project-row\.active \.tree-main\s*\{[^}]*color:\s*var\(--green\)/)
+  })
 })
