@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { getDocument, GlobalWorkerOptions, TextLayer, type PDFDocumentProxy } from "pdfjs-dist"
+import { getDocument, GlobalWorkerOptions, OPS, TextLayer, type PDFDocumentProxy } from "pdfjs-dist"
 import { AnnotationGutter } from "./AnnotationGutter"
 import { api } from "./api"
 import { matchCitationText, type CitationMatchStatus } from "./citation-matcher"
@@ -146,25 +146,36 @@ function PdfPage({ document: pdfDocument, pageNumber, renderScale, citations, ma
   onMatch: (citationId: string, match: VisualMatch) => void
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const imageCanvasRef = useRef<HTMLCanvasElement>(null)
   const textRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let active = true
     let renderTask: { cancel: () => void } | null = null
+    let imageRenderTask: { cancel: () => void } | null = null
     let textLayer: TextLayer | null = null
     void pdfDocument.getPage(pageNumber).then(async page => {
       if (!active) return
       const viewport = page.getViewport({ scale: renderScale })
       const canvas = canvasRef.current
+      const imageCanvas = imageCanvasRef.current
       const text = textRef.current
-      if (!canvas || !text) return
+      if (!canvas || !imageCanvas || !text) return
       const ratio = Math.min(window.devicePixelRatio || 1, 2)
       canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio)
       canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`
+      imageCanvas.width = canvas.width; imageCanvas.height = canvas.height
+      imageCanvas.style.width = `${viewport.width}px`; imageCanvas.style.height = `${viewport.height}px`
       const context = canvas.getContext("2d")
-      if (!context) return
-      renderTask = page.render({ canvas, canvasContext: context, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] })
-      await (renderTask as ReturnType<typeof page.render>).promise
+      const imageContext = imageCanvas.getContext("2d")
+      if (!context || !imageContext) return
+      const transform = ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] as [number, number, number, number, number, number]
+      const operatorList = await page.getOperatorList()
+      const imageOperations = new Set([OPS.paintImageMaskXObject, OPS.paintImageMaskXObjectGroup, OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintInlineImageXObjectGroup, OPS.paintImageXObjectRepeat])
+      const isImageOperation = (index: number) => imageOperations.has(operatorList.fnArray[index])
+      renderTask = page.render({ canvas, canvasContext: context, viewport, transform, operationsFilter: index => !isImageOperation(index) })
+      imageRenderTask = page.render({ canvas: imageCanvas, canvasContext: imageContext, viewport, transform, background: "rgba(0,0,0,0)", operationsFilter: index => isImageOperation(index) })
+      await Promise.all([(renderTask as ReturnType<typeof page.render>).promise, (imageRenderTask as ReturnType<typeof page.render>).promise])
       if (!active) return
       text.replaceChildren()
       text.style.setProperty("--total-scale-factor", textLayerScaleStyle(viewport.scale))
@@ -206,10 +217,10 @@ function PdfPage({ document: pdfDocument, pageNumber, renderScale, citations, ma
         onMatch(citation.id, { status: located.status, rects: textRects, anchorRatio: textRects[0]?.top ?? 0.08 })
       })
     }).catch(() => {})
-    return () => { active = false; renderTask?.cancel(); textLayer?.cancel() }
+    return () => { active = false; renderTask?.cancel(); imageRenderTask?.cancel(); textLayer?.cancel() }
   }, [citations, currentRevision, onMatch, pageNumber, pdfDocument, renderScale])
 
-  return <div className="pdf-page"><canvas ref={canvasRef}/><div className="textLayer" ref={textRef}/><CitationHighlights matches={matches} focusedCitationId={focusedCitationId}/><span className="pdf-page-number">{pageNumber}</span></div>
+  return <div className="pdf-page"><canvas ref={canvasRef}/><canvas className="pdf-image-canvas" ref={imageCanvasRef}/><div className="textLayer" ref={textRef}/><CitationHighlights matches={matches} focusedCitationId={focusedCitationId}/><span className="pdf-page-number">{pageNumber}</span></div>
 }
 
 function CitationHighlights({ matches, focusedCitationId }: { matches: Array<{ citation: MessageCitation; match: VisualMatch }>; focusedCitationId: string | null }) {

@@ -15,6 +15,13 @@ describe("dark reading surface", () => {
     expect(pdfCss).toContain(".pdf-viewer.dark-reader .pdf-page-number")
   })
 
+  it("renders original-color images above the transformed document layer", () => {
+    expect(viewerSource).toContain("operationsFilter")
+    expect(viewerSource).toContain("imageCanvasRef")
+    expect(pdfCss).toContain(".pdf-page .pdf-image-canvas")
+    expect(pdfCss).not.toContain(".pdf-viewer.dark-reader .pdf-page canvas{filter:")
+  })
+
   it("keeps annotation cards readable on the dark reading surface", () => {
     expect(annotationCss).toContain('[data-theme="dark"] .annotation-card')
     expect(annotationCss).toContain('[data-theme="dark"] .annotation-body')
