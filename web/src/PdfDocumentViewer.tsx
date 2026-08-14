@@ -135,7 +135,7 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
   </div>
 }
 
-function PdfPage({ document: pdfDocument, pageNumber, renderScale, citations, matches, focusedCitationId, currentRevision, onMatch }: {
+function PdfPage({ document: pdfDocument, pageNumber, renderScale, citations, matches, focusedCitationId, currentRevision, theme, onMatch }: {
   document: PDFDocumentProxy
   pageNumber: number
   renderScale: number
