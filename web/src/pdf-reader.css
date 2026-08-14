@@ -24,7 +24,6 @@
 .pdf-page-shell{width:min(100%,920px);background:white;box-shadow:0 4px 18px rgba(20,25,22,.14);position:relative}
 .pdf-page{position:absolute;inset:0;overflow:hidden}
 .pdf-page canvas{display:block;width:100%!important;height:100%!important}
-.pdf-page .pdf-image-canvas{position:absolute;inset:0;z-index:1;pointer-events:none}
 .textLayer{--min-font-size:1;--text-scale-factor:calc(var(--total-scale-factor) * var(--min-font-size));--min-font-size-inv:calc(1 / var(--min-font-size));position:absolute;inset:0;overflow:hidden;opacity:1;line-height:1;text-size-adjust:none;transform-origin:0 0;z-index:0}
 .textLayer span,.textLayer br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}
 .textLayer>:not(.markedContent),.textLayer .markedContent span:not(.markedContent){z-index:1;--font-height:0;font-size:calc(var(--text-scale-factor) * var(--font-height));--scale-x:1;--rotate:0deg;transform:rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv))}
@@ -39,6 +38,5 @@
 .pdf-viewer.dark-reader .pdf-fullscreen-button:hover{background:#2b3730;color:#8fdeb4}
 .pdf-viewer.dark-reader .pdf-zoom-controls button:hover:not(:disabled){background:#34453b;color:#8fdeb4}
 .pdf-viewer.dark-reader .pdf-page-shell{background:#1d2420;box-shadow:0 5px 20px rgba(0,0,0,.34)}
-.pdf-viewer.dark-reader .pdf-page>canvas:not(.pdf-image-canvas){filter:invert(.88) hue-rotate(180deg) saturate(.82) contrast(.96)}
 .pdf-viewer.dark-reader .pdf-page-number{background:rgba(20,27,23,.86);color:#d9e7dc}
 .pdf-viewer.dark-reader .textLayer ::selection{background:rgba(119,211,164,.38)}

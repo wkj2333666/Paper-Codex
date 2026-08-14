@@ -11,14 +11,13 @@ describe("dark reading surface", () => {
     expect(viewerSource).toContain('theme === "dark" ? "dark-reader " : ""')
     expect(pdfCss).toContain(".pdf-viewer.dark-reader")
     expect(pdfCss).toContain(".pdf-viewer.dark-reader .pdf-page-shell")
-    expect(pdfCss).toContain(".pdf-viewer.dark-reader .pdf-page>canvas:not(.pdf-image-canvas)")
     expect(pdfCss).toContain(".pdf-viewer.dark-reader .pdf-page-number")
   })
 
-  it("renders original-color images above the transformed document layer", () => {
-    expect(viewerSource).toContain("operationsFilter")
-    expect(viewerSource).toContain("imageCanvasRef")
-    expect(pdfCss).toContain(".pdf-page .pdf-image-canvas")
+  it("uses PDF.js page colors without splitting image operations", () => {
+    expect(viewerSource).toContain("pageColors")
+    expect(viewerSource).not.toContain("operationsFilter")
+    expect(viewerSource).not.toContain("imageCanvasRef")
     expect(pdfCss).not.toContain(".pdf-viewer.dark-reader .pdf-page canvas{filter:")
   })
 

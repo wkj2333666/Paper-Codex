@@ -265,6 +265,16 @@
   color: var(--ink);
 }
 
+[data-theme="dark"] .brief-card li,
+[data-theme="dark"] .analysis-panel li,
+[data-theme="dark"] .markdown {
+  color: var(--ink);
+}
+
+[data-theme="dark"] .analysis-panel p {
+  color: var(--muted);
+}
+
 [data-theme="dark"] .graph-workspace,
 [data-theme="dark"] .graph-filters,
 [data-theme="dark"] .graph-insights {

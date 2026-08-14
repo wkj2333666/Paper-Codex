@@ -21,4 +21,10 @@ describe("dark theme surface overrides", () => {
   it("keeps the selected project label readable in dark mode", () => {
     expect(themeCss).toMatch(/\[data-theme="dark"\] \.project-row\.active \.tree-main\s*\{[^}]*color:\s*var\(--green\)/)
   })
+
+  it("keeps paper analysis prose readable in dark mode", () => {
+    for (const selector of [".brief-card li", ".analysis-panel li", ".analysis-panel p", ".markdown"]) {
+      expect(themeCss).toContain(`[data-theme="dark"] ${selector}`)
+    }
+  })
 })
