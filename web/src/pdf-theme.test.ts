@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest"
 const viewerSource = readFileSync(new URL("./PdfDocumentViewer.tsx", import.meta.url), "utf8")
 const pdfCss = readFileSync(new URL("./pdf-reader.css", import.meta.url), "utf8")
 const annotationCss = readFileSync(new URL("./annotation-overlay.css", import.meta.url), "utf8")
+const viteConfig = readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8")
+const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { dependencies: Record<string, string> }
 
 describe("dark reading surface", () => {
   it("scopes dark mode to the PDF viewer", () => {
@@ -14,10 +16,13 @@ describe("dark reading surface", () => {
     expect(pdfCss).toContain(".pdf-viewer.dark-reader .pdf-page-number")
   })
 
-  it("uses PDF.js page colors without splitting image operations", () => {
+  it("uses one ordered PDF.js render with the dark-mode blender", () => {
     expect(viewerSource).toContain("pageColors")
+    expect(viewerSource.match(/page\.render\(/g)).toHaveLength(1)
     expect(viewerSource).not.toContain("operationsFilter")
-    expect(viewerSource).not.toContain("imageCanvasRef")
+    expect(viewerSource).not.toContain("imageCanvas")
+    expect(viteConfig).toContain("pdfjsDarkModePlugin()")
+    expect(packageJson.dependencies["pdfjs-dist"]).toBe("5.6.205")
     expect(pdfCss).not.toContain(".pdf-viewer.dark-reader .pdf-page canvas{filter:")
   })
 
