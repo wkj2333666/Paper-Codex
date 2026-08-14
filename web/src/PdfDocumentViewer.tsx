@@ -6,7 +6,7 @@ import { matchCitationText, type CitationMatchStatus } from "./citation-matcher"
 import { equationNumber, formulaOutlineRegion, locateEquationRegion } from "./equation-locator"
 import { mergeHighlightRects, pdfTextRangeToPageRect, textLayerScaleStyle, textLayerViewportScale } from "./pdf-highlight-geometry"
 import { PdfReaderToolbar, togglePdfFullscreen } from "./PdfFullscreenButton"
-import { visiblePageWindow } from "./pdf-window"
+import { pageItemsForNumber, stableVisiblePageRange, visiblePageWindow } from "./pdf-window"
 import type { ResolvedTheme } from "./theme"
 import type { MessageCitation, PaperAnnotation } from "./types"
 
@@ -99,7 +99,10 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
     const hits = Array.from(root.querySelectorAll<HTMLElement>("[data-pdf-page]"))
       .filter(page => { const rect = page.getBoundingClientRect(); return rect.bottom > rootRect.top && rect.top < rootRect.bottom })
       .map(page => Number(page.dataset.pdfPage))
-    if (hits.length) setVisible({ first: Math.min(...hits), last: Math.max(...hits) })
+    if (hits.length) {
+      const next = { first: Math.min(...hits), last: Math.max(...hits) }
+      setVisible(current => stableVisiblePageRange(current, next))
+    }
   }
 
   const toggleFullscreen = async () => {
@@ -117,7 +120,7 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
       ? <div className="pdf-loading">正在加载论文原文…</div>
       : sizes.map((size, index) => {
           const pageNumber = index + 1
-          const pageCitations = citationsByPage.get(pageNumber) ?? []
+          const pageCitations = pageItemsForNumber(citationsByPage, pageNumber)
           const pageMatches = pageCitations.map(citation => ({ citation, match: matches[citation.id] ?? { status: annotationByCitation.get(citation.id)?.annotation.availability === "revision-stale" ? "stale" as const : "page-only" as const, rects: [], anchorRatio: 0.08 } }))
           const pageItems = pageCitations.map(citation => {
             const annotation = annotationByCitation.get(citation.id)
