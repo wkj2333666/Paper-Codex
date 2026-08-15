@@ -179,6 +179,21 @@ describe("conversation store", () => {
     expect(state.messages.a.progress_phase).toBeUndefined()
   })
 
+  it("keeps the model answer visible when answer validation fails", () => {
+    const state = reduceConversationEvent(
+      conversationInitialState,
+      event(5, "answer-failed", {
+        message: "candidate citation source URL does not match inspected evidence",
+        answer_markdown: "AnyGrasp 使用稀疏三维编码器。",
+      }),
+    )
+    expect(state.messages.a).toMatchObject({
+      content: "AnyGrasp 使用稀疏三维编码器。",
+      status: "failed",
+    })
+    expect(state.messages.a.error).toContain("source URL")
+  })
+
   it("keeps external candidate citations separate on completion", () => {
     const candidate = {
       id:"candidate-1",

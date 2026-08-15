@@ -199,7 +199,8 @@ pub fn validate_conversation_answer_with_candidates(
             intent.persist = false;
         }
     }
-    answer.answer_markdown = clean_control_characters(&answer.answer_markdown);
+    answer.answer_markdown =
+        normalize_math_delimiters(&clean_control_characters(&answer.answer_markdown));
     Ok(answer)
 }
 
@@ -272,6 +273,45 @@ fn clean_control_characters(value: &str) -> String {
         .chars()
         .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
         .collect()
+}
+
+fn normalize_math_delimiters(markdown: &str) -> String {
+    let mut in_fence = false;
+    let mut lines = Vec::new();
+    for line in markdown.split('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            lines.push(line.to_owned());
+        } else if !in_fence && is_bare_display_math_line(line) {
+            lines.push("$$".into());
+            lines.push(line.to_owned());
+            lines.push("$$".into());
+        } else {
+            lines.push(line.to_owned());
+        }
+    }
+    lines.join("\n")
+}
+
+fn is_bare_display_math_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty()
+        || trimmed.contains('$')
+        || trimmed
+            .chars()
+            .next()
+            .is_some_and(|character| matches!(character, '-' | '*' | '+' | '>' | '#'))
+    {
+        return false;
+    }
+    let has_latex_command = trimmed.split('\\').skip(1).any(|segment| {
+        segment
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_alphabetic())
+    });
+    has_latex_command && (trimmed.contains('=') || (trimmed.contains('{') && trimmed.contains('}')))
 }
 
 pub fn first_pass_prompt(
@@ -397,6 +437,7 @@ pub fn conversation_question_prompt_with_intent(
 - 如果用户在学习一个机制或方法，优先给一个可追踪的最小心智模型：输入是什么、发生了什么变化、输出解决什么问题；再指出这个模型在哪些边界条件下失效。
 - 只有在用户明确要求练习、测验或表示想自己推导时才把回答变成问答式引导；否则先完成解释，再用一个可选的理解检查或下一步建议收尾，不能用无必要的反问阻塞答案。
 - 术语首次出现时给出简短中文含义；英文术语只在消除歧义或便于检索时保留。公式必须紧邻解释每个量的含义及它回答了什么问题。
+- 数学排版必须使用成对且平衡的分隔符：行内公式使用 `$...$`，独立公式使用单独成行的 `$$...$$`；不要输出没有数学分隔符的裸 LaTeX、反斜杠命令或等式，也不要在代码块内伪装公式。检查每个 `$`/`$$` 是否闭合后再提交答案。
 - 对用户一次提出的多个问题逐项回答，并在开头先指出最关键、最反直觉或最容易踩坑的结论。比较模型或方法时，围绕用户真正关心的轴组织，而不是堆模型简介。
 - 论文事实：必须核验逐页原文并引用；通用基础知识：可以直接清楚教学，不强行为常识添加论文引用；分析推断：明确使用“这意味着”“合理推断”或“论文未直接验证”等措辞，并说明推断边界。
 - 当前打开的论文是高价值背景，不是回答边界。一般概念问题可以超出论文措辞；涉及最新事实、其他工作或用户明确要求“找论文”时按研究规则自动检索。
@@ -620,6 +661,22 @@ mod tests {
         assert!(prompt.contains("可选的理解检查"));
         assert!(prompt.contains("细化查询"));
         assert!(prompt.contains("不要机械套用固定模板"));
+    }
+
+    #[test]
+    fn conversation_prompt_requires_balanced_math_delimiters() {
+        let prompt = conversation_question_prompt("推导这个公式");
+        assert!(prompt.contains("$...$"));
+        assert!(prompt.contains("$$...$$"));
+        assert!(prompt.contains("不要输出没有数学分隔符的裸 LaTeX"));
+    }
+
+    #[test]
+    fn wraps_bare_display_math_without_touching_code_fences() {
+        let markdown = "推导如下：\n\\mathbf{x} = W\\mathbf{z}\n\n```text\n\\mathbf{y} = x\n```";
+        let normalized = normalize_math_delimiters(markdown);
+        assert!(normalized.contains("$$\n\\mathbf{x} = W\\mathbf{z}\n$$"));
+        assert!(normalized.contains("```text\n\\mathbf{y} = x\n```"));
     }
 
     #[test]

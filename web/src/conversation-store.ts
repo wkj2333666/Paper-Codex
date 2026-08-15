@@ -76,7 +76,7 @@ export function reduceConversationEvent(state:ConversationState,event:Conversati
     next={...current,status:"streaming",worklog:{summaries:current.worklog?.summaries??[],plan:current.worklog?.plan,items:{}}}
   }
   else if(event.type==="answer-completed")next={...current,status:"completed",content:String(event.payload.answer_markdown??""),live_content:undefined,citations:(event.payload.citations as MessageCitation[]|undefined)??[],candidate_citations:(event.payload.candidate_citations as CandidateCitation[]|undefined)??[],progress_phase:undefined,progress_label:undefined}
-  else if(event.type==="answer-failed")next={...current,status:"failed",live_content:undefined,error:String(event.payload.message??"回答失败"),progress_phase:undefined,progress_label:undefined}
+  else if(event.type==="answer-failed")next={...current,status:"failed",content:typeof event.payload.answer_markdown==="string"?event.payload.answer_markdown:current.content,live_content:undefined,error:String(event.payload.message??"回答失败"),progress_phase:undefined,progress_label:undefined}
   else if(event.type==="answer-cancelled")next={...current,status:"cancelled",live_content:undefined,progress_phase:undefined,progress_label:undefined}
   else if(event.type==="message-created"){
     const skill=event.payload.skill as {name?:unknown}|null|undefined
