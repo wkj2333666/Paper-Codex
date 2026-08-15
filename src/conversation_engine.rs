@@ -117,6 +117,12 @@ fn fallback_answer_markdown(answer: Option<&ConversationAnswer>, preview: &str) 
         .to_owned()
 }
 
+fn should_finalize_turn_error(status: Option<&str>) -> bool {
+    status.is_some_and(|status| {
+        !matches!(status, "failed" | "cancelled" | "completed" | "interrupted")
+    })
+}
+
 impl AnswerPreview {
     fn reset(&mut self) {
         self.raw.clear();
@@ -729,10 +735,7 @@ impl ConversationEngine {
         let result = self.execute_turn(&message, cancel_rx).await;
         if let Err(error) = result {
             let current = self.db.message_status(&message.id).await.ok();
-            if current
-                .as_deref()
-                .is_some_and(|status| !matches!(status, "cancelled" | "completed" | "interrupted"))
-            {
+            if should_finalize_turn_error(current.as_deref()) {
                 tracing::error!(
                     conversation_id = %conversation_id,
                     message_id = %message.id,
@@ -1515,6 +1518,15 @@ mod tests {
             "AnyGrasp 使用稀疏三维编码器。"
         );
         assert_eq!(fallback_answer_markdown(None, "流式正文"), "流式正文");
+    }
+
+    #[test]
+    fn run_one_does_not_overwrite_terminal_failed_message() {
+        assert!(!should_finalize_turn_error(Some("failed")));
+        assert!(!should_finalize_turn_error(Some("completed")));
+        assert!(!should_finalize_turn_error(Some("cancelled")));
+        assert!(!should_finalize_turn_error(Some("interrupted")));
+        assert!(should_finalize_turn_error(Some("streaming")));
     }
 
     #[test]
