@@ -34,6 +34,8 @@ export interface CodexPlan { explanation?:string; steps:CodexPlanStep[] }
 export interface CodexWorkItem { item_id:string; item_type:string; label:string; status:string }
 export interface CodexWorklog { summaries:CodexWorkSummary[]; plan?:CodexPlan; items:Record<string,CodexWorkItem> }
 export interface Conversation { id:string; title:string; thread_id:string|null; status:string; model:string|null; reasoning_effort:string|null; service_tier:string|null; archived_at:string|null; created_at:string; updated_at:string }
+export type MemoryKind="preference"|"interest"|"goal"|"known_concept"|"unresolved_concept"|"terminology"|"feedback"
+export interface MemoryItem { id:string; scope_type:"global"|"project"; scope_id:string|null; kind:MemoryKind; value:string; source:"explicit_user"|"confirmed"|"inferred"|"imported"; confidence:"high"|"medium"|"low"; status:"active"|"dismissed"; expires_at:string|null; created_at:string; updated_at:string }
 export interface ConversationScope { conversation_id?:string; scope_type:"paper"|"project"|"global"; scope_id:string|null; added_at?:string }
 export interface MessageCitation { id:string; message_id:string; paper_id:string; revision:string; page:number; section:string|null; locator:string|null; quote:string; prefix:string; suffix:string; explanation:string; match_status:string }
 export type ResearchMode="auto"|"explicit"

@@ -191,10 +191,75 @@ async fn project_context_includes_bounded_project_notes_and_sibling_chat_memory(
 
     assert!(summary.contains("## 当前项目笔记"));
     assert!(summary.contains("重点比较 SigLIP 与 DINOv2"));
-    assert!(summary.contains("## 同项目近期对话记忆"));
+    assert!(summary.contains("## 同项目近期对话"));
     assert!(summary.contains("DINO 入门"));
     assert!(summary.contains("EMA teacher 为什么不是预训练教师"));
     assert!(summary.contains("只用于承接用户认知"));
+}
+
+#[tokio::test]
+async fn context_separates_global_profile_from_project_learning_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = Workspace::initialize(temp.path()).await.unwrap();
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let project = db.create_project("memory", "教学记忆", "").await.unwrap();
+    let other = db.create_project("other", "其他项目", "").await.unwrap();
+    db.insert_memory_item(
+        "global",
+        None,
+        "preference",
+        "先给整体结构，再讲局部细节",
+        "explicit_user",
+        "high",
+        None,
+    )
+    .await
+    .unwrap();
+    db.insert_memory_item(
+        "project",
+        Some(&project),
+        "unresolved_concept",
+        "稀疏三维卷积",
+        "explicit_user",
+        "high",
+        None,
+    )
+    .await
+    .unwrap();
+    db.insert_memory_item(
+        "project",
+        Some(&other),
+        "goal",
+        "不属于当前项目的目标",
+        "explicit_user",
+        "high",
+        None,
+    )
+    .await
+    .unwrap();
+
+    let conversation = db.create_conversation("记忆分层").await.unwrap();
+    let scope = ConversationScope {
+        conversation_id: conversation.id.clone(),
+        scope_type: "project".into(),
+        scope_id: Some(project),
+        added_at: String::new(),
+    };
+    let bundle = ConversationContextBuilder::new(db, workspace)
+        .refresh(&conversation.id, &[scope])
+        .await
+        .unwrap();
+    let summary = tokio::fs::read_to_string(bundle.summary_path)
+        .await
+        .unwrap();
+
+    assert!(summary.contains("## 用户画像"));
+    assert!(summary.contains("先给整体结构，再讲局部细节"));
+    assert!(summary.contains("## 当前项目学习状态"));
+    assert!(summary.contains("稀疏三维卷积"));
+    assert!(!summary.contains("不属于当前项目的目标"));
+    assert!(summary.contains("## 论文与外部证据"));
+    assert!(!summary.contains("不可信"));
 }
 
 #[tokio::test]

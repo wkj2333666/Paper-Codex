@@ -1,4 +1,4 @@
-import type { Annotation, AnnotationAnchor, CandidateBulkImportOutcome, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ProjectReadme, ProjectReadmeSaveRequest, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
+import type { Annotation, AnnotationAnchor, CandidateBulkImportOutcome, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, MemoryItem, MemoryKind, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ProjectReadme, ProjectReadmeSaveRequest, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
 
 export class ApiError extends Error { constructor(public status:number,message:string,public body:Record<string,unknown>={}){super(message)} }
 const TOKEN_KEY = "paper-codex-token"
@@ -58,6 +58,10 @@ export const api = {
   question:(scope_type:string,scope_id:string|null,question:string)=>request<{task_id:string}>("/api/questions",{method:"POST",body:JSON.stringify({scope_type,scope_id,question})}),
   codexCapabilities:()=>request<CodexCapabilities>("/api/codex/capabilities"),
   codexIntegrations:(refresh=false)=>request<CodexIntegrations>(`/api/codex/integrations${refresh?"?refresh=true":""}`),
+  memories:(scope:"global"|"project",projectId?:string)=>request<MemoryItem[]>(`/api/memories?scope=${scope}${projectId?`&project_id=${encodeURIComponent(projectId)}`:""}`),
+  createMemory:(value:{scope_type:"global"|"project";scope_id:string|null;kind:MemoryKind;value:string})=>request<MemoryItem>("/api/memories",{method:"POST",body:JSON.stringify(value)}),
+  updateMemory:(id:string,value:{value?:string;status?:"active"|"dismissed"})=>request<MemoryItem>(`/api/memories/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(value)}),
+  deleteMemory:(id:string)=>request<void>(`/api/memories/${encodeURIComponent(id)}`,{method:"DELETE"}),
   conversations:(archived=false)=>request<Conversation[]>(`/api/conversations?archived=${archived}`),
   createConversation:(title:string,scopes:ConversationScope[],settings?:CodexRunSettings)=>request<Conversation>("/api/conversations",{method:"POST",body:JSON.stringify({title,scopes,...(settings?{settings}:{})})}),
   conversation:(id:string)=>request<ConversationDetail>(`/api/conversations/${encodeURIComponent(id)}`),

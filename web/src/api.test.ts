@@ -158,6 +158,21 @@ test("Codex integrations support an explicit refresh", async()=>{
   })
 })
 
+test("memory methods keep global and project scopes explicit", async()=>{
+  await api.memories("global")
+  await api.memories("project","project/one")
+  await api.createMemory({scope_type:"project",scope_id:"project/one",kind:"goal",value:"理解 AnyGrasp"})
+  await api.updateMemory("memory/one",{status:"dismissed"})
+  await api.deleteMemory("memory/one")
+  expect(capturedRequests.slice(-5).map(request=>[request.method,request.url])).toEqual([
+    ["GET","/api/memories?scope=global"],
+    ["GET","/api/memories?scope=project&project_id=project%2Fone"],
+    ["POST","/api/memories"],
+    ["PATCH","/api/memories/memory%2Fone"],
+    ["DELETE","/api/memories/memory%2Fone"],
+  ])
+})
+
 test("project literature methods encode both project and work identifiers", async()=>{
   await api.projectCandidates("project/one",true)
   await api.updateCandidate("project/one","doi:10.1/work",{status:"dismissed"})

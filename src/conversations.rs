@@ -5,7 +5,7 @@ use crate::research::ResearchMode;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::FromRow;
+use sqlx::{FromRow, QueryBuilder, Sqlite};
 use std::collections::HashSet;
 use uuid::Uuid;
 
@@ -62,6 +62,29 @@ pub struct ChatMessageOptions<'a> {
     pub research_mode: ResearchMode,
     pub skill: Option<&'a CodexSkillSelection>,
     pub tool_preferences: &'a [CodexToolPreference],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromRow)]
+pub struct MemoryItem {
+    pub id: String,
+    pub scope_type: String,
+    pub scope_id: Option<String>,
+    pub kind: String,
+    pub value: String,
+    pub source: String,
+    pub confidence: String,
+    pub status: String,
+    pub expires_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl MemoryItem {
+    pub const MAX_VALUE_CHARS: usize = 2_000;
+
+    pub fn is_global(&self) -> bool {
+        self.scope_type == "global" && self.scope_id.is_none()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromRow)]
@@ -143,6 +166,153 @@ pub struct ProjectConversationMemory {
 }
 
 impl Database {
+    pub async fn list_memory_items(
+        &self,
+        scope_type: &str,
+        scope_id: Option<&str>,
+        kinds: &[&str],
+    ) -> Result<Vec<MemoryItem>> {
+        validate_memory_scope(scope_type, scope_id)?;
+        for kind in kinds {
+            validate_memory_kind(kind)?;
+        }
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "SELECT id,scope_type,scope_id,kind,value,source,confidence,status,expires_at,created_at,updated_at FROM memory_items WHERE status='active' AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP) AND scope_type=",
+        );
+        query.push_bind(scope_type);
+        if scope_type == "global" {
+            query.push(" AND scope_id IS NULL");
+        } else {
+            query.push(" AND scope_id=");
+            query.push_bind(scope_id.expect("project scope was validated"));
+        }
+        if !kinds.is_empty() {
+            query.push(" AND kind IN (");
+            let mut separated = query.separated(",");
+            for kind in kinds {
+                separated.push_bind(*kind);
+            }
+            separated.push_unseparated(")");
+        }
+        query.push(" ORDER BY updated_at DESC,created_at DESC");
+        Ok(query
+            .build_query_as::<MemoryItem>()
+            .fetch_all(self.pool())
+            .await?)
+    }
+
+    pub async fn insert_memory_item(
+        &self,
+        scope_type: &str,
+        scope_id: Option<&str>,
+        kind: &str,
+        value: &str,
+        source: &str,
+        confidence: &str,
+        expires_at: Option<&str>,
+    ) -> Result<MemoryItem> {
+        validate_memory_scope(scope_type, scope_id)?;
+        validate_memory_kind_for_scope(scope_type, kind)?;
+        if let Some(project_id) = scope_id {
+            if self.get_project(project_id).await?.is_none() {
+                bail!("project memory scope does not exist");
+            }
+        }
+        validate_memory_kind(kind)?;
+        validate_memory_source(source)?;
+        validate_memory_confidence(confidence)?;
+        let value = value.trim();
+        if value.is_empty() || value.chars().count() > MemoryItem::MAX_VALUE_CHARS {
+            bail!(
+                "memory value must contain 1-{} characters",
+                MemoryItem::MAX_VALUE_CHARS
+            );
+        }
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO memory_items(id,scope_type,scope_id,kind,value,source,confidence,expires_at) VALUES(?,?,?,?,?,?,?,?)",
+        )
+        .bind(&id)
+        .bind(scope_type)
+        .bind(scope_id)
+        .bind(kind)
+        .bind(value)
+        .bind(source)
+        .bind(confidence)
+        .bind(expires_at)
+        .execute(self.pool())
+        .await?;
+        Ok(sqlx::query_as(
+            "SELECT id,scope_type,scope_id,kind,value,source,confidence,status,expires_at,created_at,updated_at FROM memory_items WHERE id=?",
+        )
+        .bind(id)
+        .fetch_one(self.pool())
+        .await?)
+    }
+
+    pub async fn update_memory_item(
+        &self,
+        id: &str,
+        value: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Option<MemoryItem>> {
+        if value.is_none() && status.is_none() {
+            return Ok(self.memory_item(id).await?);
+        }
+        if let Some(value) = value {
+            let value = value.trim();
+            if value.is_empty() || value.chars().count() > MemoryItem::MAX_VALUE_CHARS {
+                bail!(
+                    "memory value must contain 1-{} characters",
+                    MemoryItem::MAX_VALUE_CHARS
+                );
+            }
+        }
+        if let Some(status) = status {
+            if !matches!(status, "active" | "dismissed") {
+                bail!("invalid memory status");
+            }
+        }
+        let changed = sqlx::query(
+            "UPDATE memory_items SET value=COALESCE(?,value),status=COALESCE(?,status),updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        )
+        .bind(value.map(str::trim))
+        .bind(status)
+        .bind(id)
+        .execute(self.pool())
+        .await?
+        .rows_affected();
+        if changed == 0 {
+            return Ok(None);
+        }
+        self.memory_item(id).await
+    }
+
+    pub async fn dismiss_memory_item(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .update_memory_item(id, None, Some("dismissed"))
+            .await?
+            .is_some())
+    }
+
+    pub async fn delete_memory_item(&self, id: &str) -> Result<bool> {
+        Ok(sqlx::query("DELETE FROM memory_items WHERE id=?")
+            .bind(id)
+            .execute(self.pool())
+            .await?
+            .rows_affected()
+            > 0)
+    }
+
+    pub async fn memory_item(&self, id: &str) -> Result<Option<MemoryItem>> {
+        Ok(sqlx::query_as(
+            "SELECT id,scope_type,scope_id,kind,value,source,confidence,status,expires_at,created_at,updated_at FROM memory_items WHERE id=?",
+        )
+        .bind(id)
+        .fetch_optional(self.pool())
+        .await?)
+    }
+
     pub async fn recent_project_conversation_memories(
         &self,
         project_id: &str,
@@ -906,6 +1076,66 @@ fn valid_message_status(status: &str) -> bool {
     )
 }
 
+fn validate_memory_scope(scope_type: &str, scope_id: Option<&str>) -> Result<()> {
+    match (scope_type, scope_id) {
+        ("global", None) => Ok(()),
+        ("project", Some(id)) if !id.trim().is_empty() => Ok(()),
+        _ => bail!("invalid memory scope"),
+    }
+}
+
+fn validate_memory_kind(kind: &str) -> Result<()> {
+    if matches!(
+        kind,
+        "preference"
+            | "interest"
+            | "goal"
+            | "known_concept"
+            | "unresolved_concept"
+            | "terminology"
+            | "feedback"
+    ) {
+        Ok(())
+    } else {
+        bail!("invalid memory kind")
+    }
+}
+
+fn validate_memory_kind_for_scope(scope_type: &str, kind: &str) -> Result<()> {
+    let allowed = match scope_type {
+        "global" => matches!(kind, "preference" | "interest"),
+        "project" => matches!(
+            kind,
+            "goal" | "known_concept" | "unresolved_concept" | "terminology" | "feedback"
+        ),
+        _ => false,
+    };
+    if allowed {
+        Ok(())
+    } else {
+        bail!("memory kind is not valid for this scope")
+    }
+}
+
+fn validate_memory_source(source: &str) -> Result<()> {
+    if matches!(
+        source,
+        "explicit_user" | "confirmed" | "inferred" | "imported"
+    ) {
+        Ok(())
+    } else {
+        bail!("invalid memory source")
+    }
+}
+
+fn validate_memory_confidence(confidence: &str) -> Result<()> {
+    if matches!(confidence, "high" | "medium" | "low") {
+        Ok(())
+    } else {
+        bail!("invalid memory confidence")
+    }
+}
+
 fn event_from_row(
     (id, conversation_id, message_id, event_type, payload_json, created_at): (
         i64,
@@ -962,5 +1192,55 @@ mod tests {
             .iter()
             .any(|scope| scope.scope_type == "paper"
                 && scope.scope_id.as_deref() == Some("paper:one")));
+    }
+
+    #[tokio::test]
+    async fn memory_items_are_scoped_and_dismissable() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let project = db.create_project("memory", "记忆", "").await.unwrap();
+        db.insert_memory_item(
+            "global",
+            None,
+            "preference",
+            "回答要具体",
+            "explicit_user",
+            "high",
+            None,
+        )
+        .await
+        .unwrap();
+        let project_item = db
+            .insert_memory_item(
+                "project",
+                Some(&project),
+                "unresolved_concept",
+                "稀疏三维卷积",
+                "inferred",
+                "medium",
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.list_memory_items("global", None, &[])
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.list_memory_items("project", Some(&project), &[])
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(db.dismiss_memory_item(&project_item.id).await.unwrap());
+        assert!(db
+            .list_memory_items("project", Some(&project), &[])
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

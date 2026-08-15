@@ -23,7 +23,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{get, post, put},
+    routing::{get, patch, post, put},
     Json, Router,
 };
 use futures::Stream;
@@ -223,6 +223,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/search", get(search))
         .route("/api/codex/capabilities", get(codex_capabilities))
         .route("/api/codex/integrations", get(codex_integrations))
+        .route("/api/memories", get(list_memories).post(create_memory))
+        .route(
+            "/api/memories/{id}",
+            patch(update_memory).delete(delete_memory),
+        )
         .route("/api/questions", post(question))
         .route(
             "/api/conversations",
@@ -1209,6 +1214,98 @@ async fn codex_integrations(
     Ok(Json(json!(
         engine.integrations(query.refresh.unwrap_or(false)).await?
     )))
+}
+
+#[derive(Deserialize)]
+struct MemoryListQuery {
+    scope: Option<String>,
+    project_id: Option<String>,
+}
+
+async fn list_memories(
+    State(state): State<AppState>,
+    Query(query): Query<MemoryListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let scope = query.scope.as_deref().unwrap_or("global");
+    let project_id = query.project_id.as_deref();
+    if scope == "project" {
+        let id = project_id.ok_or_else(|| ApiError::bad_request("project_id is required"))?;
+        if state.db.get_project(id).await?.is_none() {
+            return Err(ApiError::not_found("项目不存在"));
+        }
+    }
+    Ok(Json(json!(state
+        .db
+        .list_memory_items(scope, project_id, &[])
+        .await
+        .map_err(conversation_api_error)?)))
+}
+
+#[derive(Deserialize)]
+struct CreateMemoryRequest {
+    scope_type: String,
+    scope_id: Option<String>,
+    kind: String,
+    value: String,
+}
+
+async fn create_memory(
+    State(state): State<AppState>,
+    Json(request): Json<CreateMemoryRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if request.scope_type == "project" {
+        let project_id = request
+            .scope_id
+            .as_deref()
+            .ok_or_else(|| ApiError::bad_request("scope_id is required"))?;
+        if state.db.get_project(project_id).await?.is_none() {
+            return Err(ApiError::not_found("项目不存在"));
+        }
+    }
+    let memory = state
+        .db
+        .insert_memory_item(
+            &request.scope_type,
+            request.scope_id.as_deref(),
+            &request.kind,
+            &request.value,
+            "explicit_user",
+            "high",
+            None,
+        )
+        .await
+        .map_err(conversation_api_error)?;
+    Ok((StatusCode::CREATED, Json(json!(memory))))
+}
+
+#[derive(Deserialize)]
+struct UpdateMemoryRequest {
+    value: Option<String>,
+    status: Option<String>,
+}
+
+async fn update_memory(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateMemoryRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let memory = state
+        .db
+        .update_memory_item(&id, request.value.as_deref(), request.status.as_deref())
+        .await
+        .map_err(conversation_api_error)?
+        .ok_or_else(|| ApiError::not_found("记忆不存在"))?;
+    Ok(Json(json!(memory)))
+}
+
+async fn delete_memory(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if !state.db.delete_memory_item(&id).await? {
+        return Err(ApiError::not_found("记忆不存在"));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
