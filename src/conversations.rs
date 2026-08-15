@@ -201,6 +201,7 @@ impl Database {
             .await?)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_memory_item(
         &self,
         scope_type: &str,
@@ -257,7 +258,7 @@ impl Database {
         status: Option<&str>,
     ) -> Result<Option<MemoryItem>> {
         if value.is_none() && status.is_none() {
-            return Ok(self.memory_item(id).await?);
+            return self.memory_item(id).await;
         }
         if let Some(value) = value {
             let value = value.trim();

@@ -138,7 +138,7 @@ fn remembered_kind(value: &str) -> &'static str {
 fn candidate_with_kind(kind: &str, value: &str, confidence: &str, source: &str) -> MemoryCandidate {
     let value = value
         .trim()
-        .trim_end_matches(|character| matches!(character, '。' | '！' | '!' | '？' | '?'))
+        .trim_end_matches(['。', '！', '!', '？', '?'])
         .chars()
         .take(MEMORY_CANDIDATE_MAX_CHARS)
         .collect();
