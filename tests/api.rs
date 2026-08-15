@@ -972,6 +972,234 @@ async fn login_token_in_dedicated_header_authorizes_dashboard_without_exposing_s
 }
 
 #[tokio::test]
+async fn memory_api_enforces_scope_validation_and_project_isolation() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let first_project = db
+        .create_project("first-memory", "项目一", "")
+        .await
+        .unwrap();
+    let second_project = db
+        .create_project("second-memory", "项目二", "")
+        .await
+        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = Workspace::initialize(temp.path()).await.unwrap();
+    let hash = bcrypt::hash("paper-secret", 4).unwrap();
+    let app = build_router(AppState::for_test(
+        db,
+        workspace,
+        Auth::new(hash, "test-jwt-secret".into()),
+    ));
+    let token = login_token(&app).await;
+
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/memories?scope=global")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let invalid_scope = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/memories?scope=other")
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_scope.status(), StatusCode::BAD_REQUEST);
+
+    let invalid_combination = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memories")
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "scope_type":"global",
+                        "scope_id":first_project.clone(),
+                        "kind":"preference",
+                        "value":"详细解释"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_combination.status(), StatusCode::BAD_REQUEST);
+
+    let invalid_kind_scope = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memories")
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "scope_type":"global",
+                        "scope_id":null,
+                        "kind":"goal",
+                        "value":"不应进入全局画像"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_kind_scope.status(), StatusCode::BAD_REQUEST);
+
+    let too_long = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/memories")
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "scope_type":"global",
+                        "scope_id":null,
+                        "kind":"preference",
+                        "value":"字".repeat(2001)
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(too_long.status(), StatusCode::BAD_REQUEST);
+
+    for (project_id, value) in [
+        (&first_project, "稀疏三维卷积"),
+        (&second_project, "视觉语言动作模型"),
+    ] {
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/memories")
+                    .header("content-type", "application/json")
+                    .header("x-paper-codex-token", &token)
+                    .body(Body::from(
+                        serde_json::json!({
+                            "scope_type":"project",
+                            "scope_id":project_id,
+                            "kind":"unresolved_concept",
+                            "value":value
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+    }
+
+    let first_list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/memories?scope=project&project_id={first_project}"
+                ))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_list.status(), StatusCode::OK);
+    let first_items = json_response(first_list).await;
+    assert_eq!(first_items.as_array().unwrap().len(), 1);
+    assert_eq!(first_items[0]["value"], "稀疏三维卷积");
+    let memory_id = first_items[0]["id"].as_str().unwrap();
+
+    let dismissed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/memories/{memory_id}"))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", &token)
+                .body(Body::from(r#"{"status":"dismissed"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dismissed.status(), StatusCode::OK);
+    assert_eq!(json_response(dismissed).await["status"], "dismissed");
+
+    let hidden_list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/memories?scope=project&project_id={first_project}"
+                ))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(json_response(hidden_list)
+        .await
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let deleted = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/memories/{memory_id}"))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+
+    let second_list = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/memories?scope=project&project_id={second_project}"
+                ))
+                .header("x-paper-codex-token", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let second_items = json_response(second_list).await;
+    assert_eq!(second_items.as_array().unwrap().len(), 1);
+    assert_eq!(second_items[0]["value"], "视觉语言动作模型");
+}
+
+#[tokio::test]
 async fn paper_detail_returns_structured_analysis_without_raw_markdown_frontmatter() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.insert_paper("paper:one", "第一篇论文").await.unwrap();

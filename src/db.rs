@@ -158,6 +158,22 @@ CREATE TABLE IF NOT EXISTS conversation_events (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS conversation_events_replay ON conversation_events(conversation_id,id);
+CREATE TABLE IF NOT EXISTS memory_items (
+  id TEXT PRIMARY KEY,
+  scope_type TEXT NOT NULL CHECK(scope_type IN ('global','project')),
+  scope_id TEXT,
+  kind TEXT NOT NULL CHECK(kind IN ('preference','interest','goal','known_concept','unresolved_concept','terminology','feedback')),
+  value TEXT NOT NULL,
+  source TEXT NOT NULL CHECK(source IN ('explicit_user','confirmed','inferred','imported')),
+  confidence TEXT NOT NULL CHECK(confidence IN ('high','medium','low')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','dismissed')),
+  expires_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK((scope_type='global' AND scope_id IS NULL) OR (scope_type='project' AND scope_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS memory_items_scope ON memory_items(scope_type,scope_id,status,updated_at);
+CREATE INDEX IF NOT EXISTS memory_items_kind ON memory_items(scope_type,scope_id,kind,status);
 "#;
 
 const RESEARCH_SCHEMA: &str = r#"
@@ -592,12 +608,27 @@ impl Database {
                     SELECT ?
                     UNION ALL
                     SELECT p.id FROM projects p JOIN descendants d ON p.parent_id=d.id
+                ) DELETE FROM memory_items
+                  WHERE scope_type='project' AND scope_id IN (SELECT id FROM descendants)"#,
+            )
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                r#"WITH RECURSIVE descendants(id) AS (
+                    SELECT ?
+                    UNION ALL
+                    SELECT p.id FROM projects p JOIN descendants d ON p.parent_id=d.id
                 ) DELETE FROM projects WHERE id IN (SELECT id FROM descendants)"#,
             )
             .bind(id)
             .execute(&mut *tx)
             .await?;
         } else {
+            sqlx::query("DELETE FROM memory_items WHERE scope_type='project' AND scope_id=?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
             sqlx::query("UPDATE projects SET parent_id=? WHERE parent_id=?")
                 .bind(project.parent_id)
                 .bind(id)

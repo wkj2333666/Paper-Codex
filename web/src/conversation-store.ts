@@ -16,7 +16,7 @@ export interface ConversationState {
   messages: Record<string,ChatMessage>
   messageOrder: string[]
   drawerOpen: boolean
-  drawerView: "history"|"activity"
+  drawerView: "history"|"activity"|"memory"
   lastEventId: number
   pendingSwitch: PendingConversationSwitch|null
   goal: CodexGoal|null
@@ -33,7 +33,7 @@ export type ConversationAction=
   |{type:"switch-resolved";requestId:number;detail:ConversationDetail;targetSelection:CodexSelection|null}
   |{type:"switch-failed";requestId:number}
   |{type:"switch-complete";requestId:number}
-  |{type:"drawer";open:boolean;view?:"history"|"activity"}
+  |{type:"drawer";open:boolean;view?:"history"|"activity"|"memory"}
   |{type:"goal-loaded";conversationId:string;goal:CodexGoal|null}
   |{type:"event";event:ConversationStreamEvent}
 

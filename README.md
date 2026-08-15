@@ -18,6 +18,8 @@ Paper Codex is a local-first workspace for reading papers, organizing research p
 - Search extracted paper text with SQLite/FTS instead of maintaining a separate search service.
 - Collapse and resize the file tree, reader, graph, and Codex panels to fit a laptop or desktop screen.
 
+The Codex panel's **User memory** drawer exposes separate global profile and current-project learning state. Explicit “remember this” statements and unresolved-concept feedback can create bounded memory items; you can edit, dismiss, or delete them at any time. Memory affects personalization and continuity only, while the current request remains authoritative and paper text remains evidence.
+
 ## How it works
 
 Paper Codex is a single local process:
