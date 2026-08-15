@@ -14,7 +14,7 @@ use crate::{
     memory::{extract_explicit_memory_candidates, MemoryCandidate},
     prompts::{
         conversation_answer_schema, conversation_question_prompt_with_intent,
-        validate_conversation_answer_with_candidates, ConversationSource,
+        validate_conversation_answer_with_candidates, ConversationAnswer, ConversationSource,
     },
     research::{ResearchMode, ResearchTrigger},
     research_service::{ProjectResearchToolHandler, ResearchService},
@@ -103,6 +103,18 @@ struct AnswerPreview {
     visible: String,
     item_id: Option<String>,
     phase: AgentMessagePhase,
+}
+
+fn fallback_answer_markdown(answer: Option<&ConversationAnswer>, preview: &str) -> String {
+    answer
+        .map(|answer| answer.answer_markdown.trim())
+        .filter(|markdown| !markdown.is_empty())
+        .or_else(|| {
+            let preview = preview.trim();
+            (!preview.is_empty()).then_some(preview)
+        })
+        .unwrap_or("Codex 未生成可显示的正文。")
+        .to_owned()
 }
 
 impl AnswerPreview {
@@ -1024,14 +1036,61 @@ impl ConversationEngine {
             Some(handler) => handler.evidence().await,
             None => HashMap::new(),
         };
-        let answer = validate_conversation_answer_with_candidates(
-            outcome
-                .answer
-                .context("Codex returned no structured answer")?,
-            &question.content,
-            &sources,
-            &candidate_evidence,
-        )?;
+        let answer = match outcome.answer {
+            Some(raw_answer) => {
+                let fallback = fallback_answer_markdown(Some(&raw_answer), &preview.visible);
+                match validate_conversation_answer_with_candidates(
+                    raw_answer,
+                    &question.content,
+                    &sources,
+                    &candidate_evidence,
+                ) {
+                    Ok(answer) => answer,
+                    Err(error) => {
+                        let error_message = error.to_string();
+                        self.db
+                            .set_message_result(
+                                &assistant.id,
+                                &fallback,
+                                Some(&outcome.turn_id),
+                                "failed",
+                                Some(&error_message),
+                            )
+                            .await?;
+                        self.emit(
+                            &conversation.id,
+                            Some(&assistant.id),
+                            "answer-failed",
+                            json!({"message":error_message,"answer_markdown":fallback}),
+                        )
+                        .await?;
+                        return Err(error);
+                    }
+                }
+            }
+            None => {
+                let error = anyhow::anyhow!("Codex returned no structured answer");
+                let error_message = error.to_string();
+                let fallback = fallback_answer_markdown(None, &preview.visible);
+                self.db
+                    .set_message_result(
+                        &assistant.id,
+                        &fallback,
+                        Some(&outcome.turn_id),
+                        "failed",
+                        Some(&error_message),
+                    )
+                    .await?;
+                self.emit(
+                    &conversation.id,
+                    Some(&assistant.id),
+                    "answer-failed",
+                    json!({"message":error_message,"answer_markdown":fallback}),
+                )
+                .await?;
+                return Err(error);
+            }
+        };
         let generated_title = should_generate_conversation_title(&conversation.title)
             .then(|| answer.title.clone())
             .flatten();
@@ -1413,12 +1472,14 @@ fn research_progress_label(kind: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_json_string_prefix, legacy_history_handoff, normalize_new_conversation_scopes,
-        research_project_id, should_generate_conversation_title, AnswerPreview,
+        extract_json_string_prefix, fallback_answer_markdown, legacy_history_handoff,
+        normalize_new_conversation_scopes, research_project_id, should_generate_conversation_title,
+        AnswerPreview,
     };
     use crate::{
         conversations::{ConversationScope, ConversationScopeInput},
         db::Database,
+        prompts::ConversationAnswer,
     };
 
     #[test]
@@ -1438,6 +1499,22 @@ mod tests {
         assert_eq!(preview.push(r#"回答","#), Some("回答".into()));
         assert_eq!(preview.visible, "逐步回答");
         assert_eq!(extract_json_string_prefix(&preview.raw, "citations"), None);
+    }
+
+    #[test]
+    fn validation_failure_fallback_preserves_structured_answer_markdown() {
+        let answer = ConversationAnswer {
+            title: Some("回答".into()),
+            answer_markdown: "AnyGrasp 使用稀疏三维编码器。".into(),
+            citations: vec![],
+            candidate_citations: vec![],
+            annotation_intents: vec![],
+        };
+        assert_eq!(
+            fallback_answer_markdown(Some(&answer), "流式正文"),
+            "AnyGrasp 使用稀疏三维编码器。"
+        );
+        assert_eq!(fallback_answer_markdown(None, "流式正文"), "流式正文");
     }
 
     #[test]
