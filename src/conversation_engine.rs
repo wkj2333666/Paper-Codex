@@ -1476,8 +1476,8 @@ fn research_progress_label(kind: &str) -> Option<&'static str> {
 mod tests {
     use super::{
         extract_json_string_prefix, fallback_answer_markdown, legacy_history_handoff,
-        normalize_new_conversation_scopes, research_project_id, should_generate_conversation_title,
-        AnswerPreview,
+        normalize_new_conversation_scopes, research_project_id, should_finalize_turn_error,
+        should_generate_conversation_title, AnswerPreview,
     };
     use crate::{
         conversations::{ConversationScope, ConversationScopeInput},
