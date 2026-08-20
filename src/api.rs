@@ -1178,16 +1178,22 @@ async fn list_conversations(
     State(state): State<AppState>,
     Query(query): Query<ConversationListQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!(
-        state
-            .db
-            .list_conversations(
-                query.archived.unwrap_or(false),
-                query.limit.unwrap_or(50),
-                query.offset.unwrap_or(0),
-            )
-            .await?
-    )))
+    let conversations = state
+        .db
+        .list_conversations(
+            query.archived.unwrap_or(false),
+            query.limit.unwrap_or(50),
+            query.offset.unwrap_or(0),
+        )
+        .await?;
+    let mut items = Vec::with_capacity(conversations.len());
+    for conversation in conversations {
+        let scope_label = state.db.conversation_scope_label(&conversation.id).await?;
+        let mut item = json!(conversation);
+        item["scope_label"] = json!(scope_label);
+        items.push(item);
+    }
+    Ok(Json(Value::Array(items)))
 }
 
 async fn codex_capabilities(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
