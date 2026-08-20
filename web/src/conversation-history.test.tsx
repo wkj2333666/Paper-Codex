@@ -18,10 +18,11 @@ const conversation=(id:string,title:string,archived=false):Conversation=>({
 
 describe("ConversationHistory",()=>{
   it("shows active conversations with an archive action",()=>{
-    const html=renderToStaticMarkup(<ConversationHistory view="active" active={[conversation("one","当前对话")]} archived={[]} activeConversationId="one" busyId={null} onView={()=>{}} onOpen={()=>{}} onArchive={()=>{}} onRestore={()=>{}} onDelete={()=>{}}/>)
+    const html=renderToStaticMarkup(<ConversationHistory view="active" active={[{...conversation("one","当前对话"),scope_label:"项目：AnyGrasp"}]} archived={[]} activeConversationId="one" busyId={null} onView={()=>{}} onOpen={()=>{}} onArchive={()=>{}} onRestore={()=>{}} onDelete={()=>{}}/>)
     expect(html).toContain("当前")
     expect(html).toContain("已归档")
     expect(html).toContain("当前对话")
+    expect(html).toContain("项目：AnyGrasp")
     expect(html).toContain('aria-label="归档 当前对话"')
     expect(html).not.toContain('aria-label="永久删除 当前对话"')
   })

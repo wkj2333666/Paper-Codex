@@ -458,6 +458,26 @@ impl Database {
             .await?)
     }
 
+    pub async fn conversation_scope_label(&self, id: &str) -> Result<String> {
+        let scopes: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            r#"SELECT s.scope_type,s.scope_id,
+                      CASE
+                        WHEN s.scope_type='project' THEN projects.name
+                        WHEN s.scope_type='paper' THEN papers.title
+                      END
+               FROM conversation_scopes s
+               LEFT JOIN projects ON s.scope_type='project' AND projects.id=s.scope_id
+               LEFT JOIN papers ON s.scope_type='paper' AND papers.id=s.scope_id
+               WHERE s.conversation_id=?
+               ORDER BY CASE s.scope_type WHEN 'global' THEN 0 WHEN 'project' THEN 1 WHEN 'paper' THEN 2 ELSE 3 END,
+                        s.scope_id"#,
+        )
+        .bind(id)
+        .fetch_all(self.pool())
+        .await?;
+        Ok(format_conversation_scope_label(&scopes))
+    }
+
     pub async fn get_conversation(&self, id: &str) -> Result<Option<Conversation>> {
         Ok(sqlx::query_as("SELECT id,title,thread_id,status,model,reasoning_effort,service_tier,dynamic_tools_initialized,dynamic_tools_version,archived_at,created_at,updated_at FROM conversations WHERE id=?")
             .bind(id)
@@ -1158,9 +1178,93 @@ fn event_from_row(
     })
 }
 
+fn format_conversation_scope_label(scopes: &[(String, Option<String>, Option<String>)]) -> String {
+    let labels: Vec<&str> = scopes
+        .iter()
+        .map(|(scope_type, _scope_id, name)| match scope_type.as_str() {
+            "global" => "全局论文库",
+            "project"
+                if name
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty()) =>
+            {
+                "项目"
+            }
+            "paper"
+                if name
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty()) =>
+            {
+                "论文"
+            }
+            "project" => "项目",
+            "paper" => "论文",
+            _ => "作用域",
+        })
+        .collect();
+
+    let mut rendered = Vec::with_capacity(scopes.len());
+    for ((scope_type, _scope_id, name), kind) in scopes.iter().zip(labels) {
+        let Some(name) = name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            rendered.push(kind.to_owned());
+            continue;
+        };
+        if scope_type == "global" {
+            rendered.push(kind.to_owned());
+        } else {
+            rendered.push(format!("{kind}：{name}"));
+        }
+    }
+    if rendered.is_empty() {
+        "未标记作用域".into()
+    } else {
+        rendered.join(" · ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ConversationScopeInput, Database};
+    use super::{format_conversation_scope_label, ConversationScopeInput, Database};
+
+    #[test]
+    fn conversation_scope_label_names_each_scope_without_exposing_ids() {
+        let label = format_conversation_scope_label(&[
+            (
+                "project".into(),
+                Some("project-id".into()),
+                Some("推理系统".into()),
+            ),
+            (
+                "paper".into(),
+                Some("paper-id".into()),
+                Some("论文一".into()),
+            ),
+        ]);
+
+        assert_eq!(label, "项目：推理系统 · 论文：论文一");
+        assert!(!label.contains("project-id"));
+        assert!(!label.contains("paper-id"));
+    }
+
+    #[test]
+    fn conversation_scope_label_falls_back_to_scope_type_for_unknown_names() {
+        assert_eq!(
+            format_conversation_scope_label(&[(
+                "project".into(),
+                Some("missing-project".into()),
+                None,
+            )]),
+            "项目"
+        );
+        assert_eq!(
+            format_conversation_scope_label(&[("global".into(), None, None)]),
+            "全局论文库"
+        );
+    }
 
     #[tokio::test]
     async fn conversation_context_accepts_one_project_and_one_open_paper() {
@@ -1193,6 +1297,10 @@ mod tests {
             .iter()
             .any(|scope| scope.scope_type == "paper"
                 && scope.scope_id.as_deref() == Some("paper:one")));
+        assert_eq!(
+            db.conversation_scope_label(&conversation.id).await.unwrap(),
+            "项目：推理系统 · 论文：论文一"
+        );
     }
 
     #[tokio::test]

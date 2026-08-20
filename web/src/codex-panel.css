@@ -1297,6 +1297,15 @@ button.conversation-row-main {
   white-space: nowrap;
 }
 
+.conversation-row-scope {
+  overflow: hidden;
+  color: var(--green);
+  font-size: 9px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .conversation-row-main span {
   color: var(--muted);
   font-size: 8px;
