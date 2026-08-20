@@ -144,17 +144,48 @@ async fn advertises_model_effort_and_speed_capabilities() {
 }
 
 #[tokio::test]
-async fn prefers_sol_high_for_new_research_conversations() {
+async fn uses_app_server_default_for_new_research_conversations() {
     let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
 
     assert_eq!(
         runtime.research_conversation_settings(),
         CodexRunSettings {
-            model: "gpt-5.6-sol".into(),
-            reasoning_effort: "high".into(),
+            model: "gpt-test".into(),
+            reasoning_effort: "low".into(),
             service_tier: None,
         }
     );
+}
+
+#[tokio::test]
+async fn advertises_and_defaults_to_model_from_codex_config() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("config.toml"),
+        "model = \"glm-5.3\"\nmodel_reasoning_effort = \"max\"\n",
+    )
+    .unwrap();
+    let mut command = fake_command();
+    command.codex_home = Some(home.path().to_path_buf());
+
+    let runtime = CodexRuntime::spawn(command).await.unwrap();
+    let capabilities = runtime.capabilities();
+
+    assert_eq!(
+        capabilities.default,
+        CodexRunSettings {
+            model: "glm-5.3".into(),
+            reasoning_effort: "max".into(),
+            service_tier: None,
+        }
+    );
+    let glm = capabilities
+        .models
+        .iter()
+        .find(|model| model.id == "glm-5.3")
+        .expect("configured model is advertised");
+    assert_eq!(glm.display_name, "GLM-5.3");
+    assert_eq!(glm.supported_reasoning_efforts, vec!["max"]);
 }
 
 #[tokio::test]

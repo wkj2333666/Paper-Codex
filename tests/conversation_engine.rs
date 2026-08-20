@@ -59,7 +59,7 @@ async fn creates_conversation_with_selected_codex_settings() {
 }
 
 #[tokio::test]
-async fn new_conversations_default_to_the_research_quality_model() {
+async fn new_conversations_default_to_the_capabilities_model() {
     let (engine, _temp) = harness().await;
     let conversation = engine
         .create_conversation(
@@ -72,13 +72,13 @@ async fn new_conversations_default_to_the_research_quality_model() {
         .await
         .unwrap();
 
-    assert_eq!(conversation.model.as_deref(), Some("gpt-5.6-sol"));
-    assert_eq!(conversation.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(conversation.model.as_deref(), Some("gpt-test"));
+    assert_eq!(conversation.reasoning_effort.as_deref(), Some("low"));
     assert_eq!(conversation.service_tier, None);
 }
 
 #[tokio::test]
-async fn research_conversations_prefer_highest_available_reasoning_effort() {
+async fn conversations_keep_the_capabilities_default_reasoning_effort() {
     let (engine, _temp) = harness().await;
     let conversation = engine
         .create_conversation(
@@ -90,7 +90,7 @@ async fn research_conversations_prefer_highest_available_reasoning_effort() {
         )
         .await
         .unwrap();
-    assert_eq!(conversation.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(conversation.reasoning_effort.as_deref(), Some("low"));
 }
 
 async fn harness() -> (Arc<ConversationEngine>, tempfile::TempDir) {

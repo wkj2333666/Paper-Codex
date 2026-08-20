@@ -62,6 +62,7 @@ const effortLabels: Record<string, string> = {
   medium: "中",
   high: "高",
   xhigh: "极高",
+  max: "最大",
 }
 
 const effortLabel = (effort: string) => effortLabels[effort] ?? effort
