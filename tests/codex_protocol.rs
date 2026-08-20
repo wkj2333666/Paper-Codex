@@ -162,7 +162,7 @@ async fn advertises_and_defaults_to_model_from_codex_config() {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
         home.path().join("config.toml"),
-        "model = \"glm-5.3\"\nmodel_reasoning_effort = \"max\"\n",
+        "model = \"glm-5.3\" # custom model\nmodel_reasoning_effort = 'max' # deepest effort\n",
     )
     .unwrap();
     let mut command = fake_command();

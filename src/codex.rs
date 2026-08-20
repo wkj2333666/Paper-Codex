@@ -310,14 +310,10 @@ impl CodexCommand {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
-            let value = value.trim();
-            let Some(value) = value
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-            else {
+            let Some(value) = parse_toml_string(value) else {
                 continue;
             };
-            values.insert(key.trim(), value.to_owned());
+            values.insert(key.trim(), value);
         }
         let model = values.remove("model")?;
         let reasoning_effort = values
@@ -329,6 +325,40 @@ impl CodexCommand {
             service_tier: None,
         })
     }
+}
+
+fn parse_toml_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    let quote = value.as_bytes().first().copied()?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let quote = quote as char;
+    let mut escaped = false;
+    for (index, character) in value.char_indices().skip(1) {
+        if quote == '"' && escaped {
+            escaped = false;
+            continue;
+        }
+        if quote == '"' && character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if character != quote {
+            continue;
+        }
+        let remainder = value[index + character.len_utf8()..].trim();
+        if !remainder.is_empty() && !remainder.starts_with('#') {
+            return None;
+        }
+        let raw = &value[..index + character.len_utf8()];
+        return if quote == '"' {
+            serde_json::from_str(raw).ok()
+        } else {
+            Some(value[1..index].to_owned())
+        };
+    }
+    None
 }
 
 async fn create_private_dir(path: &std::path::Path) -> Result<()> {
