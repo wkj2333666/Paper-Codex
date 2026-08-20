@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
@@ -547,6 +547,7 @@ struct Session {
     _child: Child,
     stdin: BufWriter<ChildStdin>,
     lines: Lines<BufReader<ChildStdout>>,
+    pending_messages: VecDeque<Value>,
     next_id: u64,
 }
 
@@ -581,6 +582,7 @@ impl Session {
             _child: child,
             stdin: BufWriter::new(stdin),
             lines: BufReader::new(stdout).lines(),
+            pending_messages: VecDeque::new(),
             next_id: 1,
         };
         let response = session.request("initialize", json!({
@@ -632,6 +634,35 @@ impl Session {
             if message.get("id").is_some() && message.get("method").is_some() {
                 let request_id = message.get("id").cloned().unwrap_or(Value::Null);
                 self.write(&json!({"id":request_id,"error":{"code":-32000,"message":"Paper Codex does not grant interactive approvals"}})).await?;
+            }
+        }
+    }
+
+    async fn request_preserving_notifications(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write(&json!({"method":method,"id":id,"params":params}))
+            .await?;
+        loop {
+            let line = self
+                .lines
+                .next_line()
+                .await?
+                .context("Codex App Server exited before response")?;
+            let message: Value =
+                serde_json::from_str(&line).context("decode Codex JSONL response")?;
+            if message.get("id").and_then(Value::as_u64) == Some(id) {
+                return Ok(message);
+            }
+            if message.get("id").is_some() && message.get("method").is_some() {
+                let request_id = message.get("id").cloned().unwrap_or(Value::Null);
+                self.write(&json!({"id":request_id,"error":{"code":-32000,"message":"Paper Codex does not grant interactive approvals"}})).await?;
+            } else if !is_recovery_goal_pause_notification(&message) {
+                self.pending_messages.push_back(message);
             }
         }
     }
@@ -1273,6 +1304,26 @@ impl CodexRuntime {
             .or(turn.thread_id.as_deref())
             .context("Codex response lacks thread id")?
             .to_owned();
+        let mut active_goal = session
+            .request("thread/goal/get", json!({"threadId":thread_id}))
+            .await
+            .ok()
+            .and_then(|response| response.pointer("/result/goal").cloned())
+            .filter(|value| !value.is_null())
+            .and_then(|value| CodexGoal::from_value(&value).ok())
+            .filter(CodexGoal::active);
+        let mut goal_needs_resume = active_goal.is_some();
+        if goal_needs_resume {
+            pause_active_goal_for_recovery(session, &thread_id).await?;
+        }
+        if let Some(active_turn_id) = resumed_in_progress_turn_id(&thread_response) {
+            tracing::warn!(
+                thread_id = %thread_id,
+                turn_id = %active_turn_id,
+                "interrupting active Codex turn before starting the queued Paper Codex turn"
+            );
+            interrupt_turn_for_recovery(session, &thread_id, &active_turn_id).await?;
+        }
         let expects_conversation_answer = turn
             .output_schema
             .as_ref()
@@ -1293,15 +1344,15 @@ impl CodexRuntime {
         if let Some(service_tier) = turn.settings.service_tier {
             params["serviceTier"] = Value::String(service_tier);
         }
-        let mut active_goal = session
-            .request("thread/goal/get", json!({"threadId":thread_id}))
-            .await
-            .ok()
-            .and_then(|response| response.pointer("/result/goal").cloned())
-            .filter(|value| !value.is_null())
-            .and_then(|value| CodexGoal::from_value(&value).ok())
-            .filter(CodexGoal::active);
-        let start = session.request("turn/start", params).await?;
+        let mut start = session.request("turn/start", params.clone()).await?;
+        if active_turn_output_schema_mismatch(&start) {
+            tracing::warn!(
+                thread_id = %thread_id,
+                "recovering Codex turn/start after an unreported active-turn schema conflict"
+            );
+            interrupt_turn_for_recovery(session, &thread_id, "").await?;
+            start = session.request("turn/start", params).await?;
+        }
         if let Some(error) = start.get("error") {
             bail!("Codex turn/start failed: {error}");
         }
@@ -1314,6 +1365,9 @@ impl CodexRuntime {
         let mut interrupted = false;
         let mut turn_finished = false;
         let mut terminal_goal = false;
+        let mut pending_messages = std::mem::take(&mut session.pending_messages);
+        let mut pending_goal_recovery: Option<(String, Option<String>, Option<CodexFailure>)> =
+            None;
         let mut control_responses = HashMap::<u64, oneshot::Sender<Value>>::new();
         loop {
             if *cancel.borrow() && !interrupted {
@@ -1321,6 +1375,88 @@ impl CodexRuntime {
                 let id = session.next_id;
                 session.next_id += 1;
                 session.write(&json!({"method":"turn/interrupt","id":id,"params":{"threadId":thread_id,"turnId":turn_id}})).await?;
+            }
+            if let Some((status, error, failure)) = pending_goal_recovery.take() {
+                let response = session
+                    .request_preserving_notifications(
+                        "thread/goal/get",
+                        json!({"threadId":thread_id}),
+                    )
+                    .await?;
+                pending_messages.append(&mut session.pending_messages);
+                if let Some(error) = response.get("error") {
+                    bail!("Codex thread/goal/get failed during active-turn recovery: {error}");
+                }
+                let current_goal = response
+                    .pointer("/result/goal")
+                    .filter(|value| !value.is_null())
+                    .map(CodexGoal::from_value)
+                    .transpose()?;
+                if current_goal
+                    .as_ref()
+                    .is_some_and(|goal| goal.terminal() && goal.status != "paused")
+                {
+                    terminal_goal = true;
+                    active_goal = None;
+                    goal_needs_resume = false;
+                    if status == "completed" {
+                        turn_finished = true;
+                        continue;
+                    }
+                } else if current_goal.as_ref().is_none_or(|goal| !goal.active()) {
+                    let response = session
+                        .request_preserving_notifications(
+                            "thread/goal/set",
+                            json!({"threadId":thread_id,"status":"active"}),
+                        )
+                        .await?;
+                    pending_messages.append(&mut session.pending_messages);
+                    if let Some(error) = response.get("error") {
+                        tracing::warn!(
+                            thread_id = %thread_id,
+                            error = %error,
+                            "could not resume the active goal after recovering its queued turn"
+                        );
+                        active_goal = None;
+                    } else {
+                        active_goal = response
+                            .pointer("/result/goal")
+                            .and_then(|value| CodexGoal::from_value(value).ok())
+                            .filter(CodexGoal::active)
+                            .or(active_goal);
+                    }
+                } else {
+                    active_goal = current_goal;
+                }
+                goal_needs_resume = false;
+                if status == "completed" && expects_conversation_answer {
+                    let answer = Some(
+                        serde_json::from_str(&final_text)
+                            .context("decode structured conversation answer")?,
+                    );
+                    return Ok(CodexOutcome {
+                        thread_id,
+                        turn_id,
+                        status,
+                        final_text,
+                        answer,
+                        error,
+                        failure,
+                    });
+                }
+                if active_goal.is_some() && status == "completed" && !terminal_goal {
+                    turn_finished = true;
+                    continue;
+                }
+                return Ok(CodexOutcome {
+                    thread_id,
+                    turn_id,
+                    status,
+                    final_text,
+                    answer: None,
+                    error,
+                    failure,
+                });
             }
             tokio::select! {
                 Some(control) = control_rx.recv() => {
@@ -1336,9 +1472,8 @@ impl CodexRuntime {
                         session.write(&json!({"method":"turn/interrupt","id":id,"params":{"threadId":thread_id,"turnId":turn_id}})).await?;
                     }
                 }
-                line = session.lines.next_line() => {
-                    let line = line?.context("Codex App Server exited during turn")?;
-                    let message: Value = serde_json::from_str(&line).context("decode Codex event")?;
+                message = next_session_message(&mut session.lines, &mut pending_messages) => {
+                    let message = message?;
                     if message.get("method").is_none() {
                         if let Some(id) = message.get("id").and_then(Value::as_u64) {
                             if let Some(response) = control_responses.remove(&id) {
@@ -1424,6 +1559,13 @@ impl CodexRuntime {
                                 .map(|details| format!("{}: {details}", failure.message))
                                 .unwrap_or_else(|| failure.message.clone())
                         });
+                        if goal_needs_resume {
+                            pending_goal_recovery = Some((status, error, failure));
+                            if pending_goal_recovery.as_ref().is_some_and(|(status, _, _)| status == "completed") {
+                                turn_finished = true;
+                            }
+                            continue;
+                        }
                         if active_goal.is_some() && status == "completed" && !terminal_goal {
                             turn_finished = true;
                             continue;
@@ -1480,6 +1622,95 @@ impl CodexRuntime {
             let _ = sender.send(event);
         }
     }
+}
+
+async fn next_session_message(
+    lines: &mut Lines<BufReader<ChildStdout>>,
+    pending_messages: &mut VecDeque<Value>,
+) -> Result<Value> {
+    loop {
+        let message = if let Some(message) = pending_messages.pop_front() {
+            message
+        } else {
+            let line = lines
+                .next_line()
+                .await?
+                .context("Codex App Server exited during turn")?;
+            serde_json::from_str(&line).context("decode Codex event")?
+        };
+        if is_recovery_goal_pause_notification(&message) {
+            continue;
+        }
+        return Ok(message);
+    }
+}
+
+fn is_recovery_goal_pause_notification(message: &Value) -> bool {
+    message.get("method").and_then(Value::as_str) == Some("thread/goal/updated")
+        && message
+            .pointer("/params/goal/status")
+            .and_then(Value::as_str)
+            == Some("paused")
+}
+
+fn resumed_in_progress_turn_id(response: &Value) -> Option<String> {
+    response
+        .pointer("/result/thread/turns")?
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|turn| turn.get("status").and_then(Value::as_str) == Some("inProgress"))?
+        .get("id")?
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+fn active_turn_output_schema_mismatch(response: &Value) -> bool {
+    response
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .is_some_and(|message| message.contains("ActiveTurnOutputSchemaMismatch"))
+}
+
+async fn interrupt_turn_for_recovery(
+    session: &mut Session,
+    thread_id: &str,
+    turn_id: &str,
+) -> Result<()> {
+    let response = session
+        .request(
+            "turn/interrupt",
+            json!({"threadId":thread_id,"turnId":turn_id}),
+        )
+        .await?;
+    if let Some(error) = response.get("error") {
+        let message = error.to_string().to_ascii_lowercase();
+        if message.contains("no active turn") || message.contains("expected active turn id") {
+            tracing::debug!(
+                thread_id,
+                turn_id,
+                error = %error,
+                "active Codex turn ended while recovery was interrupting it"
+            );
+        } else {
+            bail!("Codex turn/interrupt failed during active-turn recovery: {error}");
+        }
+    }
+    Ok(())
+}
+
+async fn pause_active_goal_for_recovery(session: &mut Session, thread_id: &str) -> Result<()> {
+    let response = session
+        .request(
+            "thread/goal/set",
+            json!({"threadId":thread_id,"status":"paused"}),
+        )
+        .await?;
+    if let Some(error) = response.get("error") {
+        bail!("Codex thread/goal/set failed during active-turn recovery: {error}");
+    }
+    Ok(())
 }
 
 pub(crate) fn is_transport_failure(error: &anyhow::Error) -> bool {
