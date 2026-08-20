@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   CodexComposer,
   composerKeyIntent,
+  normalizeCodexSettings,
   settingsTargetIsOutside,
 } from "./CodexComposer"
 
@@ -58,6 +59,25 @@ describe("CodexComposer", () => {
 
     expect(html).toContain("GPT-5.6-Sol")
     expect(html).toContain("GPT-5.6-Terra")
+  })
+
+  it("uses the backend default when a new conversation has no settings", () => {
+    const configuredCapabilities = {
+      ...capabilities,
+      default: { model: "glm-5.3", reasoning_effort: "max", service_tier: null },
+      models: [
+        ...capabilities.models,
+        {
+          id: "glm-5.3",
+          display_name: "GLM-5.3",
+          default_reasoning_effort: "max",
+          supported_reasoning_efforts: ["max"],
+          supports_fast: false,
+        },
+      ],
+    }
+
+    expect(normalizeCodexSettings(configuredCapabilities, null)).toEqual(configuredCapabilities.default)
   })
 
   it("maps Enter to submit while preserving newline and IME composition", () => {

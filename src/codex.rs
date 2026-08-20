@@ -195,6 +195,67 @@ impl CodexCapabilities {
             supports_dynamic_tools: true,
         }
     }
+
+    fn apply_configured_settings(mut self, configured: Option<CodexRunSettings>) -> Self {
+        let Some(configured) = configured else {
+            return self;
+        };
+        let Some(model) = self
+            .models
+            .iter_mut()
+            .find(|model| model.id == configured.model)
+        else {
+            let reasoning_effort = configured.reasoning_effort.clone();
+            self.models.push(CodexModel {
+                id: configured.model.clone(),
+                display_name: display_name_for_model(&configured.model),
+                default_reasoning_effort: reasoning_effort.clone(),
+                supported_reasoning_efforts: vec![reasoning_effort],
+                supports_fast: false,
+            });
+            self.default = CodexRunSettings {
+                service_tier: None,
+                ..configured
+            };
+            return self;
+        };
+        let reasoning_effort = model
+            .supported_reasoning_efforts
+            .iter()
+            .find(|effort| **effort == configured.reasoning_effort)
+            .cloned()
+            .unwrap_or_else(|| model.default_reasoning_effort.clone());
+        self.default = CodexRunSettings {
+            model: model.id.clone(),
+            reasoning_effort,
+            service_tier: None,
+        };
+        self
+    }
+}
+
+fn display_name_for_model(model: &str) -> String {
+    if let Some(version) = model.strip_prefix("glm-") {
+        return format!("GLM-{version}");
+    }
+    model
+        .split('-')
+        .map(|part| {
+            if part
+                .chars()
+                .all(|character| character.is_ascii_digit() || character == '.')
+            {
+                part.to_owned()
+            } else {
+                let mut characters = part.chars();
+                characters
+                    .next()
+                    .map(|first| first.to_uppercase().collect::<String>() + characters.as_str())
+                    .unwrap_or_default()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +297,68 @@ impl CodexCommand {
         .await?;
         Ok(())
     }
+
+    fn configured_settings(&self) -> Option<CodexRunSettings> {
+        let home = self.codex_home.as_ref()?;
+        let contents = std::fs::read_to_string(home.join("config.toml")).ok()?;
+        let mut values = HashMap::new();
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                break;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let Some(value) = parse_toml_string(value) else {
+                continue;
+            };
+            values.insert(key.trim(), value);
+        }
+        let model = values.remove("model")?;
+        let reasoning_effort = values
+            .remove("model_reasoning_effort")
+            .unwrap_or_else(|| "medium".into());
+        Some(CodexRunSettings {
+            model,
+            reasoning_effort,
+            service_tier: None,
+        })
+    }
+}
+
+fn parse_toml_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    let quote = value.as_bytes().first().copied()?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let quote = quote as char;
+    let mut escaped = false;
+    for (index, character) in value.char_indices().skip(1) {
+        if quote == '"' && escaped {
+            escaped = false;
+            continue;
+        }
+        if quote == '"' && character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if character != quote {
+            continue;
+        }
+        let remainder = value[index + character.len_utf8()..].trim();
+        if !remainder.is_empty() && !remainder.starts_with('#') {
+            return None;
+        }
+        let raw = &value[..index + character.len_utf8()];
+        return if quote == '"' {
+            serde_json::from_str(raw).ok()
+        } else {
+            Some(value[1..index].to_owned())
+        };
+    }
+    None
 }
 
 async fn create_private_dir(path: &std::path::Path) -> Result<()> {
@@ -473,7 +596,8 @@ impl Session {
             .await
             .ok()
             .and_then(|response| CodexCapabilities::from_model_list(&response))
-            .unwrap_or_else(CodexCapabilities::fallback);
+            .unwrap_or_else(CodexCapabilities::fallback)
+            .apply_configured_settings(spec.configured_settings());
         Ok((session, capabilities))
     }
 
@@ -550,29 +674,7 @@ impl CodexRuntime {
     }
 
     pub fn research_conversation_settings(&self) -> CodexRunSettings {
-        let Some(model) = self
-            .capabilities
-            .models
-            .iter()
-            .find(|model| model.id == "gpt-5.6-sol")
-        else {
-            return self.default_settings();
-        };
-        let reasoning_effort = ["xhigh", "high", "medium", "low"]
-            .into_iter()
-            .find(|effort| {
-                model
-                    .supported_reasoning_efforts
-                    .iter()
-                    .any(|available| available.as_str() == *effort)
-            })
-            .map(str::to_owned)
-            .unwrap_or_else(|| model.default_reasoning_effort.clone());
-        CodexRunSettings {
-            model: model.id.clone(),
-            reasoning_effort,
-            service_tier: None,
-        }
+        self.default_settings()
     }
 
     pub fn paper_analysis_settings(&self) -> Vec<CodexRunSettings> {

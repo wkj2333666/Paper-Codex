@@ -44,10 +44,12 @@ export function normalizeCodexSettings(
   capabilities: CodexCapabilities,
   settings?: CodexRunSettings | null,
 ): CodexRunSettings {
-  const model = capabilities.models.find((item) => item.id === settings?.model) ?? capabilities.models[0]
+  const requestedModel = settings?.model ?? capabilities.default.model
+  const model = capabilities.models.find((item) => item.id === requestedModel) ?? capabilities.models[0]
   if (!model) return capabilities.default
-  const reasoningEffort = model.supported_reasoning_efforts.includes(settings?.reasoning_effort ?? "")
-    ? settings!.reasoning_effort
+  const requestedReasoningEffort = settings?.reasoning_effort ?? capabilities.default.reasoning_effort
+  const reasoningEffort = model.supported_reasoning_efforts.includes(requestedReasoningEffort)
+    ? requestedReasoningEffort
     : model.default_reasoning_effort
   return {
     model: model.id,
@@ -62,6 +64,7 @@ const effortLabels: Record<string, string> = {
   medium: "中",
   high: "高",
   xhigh: "极高",
+  max: "最大",
 }
 
 const effortLabel = (effort: string) => effortLabels[effort] ?? effort
