@@ -469,7 +469,8 @@ impl Database {
                LEFT JOIN projects ON s.scope_type='project' AND projects.id=s.scope_id
                LEFT JOIN papers ON s.scope_type='paper' AND papers.id=s.scope_id
                WHERE s.conversation_id=?
-               ORDER BY s.scope_type,s.scope_id"#,
+               ORDER BY CASE s.scope_type WHEN 'global' THEN 0 WHEN 'project' THEN 1 WHEN 'paper' THEN 2 ELSE 3 END,
+                        s.scope_id"#,
         )
         .bind(id)
         .fetch_all(self.pool())
