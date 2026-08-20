@@ -9,6 +9,7 @@ thread_counter = 0
 active_dynamic_tools = []
 thread_dynamic_tools = {}
 thread_goals = {}
+auto_goal_threads = {"thread-active-goal", "thread-active-goal-hidden"}
 last_thread_request = None
 reject_dynamic_tools = "--reject-dynamic-tools" in sys.argv
 
@@ -140,7 +141,17 @@ for raw in sys.stdin:
             continue
         active_dynamic_tools = thread_dynamic_tools.get(msg["params"]["threadId"], [])
         last_thread_request = {"method": method, "params": msg["params"]}
-        send({"id": msg["id"], "result": {"thread": {"id": msg["params"]["threadId"]}}})
+        if msg["params"]["threadId"] in ["thread-active", "thread-active-hidden", "thread-active-goal", "thread-active-goal-hidden"]:
+            pending_turn = "turn-stale"
+        if msg["params"]["threadId"] in auto_goal_threads and msg["params"]["threadId"] not in thread_goals:
+            thread_goals[msg["params"]["threadId"]] = {
+                "threadId": msg["params"]["threadId"], "objective": "recover active goal", "status": "active",
+                "tokenBudget": None, "tokensUsed": 0, "timeUsedSeconds": 0
+            }
+        turns = [] if msg["params"]["threadId"] not in ["thread-active", "thread-active-goal"] else [{
+            "id": "turn-stale", "items": [], "status": "inProgress"
+        }]
+        send({"id": msg["id"], "result": {"thread": {"id": msg["params"]["threadId"], "turns": turns}}})
     elif method in ["thread/archive", "thread/unarchive", "thread/delete"]:
         result = {"thread": {"id": msg["params"]["threadId"]}} if method == "thread/unarchive" else {}
         send({"id": msg["id"], "result": result})
@@ -162,6 +173,11 @@ for raw in sys.stdin:
         thread_goals[thread_id] = goal
         send({"id": msg["id"], "result": {"goal": goal}})
         send({"method": "thread/goal/updated", "params": {"threadId": thread_id, "goal": goal}})
+        if thread_id in auto_goal_threads and goal["status"] == "active":
+            completed_goal = dict(goal)
+            completed_goal["status"] = "complete"
+            thread_goals[thread_id] = completed_goal
+            send({"method": "thread/goal/updated", "params": {"threadId": thread_id, "goal": completed_goal}})
     elif method == "thread/goal/get":
         send({"id": msg["id"], "result": {"goal": thread_goals.get(msg["params"]["threadId"])}})
     elif method == "thread/goal/clear":
@@ -170,6 +186,9 @@ for raw in sys.stdin:
         send({"id": msg["id"], "result": {}})
         send({"method": "thread/goal/cleared", "params": {"threadId": thread_id}})
     elif method == "turn/start":
+        if pending_turn is not None:
+            send({"id": msg["id"], "error": {"code": -32603, "message": "failed to submit turn input: ActiveTurnOutputSchemaMismatch"}})
+            continue
         turn_counter += 1
         pending_turn = f"turn-fake-{turn_counter}"
         send({"id": msg["id"], "result": {"turn": {"id": pending_turn}}})
@@ -311,5 +330,9 @@ for raw in sys.stdin:
         send({"id": msg["id"], "result": {}})
         send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn or "turn-fake-unknown", "items": [], "status": "interrupted"}}})
         pending_turn = None
+        active_goal = thread_goals.get(msg["params"]["threadId"])
+        if msg["params"]["threadId"] in auto_goal_threads and active_goal is not None and active_goal["status"] == "active":
+            pending_turn = "turn-auto-restarted"
+            send({"method": "turn/started", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "inProgress"}}})
     elif "id" in msg:
         send({"id": msg["id"], "error": {"code": -32601, "message": "unknown method"}})

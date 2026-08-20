@@ -427,6 +427,60 @@ async fn does_not_try_to_retrofit_dynamic_tools_during_thread_resume() {
 }
 
 #[tokio::test]
+async fn interrupts_an_in_progress_turn_before_starting_a_structured_resumed_turn() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let mut turn = research_turn("recover visible active turn");
+    turn.thread_id = Some("thread-active".into());
+    turn.output_schema = Some(conversation_answer_schema());
+
+    let outcome = runtime.run_turn(turn, cancel_rx).await.unwrap();
+
+    assert_eq!(outcome.thread_id, "thread-active");
+    assert_eq!(outcome.status, "completed");
+    assert!(outcome.answer.is_some());
+}
+
+#[tokio::test]
+async fn retries_turn_start_after_an_unreported_active_turn_schema_conflict() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let mut turn = research_turn("recover hidden active turn");
+    turn.thread_id = Some("thread-active-hidden".into());
+    turn.output_schema = Some(conversation_answer_schema());
+
+    let outcome = runtime.run_turn(turn, cancel_rx).await.unwrap();
+
+    assert_eq!(outcome.thread_id, "thread-active-hidden");
+    assert_eq!(outcome.status, "completed");
+    assert!(outcome.answer.is_some());
+}
+
+#[tokio::test]
+async fn pauses_and_restores_an_active_goal_while_replacing_its_unstructured_turn() {
+    let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let mut turn = research_turn("recover active goal");
+    turn.thread_id = Some("thread-active-goal".into());
+    turn.output_schema = Some(conversation_answer_schema());
+
+    let outcome = runtime.run_turn(turn, cancel_rx).await.unwrap();
+
+    assert_eq!(outcome.thread_id, "thread-active-goal");
+    assert_eq!(outcome.status, "completed");
+    assert!(outcome.answer.is_some());
+    assert_eq!(
+        runtime
+            .get_goal("thread-active-goal")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "complete"
+    );
+}
+
+#[tokio::test]
 async fn denies_non_tool_server_requests_without_invoking_the_handler() {
     let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
     let handler = Arc::new(RecordingHandler::default());
