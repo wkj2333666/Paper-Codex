@@ -46,15 +46,13 @@ export function PanelCollapseButton({ label, direction, onCollapse }: {
   </button>
 }
 
-export function MobilePanelRails({ showPaperGraph, showCodex = true, onOpen }: {
-  showPaperGraph: boolean
+export function MobilePanelRails({ showCodex = true, onOpen }: {
   showCodex?: boolean
   onOpen: (panel: PanelName, trigger: HTMLButtonElement) => void
 }) {
   return <div className="mobile-panel-rails">
     <PanelRail panel="sidebar" label="文件树" side="left" onExpand={trigger => onOpen("sidebar", trigger)} />
     <div className="mobile-panel-rails-right">
-      {showPaperGraph && <PanelRail panel="paperGraph" label="相关知识" side="right" onExpand={trigger => onOpen("paperGraph", trigger)} />}
       {showCodex && <PanelRail panel="codex" label="Codex" side="right" onExpand={trigger => onOpen("codex", trigger)} />}
     </div>
   </div>

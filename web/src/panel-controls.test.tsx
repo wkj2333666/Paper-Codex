@@ -17,12 +17,10 @@ describe("panel controls", () => {
     expect(collapse).toContain('aria-expanded="true"')
   })
 
-  it("only exposes the paper graph rail on paper pages", () => {
-    const hidden = renderToStaticMarkup(<MobilePanelRails showPaperGraph={false} onOpen={() => {}} />)
-    const shown = renderToStaticMarkup(<MobilePanelRails showPaperGraph onOpen={() => {}} />)
+  it("does not duplicate the paper graph action as a narrow-screen rail", () => {
+    const html = renderToStaticMarkup(<MobilePanelRails onOpen={() => {}} />)
 
-    expect(hidden).not.toContain("相关知识")
-    expect(shown).toContain("相关知识")
-    expect(shown).toContain("Codex")
+    expect(html).not.toContain("相关知识")
+    expect(html).toContain("Codex")
   })
 })
