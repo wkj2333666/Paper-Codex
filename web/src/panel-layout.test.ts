@@ -12,7 +12,9 @@ describe("collapsible workspace layout", () => {
     expect(panelLayout).toMatch(/sidebar-collapsed[^}]*--sidebar-track-width:\s*42px/)
     expect(panelLayout).toMatch(/codex-collapsed[^}]*--codex-track-width:\s*42px/)
     expect(panelLayout).toMatch(/grid-template-columns:\s*var\(--sidebar-track-width\)[^;]*var\(--codex-track-width\)/)
-    expect(panelLayout).toMatch(/paper-graph-collapsed[^}]*42px/)
+    const collapsedPaper = panelLayout.match(/\.paper-page\.paper-graph-collapsed\s*\{([^}]*)\}/)?.[1] ?? ""
+    expect(collapsedPaper).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/)
+    expect(collapsedPaper).not.toContain("42px")
   })
 
   it("pins every desktop region to a stable grid column when optional dividers disappear", () => {
