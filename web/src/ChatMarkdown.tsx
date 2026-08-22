@@ -1,5 +1,7 @@
 import ReactMarkdown from "react-markdown"
+import rehypeKatex from "rehype-katex"
 import remarkGfm from "remark-gfm"
+import remarkMath from "remark-math"
 
 interface MarkdownNode {
   type: string
@@ -104,7 +106,10 @@ function remarkChatMarkdownCompatibility(options: { source: string }) {
 
 export function ChatMarkdown({ children }: { children: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm, [remarkChatMarkdownCompatibility, { source: children }]]}>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath, [remarkChatMarkdownCompatibility, { source: children }]]}
+      rehypePlugins={[rehypeKatex]}
+    >
       {children}
     </ReactMarkdown>
   )
