@@ -33,6 +33,14 @@ describe("ChatMarkdown", () => {
     expect(quotedFence).toContain("<code class=\"language-text\">**结论。**目前\n</code>")
   })
 
+  it("renders inline and display math with KaTeX", () => {
+    const html = renderMarkdown("内联 $x^2$。\n\n$$\ny = x + 1\n$$")
+    expect(html).toContain('class="katex"')
+    expect(html).toContain('class="katex-display"')
+    expect(html).not.toContain("$x^2$")
+    expect(html).not.toContain("$$")
+  })
+
   it("never rewrites link destinations", () => {
     expect(renderMarkdown("[链接](https://example.test/**a.**b)")).toContain(
       '<a href="https://example.test/**a.**b">链接</a>',
