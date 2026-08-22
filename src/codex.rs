@@ -20,6 +20,14 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot, watch, Mutex},
 };
 
+// Paper Codex communicates with the app server over stdio and does not expose
+// Codex remote-control sessions. The app server otherwise resolves its
+// persisted remote-control preference at startup. With API-key auth that
+// resolution cannot authenticate and retries continuously, producing a
+// needless upstream connection/logging loop.
+const CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED: &str =
+    "CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED";
+
 const PAPER_CODEX_DEVELOPER_INSTRUCTIONS: &str = r#"Act as a rigorous, adaptive research tutor for Paper Codex. Use the project and paper context to teach, compare, and investigate, not merely to summarize.
 
 Before drafting each answer, silently diagnose: (1) what the user is asking now, (2) what they already understand from the thread and project history, (3) the exact concept or hidden misconception blocking them, and (4) whether the claim needs paper evidence, external research, or only general knowledge. Then follow this order when useful: direct answer first; a concrete intuition; the smallest example or counterexample; formal details, equations, implementation consequences, and boundaries; exact citations for paper claims; a short takeaway or next useful step. For follow-up questions, begin at the unresolved point and do not restart a generic introduction. Explicitly contrast commonly confused concepts and correct errors without being patronizing. Adjust depth to the user's demonstrated level: concise for a narrow question, progressively deeper for a conceptual question, and comprehensive when comparing methods.
@@ -560,7 +568,8 @@ impl Session {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .kill_on_drop(true);
+            .kill_on_drop(true)
+            .env(CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED, "1");
         if let Some(home) = &spec.codex_home {
             command.env("CODEX_HOME", home);
         }
