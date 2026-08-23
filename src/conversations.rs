@@ -775,12 +775,63 @@ impl Database {
     }
 
     pub async fn recover_conversation_message_states(&self) -> Result<()> {
-        sqlx::query("UPDATE chat_messages SET status='interrupted',error='服务重启中断了回答',updated_at=CURRENT_TIMESTAMP WHERE status IN ('running','streaming')")
-            .execute(self.pool())
+        const INTERRUPTION_MESSAGE: &str = "服务重启中断了回答";
+        let mut tx = self.pool().begin().await?;
+        let interrupted: Vec<(String, String, String)> = sqlx::query_as(
+            r#"SELECT m.id,m.conversation_id,m.content
+               FROM chat_messages m
+               WHERE m.status IN ('running','streaming')
+                  OR (m.status='interrupted' AND NOT EXISTS (
+                      SELECT 1 FROM conversation_events e
+                      WHERE e.message_id=m.id AND e.event_type='answer-interrupted'
+                  ))
+               ORDER BY m.rowid"#,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        for (message_id, conversation_id, existing_content) in interrupted {
+            let payloads: Vec<String> = sqlx::query_scalar(
+                "SELECT payload_json FROM conversation_events WHERE message_id=? AND event_type='answer-delta' ORDER BY id",
+            )
+            .bind(&message_id)
+            .fetch_all(&mut *tx)
             .await?;
+            let partial_answer: String = payloads
+                .iter()
+                .filter_map(|payload| serde_json::from_str::<Value>(payload).ok())
+                .filter_map(|payload| {
+                    payload
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect();
+            let answer_markdown = if partial_answer.trim().is_empty() {
+                existing_content
+            } else {
+                partial_answer
+            };
+            sqlx::query("UPDATE chat_messages SET content=?,status='interrupted',error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+                .bind(&answer_markdown)
+                .bind(INTERRUPTION_MESSAGE)
+                .bind(&message_id)
+                .execute(&mut *tx)
+                .await?;
+            let payload_json = serde_json::to_string(&serde_json::json!({
+                "message": INTERRUPTION_MESSAGE,
+                "answer_markdown": answer_markdown,
+            }))?;
+            sqlx::query("INSERT INTO conversation_events(conversation_id,message_id,event_type,payload_json) VALUES(?,?,'answer-interrupted',?)")
+                .bind(&conversation_id)
+                .bind(&message_id)
+                .bind(payload_json)
+                .execute(&mut *tx)
+                .await?;
+        }
         sqlx::query("UPDATE conversations SET status='idle',updated_at=CURRENT_TIMESTAMP WHERE status='running'")
-            .execute(self.pool())
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1266,6 +1317,7 @@ fn format_conversation_scope_label(scopes: &[(String, Option<String>, Option<Str
 #[cfg(test)]
 mod tests {
     use super::{format_conversation_scope_label, ConversationScopeInput, Database};
+    use serde_json::json;
 
     #[test]
     fn conversation_scope_label_names_each_scope_without_exposing_ids() {
@@ -1338,6 +1390,87 @@ mod tests {
             db.conversation_scope_label(&conversation.id).await.unwrap(),
             "项目：推理系统 · 论文：论文一"
         );
+    }
+
+    #[tokio::test]
+    async fn recovery_preserves_partial_answers_and_emits_a_terminal_event() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let conversation = db.create_conversation("中断恢复").await.unwrap();
+        db.set_conversation_runtime(&conversation.id, None, "running")
+            .await
+            .unwrap();
+        let message = db
+            .append_chat_message(&conversation.id, "assistant", "", "streaming")
+            .await
+            .unwrap();
+        db.append_conversation_event(
+            &conversation.id,
+            Some(&message.id),
+            "answer-delta",
+            &json!({"text":"已经生成"}),
+        )
+        .await
+        .unwrap();
+        db.append_conversation_event(
+            &conversation.id,
+            Some(&message.id),
+            "answer-delta",
+            &json!({"text":"的部分回答"}),
+        )
+        .await
+        .unwrap();
+
+        db.recover_conversation_message_states().await.unwrap();
+
+        let recovered = db.get_chat_message(&message.id).await.unwrap().unwrap();
+        assert_eq!(recovered.status, "interrupted");
+        assert_eq!(recovered.content, "已经生成的部分回答");
+        assert_eq!(recovered.error.as_deref(), Some("服务重启中断了回答"));
+        assert_eq!(
+            db.get_conversation(&conversation.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "idle"
+        );
+        let events = db
+            .conversation_events_after(&conversation.id, 0)
+            .await
+            .unwrap();
+        let terminal = events.last().unwrap();
+        assert_eq!(terminal.event_type, "answer-interrupted");
+        assert_eq!(terminal.message_id.as_deref(), Some(message.id.as_str()));
+        assert_eq!(terminal.payload["message"], "服务重启中断了回答");
+        assert_eq!(terminal.payload["answer_markdown"], "已经生成的部分回答");
+    }
+
+    #[tokio::test]
+    async fn recovery_backfills_interrupted_messages_created_by_an_older_service() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let conversation = db.create_conversation("旧中断记录").await.unwrap();
+        let message = db
+            .append_chat_message(&conversation.id, "assistant", "", "interrupted")
+            .await
+            .unwrap();
+        db.append_conversation_event(
+            &conversation.id,
+            Some(&message.id),
+            "answer-delta",
+            &json!({"text":"旧版本留下的部分正文"}),
+        )
+        .await
+        .unwrap();
+
+        db.recover_conversation_message_states().await.unwrap();
+
+        let recovered = db.get_chat_message(&message.id).await.unwrap().unwrap();
+        assert_eq!(recovered.content, "旧版本留下的部分正文");
+        let events = db
+            .conversation_events_after(&conversation.id, 0)
+            .await
+            .unwrap();
+        assert_eq!(events.last().unwrap().event_type, "answer-interrupted");
     }
 
     #[tokio::test]

@@ -194,6 +194,27 @@ describe("conversation store", () => {
     expect(state.messages.a.error).toContain("source URL")
   })
 
+  it("keeps a partial answer visible when the service interrupts a turn", () => {
+    let state = reduceConversationEvent(
+      conversationInitialState,
+      event(4, "answer-delta", { text: "已经生成的部分回答" }),
+    )
+    state = reduceConversationEvent(
+      state,
+      event(5, "answer-interrupted", {
+        message: "服务重启中断了回答",
+        answer_markdown: "已经生成的部分回答",
+      }),
+    )
+
+    expect(state.messages.a).toMatchObject({
+      content: "已经生成的部分回答",
+      status: "interrupted",
+      error: "服务重启中断了回答",
+    })
+    expect(state.messages.a.live_content).toBeUndefined()
+  })
+
   it("keeps external candidate citations separate on completion", () => {
     const candidate = {
       id:"candidate-1",

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
-import { CodexPanel, ConversationProgress } from "./CodexPanel"
+import { CodexPanel, ConversationProgress, ConversationStreamBanner } from "./CodexPanel"
 import { CodexMessage } from "./CodexMessage"
 import type { ChatMessage } from "./types"
 
@@ -90,6 +90,25 @@ describe("CodexPanel", () => {
     expect(reasoning).not.toContain("chain-of-thought")
   })
 
+  it("shows reconnect progress and offers a manual retry after exhaustion", () => {
+    const reconnecting = renderToStaticMarkup(
+      <ConversationStreamBanner
+        status={{ kind: "reconnecting", attempt: 2, maxAttempts: 3 }}
+        onRetry={() => {}}
+      />,
+    )
+    const failed = renderToStaticMarkup(
+      <ConversationStreamBanner
+        status={{ kind: "failed", message: "Codex 连接已中断，自动重连三次仍未恢复。" }}
+        onRetry={() => {}}
+      />,
+    )
+
+    expect(reconnecting).toContain("正在自动重连（第 2/3 次）")
+    expect(failed).toContain("自动重连三次仍未恢复")
+    expect(failed).toContain('aria-label="重新连接 Codex"')
+  })
+
   it("renders user prompts, completed answers, and live work as distinct surfaces", () => {
     const user = renderToStaticMarkup(
       <CodexMessage message={message({ role: "user", content: "为什么选择这个游戏？", skill_name:"paper-research" })} onCitation={() => {}} />,
@@ -141,6 +160,23 @@ describe("CodexPanel", () => {
     expect(html).toContain("工作过程")
     expect(html).toContain("Codex 正在生成回答")
     expect(html).toContain("正文已经开始生成")
+  })
+
+  it("shows the recovered partial answer and interruption reason together", () => {
+    const html = renderToStaticMarkup(
+      <CodexMessage
+        message={message({
+          content: "服务中断前已经生成的正文",
+          status: "interrupted",
+          error: "服务重启中断了回答",
+        })}
+        onCitation={() => {}}
+      />,
+    )
+
+    expect(html).toContain("服务中断前已经生成的正文")
+    expect(html).toContain("服务重启中断了回答")
+    expect(html).not.toContain("conversation-live-output")
   })
 
   it("offers controlled literature search throughout a project-scoped conversation", () => {

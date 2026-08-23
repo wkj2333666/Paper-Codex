@@ -694,6 +694,24 @@
   font-size: 10px;
 }
 
+.codex-stream-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+}
+
+.codex-stream-error button {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid currentcolor;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
 .codex-composer {
   position: relative;
   z-index: 8;
