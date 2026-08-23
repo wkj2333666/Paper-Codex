@@ -44,6 +44,15 @@ describe("conversation scroll controller", () => {
     expect(controller.isPinned()).toBe(true)
   })
 
+  it("can follow high-frequency content without smooth-scroll animation", () => {
+    const fake = viewport(0)
+    const controller = new ConversationScrollController(() => fake.value)
+
+    controller.followContent("auto")
+
+    expect(fake.calls).toEqual([{ top: 1000, behavior: "auto" }])
+  })
+
   it("resets follow mode for a newly loaded conversation", () => {
     const fake = viewport(100)
     const controller = new ConversationScrollController(() => fake.value)

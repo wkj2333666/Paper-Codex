@@ -32,6 +32,9 @@ describe("native Codex goal and work surfaces", () => {
       ] },
       items: { "tool-1": { item_id: "tool-1", item_type: "webSearch", label: "检索论文", status: "completed" } },
     }} />)
+    expect(html).toContain('class="codex-native-work codex-native-work-scroll"')
+    expect(html).toContain('aria-label="Codex 工作过程"')
+    expect(html).toContain('tabindex="0"')
     expect(html).toContain("正在核对论文证据")
     expect(html).not.toContain("旧的思考")
     expect(html).toContain("定位证据")
