@@ -18,8 +18,8 @@ use std::{
 use uuid::Uuid;
 
 const PROJECT_NOTE_CHAR_LIMIT: usize = 12_000;
-const PROJECT_MEMORY_CHAR_LIMIT: usize = 16_000;
-const PROJECT_MEMORY_MESSAGE_CHAR_LIMIT: usize = 2_000;
+const PROJECT_HISTORY_FILE_CHAR_LIMIT: usize = 16_000;
+const PROJECT_HISTORY_MESSAGE_CHAR_LIMIT: usize = 2_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextPaper {
@@ -119,6 +119,11 @@ impl ConversationContextBuilder {
         scopes: &[ConversationScope],
     ) -> Result<Vec<ContextPaper>> {
         let paper_ids = self.resolve_paper_ids(scopes).await?;
+        let current_paper_ids = scopes
+            .iter()
+            .filter(|scope| scope.scope_type == "paper")
+            .filter_map(|scope| scope.scope_id.clone())
+            .collect::<BTreeSet<_>>();
         let mut scope_summary = Vec::new();
         for scope in scopes {
             match (scope.scope_type.as_str(), scope.scope_id.as_deref()) {
@@ -229,7 +234,7 @@ impl ConversationContextBuilder {
             self.append_memory_context(&mut summary, project_id, conversation_id)
                 .await?;
             self.append_project_note(&mut summary, project_id).await?;
-            self.append_project_conversation_memory(&mut summary, project_id, conversation_id)
+            self.append_project_conversation_index(&mut summary, root, project_id, conversation_id)
                 .await?;
         }
         if let (Some(research), Some(project_id)) = (&self.research, exact_project_scope(scopes)) {
@@ -249,13 +254,33 @@ impl ConversationContextBuilder {
             }
         }
         summary.push_str("\n## 论文与外部证据\n");
-        for paper in &papers {
-            summary.push_str(&format!(
-                "\n- `{}` — {}（revision `{}`，{} 页，文件 `papers/{}`）",
-                paper.paper_id, paper.title, paper.revision, paper.page_count, paper.file
-            ));
-            if let Some(analysis) = self.db.paper_analysis(&paper.paper_id).await? {
-                append_analysis_summary(&mut summary, &analysis);
+        if papers
+            .iter()
+            .any(|paper| current_paper_ids.contains(&paper.paper_id))
+        {
+            summary.push_str("\n### 当前论文\n");
+            for paper in papers
+                .iter()
+                .filter(|paper| current_paper_ids.contains(&paper.paper_id))
+            {
+                append_paper_reference(&mut summary, paper);
+                if let Some(analysis) = self.db.paper_analysis(&paper.paper_id).await? {
+                    append_analysis_summary(&mut summary, &analysis);
+                }
+            }
+        }
+        if papers
+            .iter()
+            .any(|paper| !current_paper_ids.contains(&paper.paper_id))
+        {
+            summary.push_str(
+                "\n### 其他可读论文索引（按需）\n\n这些论文不会自动展开分析摘要。只有当前问题确实需要跨论文比较或补充证据时，才主动读取对应文件。\n",
+            );
+            for paper in papers
+                .iter()
+                .filter(|paper| !current_paper_ids.contains(&paper.paper_id))
+            {
+                append_paper_reference(&mut summary, paper);
             }
         }
         summary.push('\n');
@@ -338,9 +363,10 @@ impl ConversationContextBuilder {
         Ok(())
     }
 
-    async fn append_project_conversation_memory(
+    async fn append_project_conversation_index(
         &self,
         summary: &mut String,
+        root: &Path,
         project_id: &str,
         conversation_id: &str,
     ) -> Result<()> {
@@ -348,47 +374,51 @@ impl ConversationContextBuilder {
             .db
             .recent_project_conversation_memories(project_id, conversation_id, 4, 6)
             .await?;
-        let mut remaining = PROJECT_MEMORY_CHAR_LIMIT;
-        let mut rendered = String::new();
+        if memories.is_empty() {
+            return Ok(());
+        }
+        let history_dir = root.join("history");
+        tokio::fs::create_dir_all(&history_dir).await?;
+        let mut index = String::new();
         for memory in memories {
-            if remaining == 0 {
-                break;
-            }
             let title = bounded_chars(memory.title.trim(), 120);
-            let heading = format!(
-                "\n### {}\n",
-                if title.is_empty() {
-                    "未命名对话"
-                } else {
-                    &title
-                }
+            let title = if title.is_empty() {
+                "未命名对话".to_owned()
+            } else {
+                title
+            };
+            let file = format!("{}.md", safe_key(&memory.conversation_id));
+            let paper_scope = render_conversation_paper_scopes(&memory.paper_scopes);
+            index.push_str(&format!(
+                "- {} — 更新于 {}；{}；文件：`history/{file}`\n",
+                title, memory.updated_at, paper_scope
+            ));
+
+            let mut document = format!(
+                "# {}\n\n这是同项目历史对话的按需参考，不是当前对话历史。只有当前问题确实需要时才使用，且不得覆盖当前论文和当前用户请求。\n\n- 对话 ID：`{}`\n- 更新时间：{}\n- {}\n\n## 对话摘录\n\n",
+                title, memory.conversation_id, memory.updated_at, paper_scope
             );
-            if heading.chars().count() > remaining {
-                break;
-            }
-            rendered.push_str(&heading);
-            remaining -= heading.chars().count();
+            let mut remaining =
+                PROJECT_HISTORY_FILE_CHAR_LIMIT.saturating_sub(document.chars().count());
             for (role, content) in memory.messages {
                 if remaining == 0 {
                     break;
                 }
                 let label = if role == "user" { "用户" } else { "Codex" };
-                let content = bounded_chars(content.trim(), PROJECT_MEMORY_MESSAGE_CHAR_LIMIT);
+                let content = bounded_chars(content.trim(), PROJECT_HISTORY_MESSAGE_CHAR_LIMIT);
                 if content.is_empty() {
                     continue;
                 }
                 let entry = bounded_chars(&format!("- {label}：{content}\n"), remaining);
                 remaining = remaining.saturating_sub(entry.chars().count());
-                rendered.push_str(&entry);
+                document.push_str(&entry);
             }
-        }
-        if rendered.trim().is_empty() {
-            return Ok(());
+            atomic_write(&history_dir.join(file), document.as_bytes()).await?;
         }
         summary.push_str(
-            "\n## 同项目近期对话\n\n以下摘录只用于承接用户认知、术语和研究方向，不替代当前对话历史，也不能覆盖当前问题。\n",
+            "\n## 同项目历史对话索引\n\n历史正文不会自动注入当前上下文。只有当前问题确实需要跨论文比较或回顾既往讨论时，才主动读取对应文件；当前对话、当前论文和当前用户请求始终优先。\n\n",
         );
-        summary.push_str(&rendered);
+        summary.push_str(&index);
         Ok(())
     }
 
@@ -429,6 +459,22 @@ fn render_memory_items(items: &[crate::conversations::MemoryItem]) -> String {
             format!("- [{}] {value}\n", item.kind)
         })
         .collect()
+}
+
+fn render_conversation_paper_scopes(scopes: &[(String, String)]) -> String {
+    if scopes.is_empty() {
+        return "论文：未绑定（项目范围）".to_owned();
+    }
+    let mut rendered = scopes
+        .iter()
+        .take(4)
+        .map(|(paper_id, title)| format!("`{paper_id}` — {}", bounded_chars(title, 160)))
+        .collect::<Vec<_>>()
+        .join("；");
+    if scopes.len() > 4 {
+        rendered.push_str(&format!("；另有 {} 篇", scopes.len() - 4));
+    }
+    format!("论文：{rendered}")
 }
 
 fn bounded_chars(value: &str, limit: usize) -> String {
@@ -488,6 +534,13 @@ fn append_analysis_summary(summary: &mut String, analysis: &Value) {
             }
         }
     }
+}
+
+fn append_paper_reference(summary: &mut String, paper: &ContextPaper) {
+    summary.push_str(&format!(
+        "\n- `{}` — {}（revision `{}`，{} 页，文件 `papers/{}`）",
+        paper.paper_id, paper.title, paper.revision, paper.page_count, paper.file
+    ));
 }
 
 #[cfg(test)]

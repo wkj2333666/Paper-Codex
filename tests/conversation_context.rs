@@ -129,7 +129,7 @@ async fn project_scope_records_the_research_goal() {
 }
 
 #[tokio::test]
-async fn project_context_includes_bounded_project_notes_and_sibling_chat_memory() {
+async fn project_context_indexes_sibling_chats_without_injecting_their_messages() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = Workspace::initialize(temp.path()).await.unwrap();
     let db = Database::connect("sqlite::memory:").await.unwrap();
@@ -147,13 +147,62 @@ async fn project_context_includes_bounded_project_notes_and_sibling_chat_memory(
     .await
     .unwrap();
 
+    for (paper_id, title, revision, evidence, takeaway) in [
+        (
+            "paper:dino",
+            "DINO 论文",
+            "revision-dino",
+            "DINO evidence",
+            "不应自动注入的 DINO 结论",
+        ),
+        (
+            "paper:dp3",
+            "DP3 论文",
+            "revision-dp3",
+            "DP3 evidence",
+            "应直接提供的 DP3 结论",
+        ),
+    ] {
+        db.insert_paper(paper_id, title).await.unwrap();
+        db.add_paper_to_project(paper_id, &project_id)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE papers SET canonical_sha256=? WHERE id=?")
+            .bind(revision)
+            .bind(paper_id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        atomic_write(
+            &workspace
+                .state_dir()
+                .join(format!("cache/extraction/{revision}/pages.md")),
+            format!("<!-- page:1 -->\n{evidence}").as_bytes(),
+        )
+        .await
+        .unwrap();
+        db.upsert_paper_analysis(
+            paper_id,
+            revision,
+            &serde_json::json!({"takeaway":takeaway}),
+        )
+        .await
+        .unwrap();
+    }
+
     let earlier = db.create_conversation("DINO 入门").await.unwrap();
     db.replace_conversation_scopes(
         &earlier.id,
-        &[ConversationScopeInput {
-            scope_type: "project".into(),
-            scope_id: Some(project_id.clone()),
-        }],
+        &[
+            ConversationScopeInput {
+                scope_type: "project".into(),
+                scope_id: Some(project_id.clone()),
+            },
+            ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:dino".into()),
+            },
+        ],
     )
     .await
     .unwrap();
@@ -175,14 +224,22 @@ async fn project_context_includes_bounded_project_notes_and_sibling_chat_memory(
     .unwrap();
 
     let current = db.create_conversation("继续学习").await.unwrap();
-    let scope = ConversationScope {
-        conversation_id: current.id.clone(),
-        scope_type: "project".into(),
-        scope_id: Some(project_id),
-        added_at: "2026-01-01 00:00:00".into(),
-    };
+    let scopes = [
+        ConversationScope {
+            conversation_id: current.id.clone(),
+            scope_type: "project".into(),
+            scope_id: Some(project_id),
+            added_at: "2026-01-01 00:00:00".into(),
+        },
+        ConversationScope {
+            conversation_id: current.id.clone(),
+            scope_type: "paper".into(),
+            scope_id: Some("paper:dp3".into()),
+            added_at: "2026-01-01 00:00:00".into(),
+        },
+    ];
     let bundle = ConversationContextBuilder::new(db, workspace)
-        .refresh(&current.id, &[scope])
+        .refresh(&current.id, &scopes)
         .await
         .unwrap();
     let summary = tokio::fs::read_to_string(bundle.summary_path)
@@ -191,10 +248,23 @@ async fn project_context_includes_bounded_project_notes_and_sibling_chat_memory(
 
     assert!(summary.contains("## 当前项目笔记"));
     assert!(summary.contains("重点比较 SigLIP 与 DINOv2"));
-    assert!(summary.contains("## 同项目近期对话"));
+    assert!(summary.contains("## 同项目历史对话索引"));
     assert!(summary.contains("DINO 入门"));
-    assert!(summary.contains("EMA teacher 为什么不是预训练教师"));
-    assert!(summary.contains("只用于承接用户认知"));
+    assert!(summary.contains("论文：`paper:dino` — DINO 论文"));
+    assert!(summary.contains(&format!("history/{}.md", earlier.id)));
+    assert!(!summary.contains("EMA teacher 为什么不是预训练教师"));
+    assert!(!summary.contains("teacher 是 student 参数的指数移动平均副本"));
+    assert!(summary.contains("应直接提供的 DP3 结论"));
+    assert!(!summary.contains("不应自动注入的 DINO 结论"));
+    assert!(summary.contains("`paper:dino` — DINO 论文"));
+    assert!(summary.contains("papers/paper_dino-revision-dino.md"));
+
+    let history = tokio::fs::read_to_string(bundle.root.join(format!("history/{}.md", earlier.id)))
+        .await
+        .unwrap();
+    assert!(history.contains("EMA teacher 为什么不是预训练教师"));
+    assert!(history.contains("teacher 是 student 参数的指数移动平均副本"));
+    assert!(history.contains("`paper:dino` — DINO 论文"));
 }
 
 #[tokio::test]
@@ -263,31 +333,42 @@ async fn context_separates_global_profile_from_project_learning_state() {
 }
 
 #[tokio::test]
-async fn project_chat_memory_never_crosses_project_boundaries_or_echoes_current_chat() {
+async fn project_chat_index_never_crosses_project_boundaries_or_echoes_current_chat() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = Workspace::initialize(temp.path()).await.unwrap();
     let db = Database::connect("sqlite::memory:").await.unwrap();
     let project = db.create_project("inside", "当前项目", "").await.unwrap();
     let other = db.create_project("outside", "其他项目", "").await.unwrap();
 
-    for (title, project_id, text) in [
-        ("同项目旧对话", &project, "允许出现的记忆"),
-        ("其他项目对话", &other, "绝不能出现的秘密"),
-    ] {
-        let conversation = db.create_conversation(title).await.unwrap();
-        db.replace_conversation_scopes(
-            &conversation.id,
-            &[ConversationScopeInput {
-                scope_type: "project".into(),
-                scope_id: Some(project_id.clone()),
-            }],
-        )
+    let inside = db.create_conversation("同项目旧对话").await.unwrap();
+    db.replace_conversation_scopes(
+        &inside.id,
+        &[ConversationScopeInput {
+            scope_type: "project".into(),
+            scope_id: Some(project.clone()),
+        }],
+    )
+    .await
+    .unwrap();
+    db.append_chat_message(&inside.id, "user", "允许按需读取的记忆", "completed")
         .await
         .unwrap();
-        db.append_chat_message(&conversation.id, "user", text, "completed")
-            .await
-            .unwrap();
-    }
+    let inside_id = inside.id;
+
+    let outside = db.create_conversation("其他项目对话").await.unwrap();
+    db.replace_conversation_scopes(
+        &outside.id,
+        &[ConversationScopeInput {
+            scope_type: "project".into(),
+            scope_id: Some(other),
+        }],
+    )
+    .await
+    .unwrap();
+    db.append_chat_message(&outside.id, "user", "绝不能出现的秘密", "completed")
+        .await
+        .unwrap();
+    let outside_id = outside.id;
 
     let current = db.create_conversation("当前对话").await.unwrap();
     db.replace_conversation_scopes(
@@ -316,13 +397,31 @@ async fn project_chat_memory_never_crosses_project_boundaries_or_echoes_current_
         .await
         .unwrap();
 
-    assert!(summary.contains("允许出现的记忆"));
+    assert!(summary.contains("同项目旧对话"));
+    assert!(!summary.contains("允许按需读取的记忆"));
+    assert!(bundle
+        .root
+        .join(format!("history/{inside_id}.md"))
+        .is_file());
+    let history = tokio::fs::read_to_string(bundle.root.join(format!("history/{inside_id}.md")))
+        .await
+        .unwrap();
+    assert!(history.contains("允许按需读取的记忆"));
     assert!(!summary.contains("绝不能出现的秘密"));
+    assert!(!summary.contains("其他项目对话"));
+    assert!(!bundle
+        .root
+        .join(format!("history/{outside_id}.md"))
+        .exists());
     assert!(!summary.contains("当前消息不应被重复注入"));
+    assert!(!bundle
+        .root
+        .join(format!("history/{}.md", current.id))
+        .exists());
 }
 
 #[tokio::test]
-async fn project_notes_and_chat_memory_are_bounded() {
+async fn project_notes_and_on_demand_chat_files_are_bounded() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = Workspace::initialize(temp.path()).await.unwrap();
     let db = Database::connect("sqlite::memory:").await.unwrap();
@@ -368,9 +467,13 @@ async fn project_notes_and_chat_memory_are_bounded() {
         .await
         .unwrap();
 
-    assert!(summary.chars().count() < 31_000);
+    assert!(summary.chars().count() < 15_000);
     assert!(summary.contains(&format!("{}…", "笔".repeat(11_999))));
-    assert!(summary.contains(&format!("{}…", "忆".repeat(1_999))));
+    assert!(!summary.contains('忆'));
+    let history = tokio::fs::read_to_string(bundle.root.join(format!("history/{}.md", earlier.id)))
+        .await
+        .unwrap();
+    assert!(history.contains(&format!("{}…", "忆".repeat(1_999))));
 }
 
 #[tokio::test]

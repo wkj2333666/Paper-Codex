@@ -896,6 +896,7 @@ impl ConversationEngine {
         } else {
             conversation.thread_id.clone()
         };
+        let starting_new_thread = thread_id.is_none();
         let started_with_dynamic_tools = thread_id.is_none() && research_handler.is_some();
         let recent_history = self
             .db
@@ -917,7 +918,7 @@ impl ConversationEngine {
             research_handler.is_some(),
             teaching_intent,
         );
-        if replace_outdated_thread {
+        if starting_new_thread {
             let history = self
                 .db
                 .completed_conversation_history_before(
@@ -994,6 +995,30 @@ impl ConversationEngine {
                 Err(error) => return Err(error),
             }
         };
+        let (dynamic_tools_initialized, dynamic_tools_version) = if started_with_dynamic_tools {
+            let initialized = self.codex.capabilities().supports_dynamic_tools;
+            (
+                initialized,
+                if initialized {
+                    ProjectResearchToolHandler::DEFINITIONS_VERSION
+                } else {
+                    0
+                },
+            )
+        } else {
+            (
+                conversation.dynamic_tools_initialized,
+                conversation.dynamic_tools_version,
+            )
+        };
+        self.db
+            .persist_conversation_thread(
+                &conversation.id,
+                &outcome.thread_id,
+                dynamic_tools_initialized,
+                dynamic_tools_version,
+            )
+            .await?;
         if outcome.status != "completed" {
             let status = if outcome.status == "interrupted" {
                 "cancelled"
@@ -1140,22 +1165,6 @@ impl ConversationEngine {
                 None,
             )
             .await?;
-        let (dynamic_tools_initialized, dynamic_tools_version) = if started_with_dynamic_tools {
-            let initialized = self.codex.capabilities().supports_dynamic_tools;
-            (
-                initialized,
-                if initialized {
-                    ProjectResearchToolHandler::DEFINITIONS_VERSION
-                } else {
-                    0
-                },
-            )
-        } else {
-            (
-                conversation.dynamic_tools_initialized,
-                conversation.dynamic_tools_version,
-            )
-        };
         self.db
             .complete_conversation_runtime(
                 &conversation.id,

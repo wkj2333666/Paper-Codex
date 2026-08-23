@@ -94,6 +94,15 @@ async fn conversations_keep_the_capabilities_default_reasoning_effort() {
 }
 
 async fn harness() -> (Arc<ConversationEngine>, tempfile::TempDir) {
+    let (engine, temp, _events) = harness_with_events().await;
+    (engine, temp)
+}
+
+async fn harness_with_events() -> (
+    Arc<ConversationEngine>,
+    tempfile::TempDir,
+    tokio::sync::broadcast::Receiver<paper_codex::codex::CodexEvent>,
+) {
     let temp = tempfile::tempdir().unwrap();
     let workspace = Workspace::initialize(temp.path()).await.unwrap();
     let db = Database::connect("sqlite::memory:").await.unwrap();
@@ -110,10 +119,11 @@ async fn harness() -> (Arc<ConversationEngine>, tempfile::TempDir) {
         .await
         .unwrap();
     let codex = CodexRuntime::spawn(fake_command()).await.unwrap();
+    let events = codex.subscribe();
     let engine = ConversationEngine::start(db, workspace, codex)
         .await
         .unwrap();
-    (engine, temp)
+    (engine, temp, events)
 }
 
 async fn wait_done(db: &Database, message_id: &str) {
@@ -130,6 +140,23 @@ async fn wait_done(db: &Database, message_id: &str) {
                     "{}",
                     message.error.unwrap_or_default()
                 );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn wait_terminal(db: &Database, message_id: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let status = db.message_status(message_id).await.unwrap();
+            if matches!(
+                status.as_str(),
+                "completed" | "failed" | "cancelled" | "interrupted"
+            ) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -196,6 +223,86 @@ async fn runs_fifo_and_resumes_the_same_codex_thread() {
         engine.db.message_citations(&second.id).await.unwrap().len(),
         1
     );
+}
+
+#[tokio::test]
+async fn a_new_thread_receives_the_current_conversation_history_before_continue() {
+    let (engine, _temp, events) = harness_with_events().await;
+    let conversation = engine
+        .create_conversation(
+            "DP3 视觉编码",
+            vec![ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            }],
+        )
+        .await
+        .unwrap();
+    engine
+        .db
+        .append_chat_message(
+            &conversation.id,
+            "user",
+            "DP3 为什么使用点云视觉编码？ observe-turn-params",
+            "completed",
+        )
+        .await
+        .unwrap();
+    engine
+        .db
+        .append_chat_message(&conversation.id, "assistant", "", "failed")
+        .await
+        .unwrap();
+
+    let params = next_turn_params(events);
+    let message = engine
+        .enqueue_message(&conversation.id, "继续")
+        .await
+        .unwrap();
+    let params = tokio::time::timeout(Duration::from_secs(5), params)
+        .await
+        .unwrap();
+    wait_done(&engine.db, &message.id).await;
+
+    let prompt = params["input"][0]["text"].as_str().unwrap();
+    assert!(prompt.contains("DP3 为什么使用点云视觉编码？"));
+    assert!(prompt.contains("当前用户请求始终优先"));
+}
+
+#[tokio::test]
+async fn structured_decode_failure_still_persists_the_codex_thread() {
+    let (engine, _temp) = harness().await;
+    let conversation = engine
+        .create_conversation(
+            "失败后继续",
+            vec![ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            }],
+        )
+        .await
+        .unwrap();
+    let message = engine
+        .enqueue_message(&conversation.id, "invalid-structured")
+        .await
+        .unwrap();
+    wait_terminal(&engine.db, &message.id).await;
+
+    let failed = engine
+        .db
+        .get_chat_message(&message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.status, "failed");
+    assert_eq!(failed.content, "missing fields");
+    let stored = engine
+        .db
+        .get_conversation(&conversation.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.thread_id.as_deref(), Some("thread-fake"));
 }
 
 #[tokio::test]
