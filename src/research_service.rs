@@ -151,7 +151,9 @@ struct ProjectImportPipeline {
 }
 
 impl ProjectResearchToolHandler {
-    pub const DEFINITIONS_VERSION: i64 = 3;
+    // Version 4 also refreshes existing project threads so they adopt the
+    // isolated, on-demand conversation and paper context introduced in v0.5.33.
+    pub const DEFINITIONS_VERSION: i64 = 4;
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(

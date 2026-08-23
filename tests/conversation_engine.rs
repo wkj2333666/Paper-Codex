@@ -898,11 +898,13 @@ async fn outdated_project_thread_is_replaced_with_current_tools_and_bounded_hist
     db.set_conversation_runtime(&conversation.id, Some("legacy-thread"), "idle")
         .await
         .unwrap();
-    sqlx::query("UPDATE conversations SET dynamic_tools_initialized=1 WHERE id=?")
-        .bind(&conversation.id)
-        .execute(db.pool())
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE conversations SET dynamic_tools_initialized=1,dynamic_tools_version=3 WHERE id=?",
+    )
+    .bind(&conversation.id)
+    .execute(db.pool())
+    .await
+    .unwrap();
 
     let research = Arc::new(
         ResearchService::new(
