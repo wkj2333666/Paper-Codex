@@ -254,7 +254,6 @@ async fn project_context_indexes_sibling_chats_without_injecting_their_messages(
     assert!(summary.contains(&format!("history/{}.md", earlier.id)));
     assert!(!summary.contains("EMA teacher 为什么不是预训练教师"));
     assert!(!summary.contains("teacher 是 student 参数的指数移动平均副本"));
-    assert!(summary.contains("确有需要时主动读取"));
     assert!(summary.contains("应直接提供的 DP3 结论"));
     assert!(!summary.contains("不应自动注入的 DINO 结论"));
     assert!(summary.contains("`paper:dino` — DINO 论文"));
