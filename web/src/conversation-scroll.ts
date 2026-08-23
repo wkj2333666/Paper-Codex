@@ -44,11 +44,11 @@ export class ConversationScrollController {
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: "auto" })
   }
 
-  followContent(): void {
+  followContent(behavior: ScrollBehavior = "smooth"): void {
     const viewport = this.viewport()
     if (!viewport || !this.pinned) return
     this.lastScrollTop = viewport.scrollTop
-    viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" })
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior })
   }
 
   isPinned(): boolean {
