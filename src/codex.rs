@@ -1984,6 +1984,63 @@ mod integration_tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn decodes_known_glm_conversation_answer_variants() {
+        let raw = json!({
+            "title": "DP3视觉编码为何更有效",
+            "answer_markdown": "完整正文 [1]",
+            "citations": [{
+                "id": 1,
+                "paper_id": "arxiv:2403.03954",
+                "revision": "revision-sha256",
+                "page": 6,
+                "locator": "Table IV",
+                "quote": "Point cloud 78.3"
+            }],
+            "candidate_citations": [],
+            "annotation_intent": {"persist": false}
+        })
+        .to_string();
+
+        let answer = decode_conversation_answer(&raw).expect("compatible GLM answer");
+
+        assert_eq!(answer.answer_markdown, "完整正文 [1]");
+        assert_eq!(answer.citations[0].id, "1");
+        assert_eq!(answer.citations[0].locator.as_deref(), Some("Table IV"));
+        assert_eq!(answer.citations[0].prefix, "");
+        assert_eq!(answer.citations[0].suffix, "");
+        assert_eq!(answer.citations[0].explanation, "");
+        assert!(answer.annotation_intents.is_empty());
+    }
+
+    #[test]
+    fn does_not_silently_drop_an_incomplete_persistent_glm_annotation_intent() {
+        let raw = json!({
+            "title": "需要保存批注",
+            "answer_markdown": "正文",
+            "citations": [],
+            "candidate_citations": [],
+            "annotation_intent": {"persist": true}
+        })
+        .to_string();
+
+        let error = decode_conversation_answer(&raw).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("incomplete persistent annotation intent"));
+    }
+
+    #[test]
+    fn completed_turn_keeps_a_structured_decode_error_as_outcome_metadata() {
+        let (answer, decode_error) = completed_conversation_answer(true, "completed", "{broken");
+
+        assert!(answer.is_none());
+        assert!(decode_error
+            .as_deref()
+            .is_some_and(|error| error.contains("decode structured conversation answer")));
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn app_server_prepares_private_codex_home() {
