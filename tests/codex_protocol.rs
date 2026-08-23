@@ -974,10 +974,10 @@ async fn resumes_thread_and_parses_two_structured_answers() {
 }
 
 #[tokio::test]
-async fn rejects_invalid_structured_answer_json() {
+async fn returns_invalid_structured_answer_text_for_caller_fallback() {
     let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
     let (_cancel_tx, cancel_rx) = watch::channel(false);
-    let result = runtime
+    let outcome = runtime
         .run_turn(
             CodexTurn {
                 thread_id: None,
@@ -990,8 +990,19 @@ async fn rejects_invalid_structured_answer_json() {
             },
             cancel_rx,
         )
-        .await;
-    assert!(result.is_err());
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.status, "completed");
+    assert_eq!(
+        outcome.final_text,
+        r#"{"answer_markdown":"missing fields"}"#
+    );
+    assert!(outcome.answer.is_none());
+    assert!(outcome
+        .answer_decode_error
+        .as_deref()
+        .is_some_and(|error| error.contains("missing field `citations`")));
 }
 
 #[tokio::test]
