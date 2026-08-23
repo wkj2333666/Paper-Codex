@@ -197,7 +197,7 @@ for raw in sys.stdin:
             send({"method": "test/thread-params", "params": last_thread_request})
         if "runtime-tmp" in text:
             send({"method": "test/runtime-tmp", "params": {"path": os.environ.get("TMPDIR")}})
-        if "settings" in text or "skill-turn" in text:
+        if "settings" in text or "skill-turn" in text or "observe-turn-params" in text:
             send({"method": "test/turn-params", "params": msg["params"]})
         if "fail-me" in text:
             send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "failed", "error": {

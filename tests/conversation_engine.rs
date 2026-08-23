@@ -243,7 +243,7 @@ async fn a_new_thread_receives_the_current_conversation_history_before_continue(
         .append_chat_message(
             &conversation.id,
             "user",
-            "DP3 为什么使用点云视觉编码？",
+            "DP3 为什么使用点云视觉编码？ observe-turn-params",
             "completed",
         )
         .await
