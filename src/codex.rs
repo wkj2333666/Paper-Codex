@@ -481,8 +481,91 @@ pub struct CodexOutcome {
     pub status: String,
     pub final_text: String,
     pub answer: Option<ConversationAnswer>,
+    #[serde(default)]
+    pub answer_decode_error: Option<String>,
     pub error: Option<String>,
     pub failure: Option<CodexFailure>,
+}
+
+fn decode_conversation_answer(raw: &str) -> Result<ConversationAnswer> {
+    if let Ok(answer) = serde_json::from_str(raw) {
+        return Ok(answer);
+    }
+
+    let mut value: Value = serde_json::from_str(raw)
+        .map_err(|error| anyhow::anyhow!("decode structured conversation answer: {error}"))?;
+    normalize_glm_conversation_answer(&mut value)
+        .map_err(|error| anyhow::anyhow!("decode structured conversation answer: {error}"))?;
+    serde_json::from_value(value)
+        .map_err(|error| anyhow::anyhow!("decode structured conversation answer: {error}"))
+}
+
+fn normalize_glm_conversation_answer(value: &mut Value) -> Result<()> {
+    let answer = value
+        .as_object_mut()
+        .context("conversation answer must be a JSON object")?;
+
+    for field in ["citations", "candidate_citations"] {
+        let Some(citations) = answer.get_mut(field).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for citation in citations {
+            let Some(citation) = citation.as_object_mut() else {
+                continue;
+            };
+            if let Some(id) = citation.get_mut("id") {
+                if let Some(number) = id.as_number() {
+                    *id = Value::String(number.to_string());
+                }
+            }
+            if field == "citations" {
+                for display_field in ["prefix", "suffix", "explanation"] {
+                    citation
+                        .entry(display_field.to_owned())
+                        .or_insert_with(|| Value::String(String::new()));
+                }
+            }
+        }
+    }
+
+    if !answer.contains_key("annotation_intents") {
+        if let Some(singular) = answer.remove("annotation_intent") {
+            let intents = match singular {
+                Value::Array(intents) => intents,
+                Value::Object(intent) => {
+                    if intent.get("persist").and_then(Value::as_bool) == Some(false) {
+                        Vec::new()
+                    } else if ["citation_id", "kind", "body", "persist"]
+                        .iter()
+                        .all(|field| intent.contains_key(*field))
+                    {
+                        vec![Value::Object(intent)]
+                    } else {
+                        bail!("incomplete persistent annotation intent");
+                    }
+                }
+                Value::Null => Vec::new(),
+                _ => bail!("annotation_intent must be an object, array, or null"),
+            };
+            answer.insert("annotation_intents".into(), Value::Array(intents));
+        }
+    }
+
+    Ok(())
+}
+
+fn completed_conversation_answer(
+    expects_conversation_answer: bool,
+    status: &str,
+    final_text: &str,
+) -> (Option<ConversationAnswer>, Option<String>) {
+    if !expects_conversation_answer || status != "completed" {
+        return (None, None);
+    }
+    match decode_conversation_answer(final_text) {
+        Ok(answer) => (Some(answer), None),
+        Err(error) => (None, Some(error.to_string())),
+    }
 }
 
 impl CodexOutcome {
@@ -1439,9 +1522,10 @@ impl CodexRuntime {
                 }
                 goal_needs_resume = false;
                 if status == "completed" && expects_conversation_answer {
-                    let answer = Some(
-                        serde_json::from_str(&final_text)
-                            .context("decode structured conversation answer")?,
+                    let (answer, answer_decode_error) = completed_conversation_answer(
+                        expects_conversation_answer,
+                        &status,
+                        &final_text,
                     );
                     return Ok(CodexOutcome {
                         thread_id,
@@ -1449,6 +1533,7 @@ impl CodexRuntime {
                         status,
                         final_text,
                         answer,
+                        answer_decode_error,
                         error,
                         failure,
                     });
@@ -1463,6 +1548,7 @@ impl CodexRuntime {
                     status,
                     final_text,
                     answer: None,
+                    answer_decode_error: None,
                     error,
                     failure,
                 });
@@ -1531,12 +1617,13 @@ impl CodexRuntime {
                             active_goal = goal.active().then_some(goal);
                             terminal_goal = terminal;
                             if terminal && turn_finished {
-                                let answer = if expects_conversation_answer {
-                                    Some(serde_json::from_str(&final_text).context("decode structured conversation answer")?)
-                                } else {
-                                    None
-                                };
-                                return Ok(CodexOutcome { thread_id, turn_id, status:"completed".into(), final_text, answer, error:None, failure:None });
+                                let status = "completed".to_owned();
+                                let (answer, answer_decode_error) = completed_conversation_answer(
+                                    expects_conversation_answer,
+                                    &status,
+                                    &final_text,
+                                );
+                                return Ok(CodexOutcome { thread_id, turn_id, status, final_text, answer, answer_decode_error, error:None, failure:None });
                             }
                         }
                     } else if method == "thread/goal/cleared" {
@@ -1579,12 +1666,12 @@ impl CodexRuntime {
                             turn_finished = true;
                             continue;
                         }
-                        let answer = if status == "completed" && expects_conversation_answer {
-                            Some(serde_json::from_str(&final_text).context("decode structured conversation answer")?)
-                        } else {
-                            None
-                        };
-                        return Ok(CodexOutcome { thread_id, turn_id, status, final_text, answer, error, failure });
+                        let (answer, answer_decode_error) = completed_conversation_answer(
+                            expects_conversation_answer,
+                            &status,
+                            &final_text,
+                        );
+                        return Ok(CodexOutcome { thread_id, turn_id, status, final_text, answer, answer_decode_error, error, failure });
                     } else if message.get("method").is_some() {
                         self.publish(CodexEvent { kind:method.to_owned(), text:None, payload:message }, turn_events);
                     }
@@ -1983,6 +2070,63 @@ fn automatic_skill_request(prompt: &str) -> Option<AutomaticSkillRequest> {
 mod integration_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn decodes_known_glm_conversation_answer_variants() {
+        let raw = json!({
+            "title": "DP3视觉编码为何更有效",
+            "answer_markdown": "完整正文 [1]",
+            "citations": [{
+                "id": 1,
+                "paper_id": "arxiv:2403.03954",
+                "revision": "revision-sha256",
+                "page": 6,
+                "locator": "Table IV",
+                "quote": "Point cloud 78.3"
+            }],
+            "candidate_citations": [],
+            "annotation_intent": {"persist": false}
+        })
+        .to_string();
+
+        let answer = decode_conversation_answer(&raw).expect("compatible GLM answer");
+
+        assert_eq!(answer.answer_markdown, "完整正文 [1]");
+        assert_eq!(answer.citations[0].id, "1");
+        assert_eq!(answer.citations[0].locator.as_deref(), Some("Table IV"));
+        assert_eq!(answer.citations[0].prefix, "");
+        assert_eq!(answer.citations[0].suffix, "");
+        assert_eq!(answer.citations[0].explanation, "");
+        assert!(answer.annotation_intents.is_empty());
+    }
+
+    #[test]
+    fn does_not_silently_drop_an_incomplete_persistent_glm_annotation_intent() {
+        let raw = json!({
+            "title": "需要保存批注",
+            "answer_markdown": "正文",
+            "citations": [],
+            "candidate_citations": [],
+            "annotation_intent": {"persist": true}
+        })
+        .to_string();
+
+        let error = decode_conversation_answer(&raw).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("incomplete persistent annotation intent"));
+    }
+
+    #[test]
+    fn completed_turn_keeps_a_structured_decode_error_as_outcome_metadata() {
+        let (answer, decode_error) = completed_conversation_answer(true, "completed", "{broken");
+
+        assert!(answer.is_none());
+        assert!(decode_error
+            .as_deref()
+            .is_some_and(|error| error.contains("decode structured conversation answer")));
+    }
 
     #[cfg(unix)]
     #[tokio::test]
