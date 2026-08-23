@@ -83,9 +83,10 @@ export const api = {
   authHeaders,
 }
 
-export async function streamConversationEvents(id:string,after:number,onEvent:(event:ConversationStreamEvent)=>void,signal:AbortSignal):Promise<void>{
+export async function streamConversationEvents(id:string,after:number,onEvent:(event:ConversationStreamEvent)=>void,signal:AbortSignal,onOpen?:()=>void|Promise<void>):Promise<void>{
   const token=session.get();const response=await fetch(`/api/conversations/${encodeURIComponent(id)}/events?after=${after}`,{headers:token?{[TOKEN_HEADER]:token}:{},signal})
   if(!response.ok||!response.body)throw new ApiError(response.status,"conversation stream unavailable")
+  await onOpen?.()
   const reader=response.body.getReader(),decoder=new TextDecoder();let buffer=""
   while(true){const {done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let end:number
     while((end=buffer.indexOf("\n\n"))>=0){const block=buffer.slice(0,end);buffer=buffer.slice(end+2);let eventId=0,type="message",data=""

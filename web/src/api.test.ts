@@ -1,5 +1,5 @@
 import { beforeEach, expect, test, vi } from "vitest"
-import { api, session, streamEvents } from "./api"
+import { api, session, streamConversationEvents, streamEvents } from "./api"
 
 const storage = new Map<string, string>()
 Object.defineProperty(globalThis, "localStorage", {
@@ -46,6 +46,18 @@ test("event streams use the dedicated token header", async () => {
   session.set("test-token")
   await streamEvents(0, () => undefined, new AbortController().signal)
   expectDedicatedTokenHeader(capturedHeaders[0])
+})
+
+test("conversation streams report a successful connection before reading events", async () => {
+  let opened = false
+  await streamConversationEvents(
+    "conversation-1",
+    0,
+    () => undefined,
+    new AbortController().signal,
+    () => { opened = true },
+  )
+  expect(opened).toBe(true)
 })
 
 test("project lifecycle, trash, and graph methods use encoded scoped endpoints", async()=>{

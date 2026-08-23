@@ -1,7 +1,7 @@
 import type { FormEvent } from "react"
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react"
 import { Activity, Archive, Blocks, Bot, Brain, History, MessageSquarePlus, Pencil, Sparkles, X } from "lucide-react"
-import { ApiError, api, streamConversationEvents } from "./api"
+import { ApiError, api } from "./api"
 import { CodexComposer, normalizeCodexSettings } from "./CodexComposer"
 import { ConversationHistory, type ConversationHistoryView } from "./ConversationHistory"
 import { CodexIntegrationsDrawer } from "./CodexIntegrationsDrawer"
@@ -10,6 +10,7 @@ import { CodexGoalBar } from "./CodexGoalBar"
 import { conversationInitialState, conversationReducer } from "./conversation-store"
 import { selectionsEqual, selectionForScopes, shouldClearConversationForSelection, type CodexSelection } from "./conversation-scope"
 import { ConversationScrollController } from "./conversation-scroll"
+import { maintainConversationEventStream, type ConversationStreamStatus } from "./conversation-stream"
 import { latestAnswerCitations } from "./citation-overlay"
 import { PanelCollapseButton } from "./PanelControls"
 import { UserMemoryPanel } from "./UserMemoryPanel"
@@ -48,10 +49,18 @@ export function CandidateCitationList({citations,onCandidate}:{citations:Candida
   </button>)}</div>
 }
 
+export function ConversationStreamBanner({status,onRetry}:{status:ConversationStreamStatus;onRetry:()=>void}){
+  if(status.kind==="connected")return null
+  if(status.kind==="reconnecting")return <p className="codex-notice" role="status">Codex 连接中断，正在自动重连（第 {status.attempt}/{status.maxAttempts} 次）…</p>
+  return <div className="codex-error codex-stream-error" role="alert"><span>{status.message}</span><button type="button" aria-label="重新连接 Codex" onClick={onRetry}>重新连接</button></div>
+}
+
 export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollapse,onCitation,onCandidate=()=>{},onCitations,onSelect,onResearchChanged,codexCapabilities:providedCapabilities}:CodexPanelProps){
   const [state,dispatch]=useReducer(conversationReducer,conversationInitialState)
   const [text,setText]=useState("");const [busy,setBusy]=useState(false);const [error,setError]=useState("")
   const [notice,setNotice]=useState("")
+  const [streamStatus,setStreamStatus]=useState<ConversationStreamStatus>({kind:"connected"})
+  const [streamRetryToken,setStreamRetryToken]=useState(0)
   const [researchMode,setResearchMode]=useState<ResearchMode>("auto")
   const [capabilities,setCapabilities]=useState<CodexCapabilities|null>(providedCapabilities??null)
   const [draftSettings,setDraftSettings]=useState<CodexRunSettings|null>(providedCapabilities?.default??null)
@@ -142,7 +151,7 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
     }
   },[selection.kind,selection.id,selection.projectId,state.activeConversationId,state.scopes,state.pendingSwitch])
   useEffect(()=>onCitations(latestAnswerCitations(state.messages,state.messageOrder)),[onCitations,state.messages,state.messageOrder])
-  useEffect(()=>{if(!state.activeConversationId)return;const conversationId=state.activeConversationId;const controller=new AbortController();void streamConversationEvents(conversationId,state.lastEventId,event=>{dispatch({type:"event",event});if(event.type==="project-research-changed"){const projectId=event.payload.project_id;if(typeof projectId==="string")onResearchChanged?.(projectId)}if(["answer-completed","answer-failed","answer-cancelled"].includes(event.type)){void loadDetail(conversationId);if(event.type==="answer-completed")void refreshList()}},controller.signal).catch(()=>{});return()=>controller.abort()},[state.activeConversationId,loadDetail,onResearchChanged,refreshList])
+  useEffect(()=>{if(!state.activeConversationId){setStreamStatus({kind:"connected"});return}const conversationId=state.activeConversationId;const controller=new AbortController();setStreamStatus({kind:"connected"});void maintainConversationEventStream({conversationId,after:state.lastEventId,signal:controller.signal,onStatus:setStreamStatus,syncDetail:()=>loadDetail(conversationId),onEvent:event=>{dispatch({type:"event",event});if(event.type==="project-research-changed"){const projectId=event.payload.project_id;if(typeof projectId==="string")onResearchChanged?.(projectId)}if(["answer-completed","answer-failed","answer-cancelled","answer-interrupted"].includes(event.type)){void loadDetail(conversationId);if(event.type==="answer-completed")void refreshList()}}});return()=>controller.abort()},[state.activeConversationId,loadDetail,onResearchChanged,refreshList,streamRetryToken])
   const create=async()=>{const scopes=scopeFor(selection);if(!scopes.length)throw new Error("请先创建或进入一个研究项目");const item=await api.createConversation("新对话",scopes,normalizeCodexSettings(effectiveCapabilities,null));rememberConversation(item.id);await refreshList();dispatch({type:"active",id:item.id});return item.id}
   const openConversation=async(id:string)=>{
     const requestId=++historySwitchRequest.current
@@ -212,6 +221,7 @@ export function CodexPanel({selection,scopeLabel,activities,drawerOpen,onCollaps
     {state.goal&&<CodexGoalBar goal={state.goal} onPause={()=>void updateGoal({status:"paused"})} onResume={()=>void updateGoal({status:"active"})} onEdit={editGoal} onClear={()=>void clearGoal()}/>}
     <div className="conversation-feed" ref={feedRef} onScroll={()=>scrollControllerRef.current.handleScroll()}><div className="conversation-feed-content" ref={feedContentRef}>{state.messageOrder.length?state.messageOrder.map(id=>{const message=state.messages[id];return <div className="codex-message-group" key={id}><CodexMessage message={message} onCitation={citation=>{preserveConversationForCitation.current=true;onCitation(citation)}}/>{(message.candidate_citations?.length??0)>0&&<CandidateCitationList citations={message.candidate_citations} onCandidate={onCandidate}/>}</div>}):<div className="codex-empty-state"><span className="codex-empty-mark"><Bot/></span><h3>和 Codex 一起研究</h3><p>围绕当前内容提问、追踪证据，或继续扩展你的研究线索。</p><div className="codex-empty-prompts"><span>可以这样开始</span>{suggestions.map(suggestion=><button type="button" key={suggestion} onClick={()=>setText(suggestion)}>{suggestion}</button>)}</div></div>}<span data-testid="conversation-bottom" aria-hidden="true"/></div></div>
     {notice&&<p className="codex-notice">{notice}</p>}
+    <ConversationStreamBanner status={streamStatus} onRetry={()=>setStreamRetryToken(value=>value+1)}/>
     {error&&<p className="codex-error">{error}</p>}
     <CodexComposer text={text} placeholder={placeholder} busy={busy} answerRunning={answerRunning&&Boolean(state.activeConversationId)} projectResearchScope={projectResearchScope} controlledResearchAvailable={controlledResearchAvailable} researchMode={researchMode} capabilities={effectiveCapabilities} integrations={integrations} integrationsLoading={integrationsLoading} settings={effectiveSettings} selectedSkill={selectedSkill} selectedTools={selectedTools} onSelectSkill={setSelectedSkill} onClearSkill={()=>setSelectedSkill(null)} onToggleTool={toggleTool} onRequestIntegrations={requestIntegrations} onText={setText} onSubmit={submit} onCancel={()=>{if(state.activeConversationId)void api.cancelConversation(state.activeConversationId)}} onResearchMode={setResearchMode} onSettings={next=>void updateSettings(next)}/>
     <CodexIntegrationsDrawer open={integrationsOpen} integrations={integrations} loading={integrationsLoading} selectedSkill={selectedSkill} onClose={()=>setIntegrationsOpen(false)} onRefresh={()=>void loadIntegrations(true)} onSelectSkill={setSelectedSkill}/>

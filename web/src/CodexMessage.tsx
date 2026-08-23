@@ -87,7 +87,7 @@ export function CodexMessage({
       ) : (
         <div className="codex-markdown"><ChatMarkdown>{message.content}</ChatMarkdown></div>
       )}
-      {message.status === "failed" && (
+      {(message.status === "failed" || message.status === "interrupted") && (
         <p className="message-error">
           <CircleAlert />
           <span>{message.error}</span>
