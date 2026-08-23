@@ -162,6 +162,8 @@ pub struct ProjectGoalSummary {
 pub struct ProjectConversationMemory {
     pub conversation_id: String,
     pub title: String,
+    pub updated_at: String,
+    pub paper_scopes: Vec<(String, String)>,
     pub messages: Vec<(String, String)>,
 }
 
@@ -321,8 +323,8 @@ impl Database {
         conversation_limit: i64,
         message_limit: i64,
     ) -> Result<Vec<ProjectConversationMemory>> {
-        let conversations: Vec<(String, String)> = sqlx::query_as(
-            r#"SELECT DISTINCT c.id,c.title
+        let conversations: Vec<(String, String, String)> = sqlx::query_as(
+            r#"SELECT DISTINCT c.id,c.title,c.updated_at
                FROM conversations c
                JOIN conversation_scopes s ON s.conversation_id=c.id
                WHERE s.scope_type='project' AND s.scope_id=?1
@@ -340,7 +342,17 @@ impl Database {
         .fetch_all(self.pool())
         .await?;
         let mut memories = Vec::with_capacity(conversations.len());
-        for (conversation_id, title) in conversations {
+        for (conversation_id, title, updated_at) in conversations {
+            let paper_scopes: Vec<(String, String)> = sqlx::query_as(
+                r#"SELECT s.scope_id,p.title
+                   FROM conversation_scopes s
+                   JOIN papers p ON p.id=s.scope_id
+                   WHERE s.conversation_id=? AND s.scope_type='paper'
+                   ORDER BY s.rowid"#,
+            )
+            .bind(&conversation_id)
+            .fetch_all(self.pool())
+            .await?;
             let mut messages: Vec<(String, String)> = sqlx::query_as(
                 r#"SELECT role,content FROM chat_messages
                    WHERE conversation_id=? AND status='completed'
@@ -355,6 +367,8 @@ impl Database {
             memories.push(ProjectConversationMemory {
                 conversation_id,
                 title,
+                updated_at,
+                paper_scopes,
                 messages,
             });
         }
@@ -825,6 +839,29 @@ impl Database {
             .execute(self.pool())
             .await?
             .rows_affected();
+        if changed == 0 {
+            bail!("conversation does not exist");
+        }
+        Ok(())
+    }
+
+    pub async fn persist_conversation_thread(
+        &self,
+        id: &str,
+        thread_id: &str,
+        dynamic_tools_initialized: bool,
+        dynamic_tools_version: i64,
+    ) -> Result<()> {
+        let changed = sqlx::query(
+            "UPDATE conversations SET thread_id=?,dynamic_tools_initialized=?,dynamic_tools_version=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        )
+        .bind(thread_id)
+        .bind(dynamic_tools_initialized)
+        .bind(dynamic_tools_version)
+        .bind(id)
+        .execute(self.pool())
+        .await?
+        .rows_affected();
         if changed == 0 {
             bail!("conversation does not exist");
         }
