@@ -1072,9 +1072,19 @@ impl ConversationEngine {
                 }
             }
             None => {
-                let error = anyhow::anyhow!("Codex returned no structured answer");
+                let error = anyhow::anyhow!(outcome
+                    .answer_decode_error
+                    .as_deref()
+                    .unwrap_or("Codex returned no structured answer")
+                    .to_owned());
                 let error_message = error.to_string();
-                let fallback = fallback_answer_markdown(None, &preview.visible);
+                let recovered_preview = if preview.visible.trim().is_empty() {
+                    extract_json_string_prefix(&outcome.final_text, "answer_markdown")
+                        .unwrap_or_default()
+                } else {
+                    preview.visible.clone()
+                };
+                let fallback = fallback_answer_markdown(None, &recovered_preview);
                 self.db
                     .set_message_result(
                         &assistant.id,
