@@ -111,6 +111,28 @@ async fn provisional_duplicate_registration_preserves_committed_metadata_and_mem
 }
 
 #[tokio::test]
+async fn committing_a_reimported_paper_restores_it_from_trash() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let paper = committed_paper("arxiv:2402.05099");
+    db.upsert_paper(&paper).await.unwrap();
+    db.trash_paper(&paper.id).await.unwrap();
+
+    assert!(db
+        .get_paper(&paper.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .deleted_at
+        .is_some());
+
+    db.upsert_paper(&paper).await.unwrap();
+
+    let restored = db.get_paper(&paper.id).await.unwrap().unwrap();
+    assert_eq!(restored.deleted_at, None);
+    assert_eq!(db.paper_count().await.unwrap(), 1);
+}
+
+#[tokio::test]
 async fn paper_analysis_records_the_completing_model_and_effort() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.insert_paper("paper:one", "Paper").await.unwrap();

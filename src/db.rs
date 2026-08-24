@@ -474,7 +474,7 @@ impl Database {
             VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,
             authors_json=excluded.authors_json,year=excluded.year,doi=excluded.doi,arxiv_id=excluded.arxiv_id,
             canonical_sha256=excluded.canonical_sha256,source_url=excluded.source_url,note_path=excluded.note_path,
-            updated_at=CURRENT_TIMESTAMP"#)
+            deleted_at=NULL,updated_at=CURRENT_TIMESTAMP"#)
             .bind(&paper.id).bind(&paper.title).bind(&paper.authors_json).bind(paper.year)
             .bind(&paper.doi).bind(&paper.arxiv_id).bind(&paper.canonical_sha256)
             .bind(&paper.source_url).bind(&paper.note_path).execute(&self.pool).await?;
