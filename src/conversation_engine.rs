@@ -23,7 +23,7 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
 
 pub struct ConversationEngine {
@@ -161,6 +161,14 @@ impl AnswerPreview {
         let visible_delta = next.chars().skip(previous_len).collect::<String>();
         self.visible = next;
         Some(visible_delta)
+    }
+
+    fn answer_markdown(&self) -> &str {
+        if self.phase == AgentMessagePhase::Commentary {
+            ""
+        } else {
+            self.visible.trim()
+        }
     }
 }
 
@@ -771,7 +779,7 @@ impl ConversationEngine {
     async fn execute_turn(
         &self,
         assistant: &ChatMessage,
-        cancel: watch::Receiver<bool>,
+        mut cancel: watch::Receiver<bool>,
     ) -> Result<()> {
         let conversation = self
             .db
@@ -898,6 +906,7 @@ impl ConversationEngine {
         };
         let starting_new_thread = thread_id.is_none();
         let started_with_dynamic_tools = thread_id.is_none() && research_handler.is_some();
+        let mut retry_thread_id = thread_id.clone();
         let recent_history = self
             .db
             .completed_conversation_history_before(&question.id, 8)
@@ -946,9 +955,19 @@ impl ConversationEngine {
             .unwrap_or_else(|| self.codex.research_conversation_settings());
         let mut attempt = 1;
         let outcome = loop {
+            if *cancel.borrow() {
+                self.finish_cancelled_answer(
+                    &conversation.id,
+                    &assistant.id,
+                    None,
+                    preview.answer_markdown(),
+                )
+                .await?;
+                bail!("Codex turn cancelled");
+            }
             let turn = self.codex.run_turn_with_events_and_tools(
                 CodexTurn {
-                    thread_id: thread_id.clone(),
+                    thread_id: retry_thread_id.clone(),
                     cwd: bundle.root.clone(),
                     prompt: prompt.clone(),
                     skill: selected_skill.clone(),
@@ -974,10 +993,27 @@ impl ConversationEngine {
                     }
                 }
             };
-            match result {
-                Ok(outcome) => break outcome,
-                Err(error) if is_transport_failure(&error) && attempt < 3 && !*cancel.borrow() => {
+            if *cancel.borrow() {
+                self.finish_cancelled_answer(
+                    &conversation.id,
+                    &assistant.id,
+                    result.as_ref().ok().map(|outcome| outcome.turn_id.as_str()),
+                    preview.answer_markdown(),
+                )
+                .await?;
+                bail!("Codex turn cancelled");
+            }
+            let retry_label = match &result {
+                Ok(outcome) if outcome.is_retryable_failure() => Some("上游服务暂时不可用"),
+                Err(error) if is_transport_failure(error) => Some("Codex 连接中断"),
+                _ => None,
+            };
+            if attempt < 3 && !*cancel.borrow() {
+                if let Some(retry_label) = retry_label {
                     attempt += 1;
+                    if let Ok(outcome) = &result {
+                        retry_thread_id = Some(outcome.thread_id.clone());
+                    }
                     preview.reset();
                     self.emit(
                         &conversation.id,
@@ -986,12 +1022,22 @@ impl ConversationEngine {
                         json!({
                             "attempt":attempt,
                             "max_attempts":3,
-                            "label":format!("Codex 连接中断，正在自动重试（第 {attempt}/3 次）…")
+                            "label":format!("{retry_label}，正在自动重试（第 {attempt}/3 次）…")
                         }),
                     )
                     .await?;
+                    let delay =
+                        tokio::time::sleep(Duration::from_millis(500 * (attempt - 1) as u64));
+                    tokio::pin!(delay);
+                    tokio::select! {
+                        _ = &mut delay => {}
+                        _ = cancel.changed() => {}
+                    }
                     continue;
                 }
+            }
+            match result {
+                Ok(outcome) => break outcome,
                 Err(error) => return Err(error),
             }
         };
@@ -1020,21 +1066,39 @@ impl ConversationEngine {
             )
             .await?;
         if outcome.status != "completed" {
-            let status = if outcome.status == "interrupted" {
-                "cancelled"
-            } else {
-                "failed"
-            };
+            let cancelled = matches!(outcome.status.as_str(), "interrupted" | "cancelled");
+            let error_message = outcome
+                .error
+                .clone()
+                .unwrap_or_else(|| format!("Codex turn ended with {}", outcome.status));
+            let answer_markdown = preview.answer_markdown().to_owned();
+            if cancelled {
+                self.finish_cancelled_answer(
+                    &conversation.id,
+                    &assistant.id,
+                    Some(&outcome.turn_id),
+                    &answer_markdown,
+                )
+                .await?;
+                bail!("{error_message}");
+            }
             self.db
                 .set_message_result(
                     &assistant.id,
-                    "",
+                    &answer_markdown,
                     Some(&outcome.turn_id),
-                    status,
-                    outcome.error.as_deref(),
+                    "failed",
+                    Some(&error_message),
                 )
                 .await?;
-            bail!("Codex turn ended with {}", outcome.status);
+            self.emit(
+                &conversation.id,
+                Some(&assistant.id),
+                "answer-failed",
+                json!({"message":error_message.clone(),"answer_markdown":answer_markdown}),
+            )
+            .await?;
+            bail!("{error_message}");
         }
         if question.research_mode == ResearchMode::Explicit
             && !research_handler
@@ -1183,6 +1247,26 @@ impl ConversationEngine {
                 "candidate_citations":candidate_citations,
                 "title":generated_title
             }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn finish_cancelled_answer(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        turn_id: Option<&str>,
+        answer_markdown: &str,
+    ) -> Result<()> {
+        self.db
+            .set_message_result(message_id, answer_markdown, turn_id, "cancelled", None)
+            .await?;
+        self.emit(
+            conversation_id,
+            Some(message_id),
+            "answer-cancelled",
+            json!({}),
         )
         .await?;
         Ok(())
@@ -1521,6 +1605,18 @@ mod tests {
         assert_eq!(preview.push(r#"回答","#), Some("回答".into()));
         assert_eq!(preview.visible, "逐步回答");
         assert_eq!(extract_json_string_prefix(&preview.raw, "citations"), None);
+    }
+
+    #[test]
+    fn commentary_preview_is_not_treated_as_answer_markdown() {
+        let mut preview = AnswerPreview::default();
+        preview.phase = super::AgentMessagePhase::Commentary;
+        preview.visible = "内部工作摘要".into();
+        assert_eq!(preview.answer_markdown(), "");
+
+        preview.phase = super::AgentMessagePhase::FinalAnswer;
+        preview.visible = "最终正文".into();
+        assert_eq!(preview.answer_markdown(), "最终正文");
     }
 
     #[test]

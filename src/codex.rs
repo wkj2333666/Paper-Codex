@@ -569,6 +569,15 @@ fn completed_conversation_answer(
 }
 
 impl CodexOutcome {
+    pub fn is_retryable_failure(&self) -> bool {
+        self.status == "failed"
+            && self
+                .failure
+                .as_ref()
+                .and_then(|failure| failure.http_status_code)
+                .is_some_and(|status| matches!(status, 500 | 502 | 503 | 504))
+    }
+
     pub fn is_capacity_failure(&self) -> bool {
         if self.status != "failed" {
             return false;
