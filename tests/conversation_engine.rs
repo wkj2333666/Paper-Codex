@@ -409,18 +409,27 @@ async fn transient_503_retries_twice_then_publishes_a_terminal_failure() {
             .count(),
         1
     );
-    let stored = engine
+    let stored_message = engine
         .db
         .get_chat_message(&message.id)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(stored.status, "failed");
-    assert_eq!(stored.thread_id.as_deref(), Some("thread-fake"));
-    assert!(stored
+    assert_eq!(stored_message.status, "failed");
+    assert!(stored_message
         .error
         .as_deref()
         .is_some_and(|error| error.contains("503 Service Unavailable")));
+    let stored_conversation = engine
+        .db
+        .get_conversation(&conversation.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored_conversation.thread_id.as_deref(),
+        Some("thread-fake")
+    );
 }
 
 #[tokio::test]
