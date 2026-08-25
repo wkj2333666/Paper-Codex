@@ -1609,9 +1609,11 @@ mod tests {
 
     #[test]
     fn commentary_preview_is_not_treated_as_answer_markdown() {
-        let mut preview = AnswerPreview::default();
-        preview.phase = super::AgentMessagePhase::Commentary;
-        preview.visible = "内部工作摘要".into();
+        let mut preview = AnswerPreview {
+            phase: super::AgentMessagePhase::Commentary,
+            visible: "内部工作摘要".into(),
+            ..AnswerPreview::default()
+        };
         assert_eq!(preview.answer_markdown(), "");
 
         preview.phase = super::AgentMessagePhase::FinalAnswer;
