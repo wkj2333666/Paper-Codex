@@ -166,6 +166,25 @@ async fn wait_terminal(db: &Database, message_id: &str) {
     .unwrap();
 }
 
+async fn wait_event(db: &Database, conversation_id: &str, message_id: &str, event_type: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let events = db
+                .conversation_events_after(conversation_id, 0)
+                .await
+                .unwrap();
+            if events.iter().any(|event| {
+                event.message_id.as_deref() == Some(message_id) && event.event_type == event_type
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
 async fn next_turn_params(
     mut events: tokio::sync::broadcast::Receiver<paper_codex::codex::CodexEvent>,
 ) -> serde_json::Value {
@@ -303,6 +322,182 @@ async fn structured_decode_failure_still_persists_the_codex_thread() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.thread_id.as_deref(), Some("thread-fake"));
+}
+
+#[tokio::test]
+async fn non_retryable_failed_outcome_publishes_a_terminal_event() {
+    let (engine, _temp) = harness().await;
+    let conversation = engine
+        .create_conversation(
+            "失败反馈",
+            vec![ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            }],
+        )
+        .await
+        .unwrap();
+    let message = engine
+        .enqueue_message(&conversation.id, "fail-me")
+        .await
+        .unwrap();
+    wait_terminal(&engine.db, &message.id).await;
+    wait_event(&engine.db, &conversation.id, &message.id, "answer-failed").await;
+
+    let events = engine
+        .db
+        .conversation_events_after(&conversation.id, 0)
+        .await
+        .unwrap();
+    let matching = events
+        .iter()
+        .filter(|event| event.message_id.as_deref() == Some(message.id.as_str()))
+        .collect::<Vec<_>>();
+    assert!(!matching
+        .iter()
+        .any(|event| event.event_type == "answer-retry"));
+    let failed = matching
+        .iter()
+        .find(|event| event.event_type == "answer-failed")
+        .unwrap();
+    assert_eq!(
+        failed.payload["message"],
+        "structured output rejected: schema mismatch"
+    );
+}
+
+#[tokio::test]
+async fn transient_503_retries_twice_then_publishes_a_terminal_failure() {
+    let (engine, _temp) = harness().await;
+    let conversation = engine
+        .create_conversation(
+            "临时上游故障",
+            vec![ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            }],
+        )
+        .await
+        .unwrap();
+    let message = engine
+        .enqueue_message(&conversation.id, "service-unavailable")
+        .await
+        .unwrap();
+    wait_terminal(&engine.db, &message.id).await;
+    wait_event(&engine.db, &conversation.id, &message.id, "answer-failed").await;
+
+    let events = engine
+        .db
+        .conversation_events_after(&conversation.id, 0)
+        .await
+        .unwrap();
+    let matching = events
+        .iter()
+        .filter(|event| event.message_id.as_deref() == Some(message.id.as_str()))
+        .collect::<Vec<_>>();
+    let retries = matching
+        .iter()
+        .filter(|event| event.event_type == "answer-retry")
+        .collect::<Vec<_>>();
+    assert_eq!(retries.len(), 2);
+    assert_eq!(retries[0].payload["attempt"], 2);
+    assert_eq!(retries[1].payload["attempt"], 3);
+    assert_eq!(
+        matching
+            .iter()
+            .filter(|event| event.event_type == "answer-failed")
+            .count(),
+        1
+    );
+    let stored_message = engine
+        .db
+        .get_chat_message(&message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored_message.status, "failed");
+    assert!(stored_message
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("503 Service Unavailable")));
+    let stored_conversation = engine
+        .db
+        .get_conversation(&conversation.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored_conversation.thread_id.as_deref(),
+        Some("thread-fake")
+    );
+}
+
+#[tokio::test]
+async fn cancelling_during_retry_backoff_terminalizes_as_cancelled() {
+    let (engine, _temp) = harness().await;
+    let conversation = engine
+        .create_conversation(
+            "取消重试",
+            vec![ConversationScopeInput {
+                scope_type: "paper".into(),
+                scope_id: Some("paper:one".into()),
+            }],
+        )
+        .await
+        .unwrap();
+    let mut events = engine.subscribe();
+    let message = engine
+        .enqueue_message(&conversation.id, "service-unavailable")
+        .await
+        .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if event.message_id.as_deref() == Some(&message.id)
+                && event.event_type == "answer-retry"
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    engine.cancel(&conversation.id).await.unwrap();
+    wait_event(
+        &engine.db,
+        &conversation.id,
+        &message.id,
+        "answer-cancelled",
+    )
+    .await;
+
+    let stored = engine
+        .db
+        .get_chat_message(&message.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, "cancelled");
+    let events = engine
+        .db
+        .conversation_events_after(&conversation.id, 0)
+        .await
+        .unwrap();
+    let matching = events
+        .iter()
+        .filter(|event| event.message_id.as_deref() == Some(message.id.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matching
+            .iter()
+            .filter(|event| event.event_type == "answer-cancelled")
+            .count(),
+        1
+    );
+    assert!(!matching
+        .iter()
+        .any(|event| event.event_type == "answer-failed"));
 }
 
 #[tokio::test]
