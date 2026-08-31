@@ -427,6 +427,34 @@ async fn does_not_try_to_retrofit_dynamic_tools_during_thread_resume() {
 }
 
 #[tokio::test]
+async fn resumes_existing_thread_with_model_provider_from_codex_config() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("config.toml"),
+        "model = \"glm-5.3\"\nmodel_provider = \"glm\"\n",
+    )
+    .unwrap();
+    let mut command = fake_command();
+    command.codex_home = Some(home.path().to_path_buf());
+    let runtime = CodexRuntime::spawn(command).await.unwrap();
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let first = runtime
+        .run_turn(research_turn("ordinary first turn"), cancel_rx.clone())
+        .await
+        .unwrap();
+    let thread_params = next_test_thread_params(runtime.subscribe(), "thread/resume");
+    let mut resumed = research_turn("observe-thread-params ordinary resumed turn");
+    resumed.thread_id = Some(first.thread_id);
+
+    runtime.run_turn(resumed, cancel_rx).await.unwrap();
+
+    let params = tokio::time::timeout(std::time::Duration::from_secs(1), thread_params)
+        .await
+        .unwrap();
+    assert_eq!(params["modelProvider"], "glm");
+}
+
+#[tokio::test]
 async fn interrupts_an_in_progress_turn_before_starting_a_structured_resumed_turn() {
     let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
     let (_cancel_tx, cancel_rx) = watch::channel(false);

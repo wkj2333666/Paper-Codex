@@ -307,6 +307,23 @@ impl CodexCommand {
     }
 
     fn configured_settings(&self) -> Option<CodexRunSettings> {
+        let mut values = self.configured_root_values()?;
+        let model = values.remove("model")?;
+        let reasoning_effort = values
+            .remove("model_reasoning_effort")
+            .unwrap_or_else(|| "medium".into());
+        Some(CodexRunSettings {
+            model,
+            reasoning_effort,
+            service_tier: None,
+        })
+    }
+
+    fn configured_model_provider(&self) -> Option<String> {
+        self.configured_root_values()?.remove("model_provider")
+    }
+
+    fn configured_root_values(&self) -> Option<HashMap<String, String>> {
         let home = self.codex_home.as_ref()?;
         let contents = std::fs::read_to_string(home.join("config.toml")).ok()?;
         let mut values = HashMap::new();
@@ -321,17 +338,9 @@ impl CodexCommand {
             let Some(value) = parse_toml_string(value) else {
                 continue;
             };
-            values.insert(key.trim(), value);
+            values.insert(key.trim().to_owned(), value);
         }
-        let model = values.remove("model")?;
-        let reasoning_effort = values
-            .remove("model_reasoning_effort")
-            .unwrap_or_else(|| "medium".into());
-        Some(CodexRunSettings {
-            model,
-            reasoning_effort,
-            service_tier: None,
-        })
+        Some(values)
     }
 }
 
@@ -1372,6 +1381,11 @@ impl CodexRuntime {
                 "developerInstructions":PAPER_CODEX_DEVELOPER_INSTRUCTIONS
             })
         };
+        if turn.thread_id.is_some() {
+            if let Some(model_provider) = self.command.configured_model_provider() {
+                thread_params["modelProvider"] = Value::String(model_provider);
+            }
+        }
         let sends_dynamic_tools = turn.thread_id.is_none()
             && tools.is_some()
             && self.dynamic_tools_available.load(Ordering::Relaxed);
