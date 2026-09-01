@@ -190,6 +190,7 @@ pub struct Task {
     pub project_id: Option<String>,
     pub thread_id: Option<String>,
     pub error: Option<String>,
+    pub error_details_json: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

@@ -67,6 +67,38 @@ pub enum SearchRunState {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FulltextState {
+    Available,
+    Possible,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryMatch {
+    pub score: f64,
+    pub title_exact: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscoveryFulltext {
+    pub state: FulltextState,
+    pub source_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryResult {
+    pub work: DiscoveredWork,
+    pub providers: Vec<String>,
+    pub best_rank: Option<i64>,
+    pub provider_scores: serde_json::Value,
+    pub raw_results: Vec<serde_json::Value>,
+    #[serde(rename = "match")]
+    pub match_info: DiscoveryMatch,
+    pub fulltext: DiscoveryFulltext,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkMetadata {
     pub canonical_key: String,

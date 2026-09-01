@@ -61,10 +61,12 @@ export function mergeIntakeTaskEvent(tasks: Task[], event: StreamEvent): Task[] 
       }
     }
     if (event.type === "failed") {
+      const details=event.payload.details
       return {
         ...task,
         state: "failed",
         error: typeof event.payload.message === "string" ? event.payload.message : task.error,
+        error_details_json: details&&typeof details==="object" ? JSON.stringify(details) : task.error_details_json,
         updated_at: event.created_at || task.updated_at,
       }
     }

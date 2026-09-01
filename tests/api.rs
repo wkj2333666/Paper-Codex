@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -11,7 +12,10 @@ use paper_codex::{
     db::Database,
     domain::Paper,
     prompts::{ConversationAnswer, ConversationCitation},
-    research::{CandidateStatus, EvidenceLevel, ResearchTrigger, WorkMetadata},
+    research::{
+        CandidateStatus, EvidenceLevel, ResearchProvider, ResearchQuery, ResearchTrigger,
+        WorkMetadata,
+    },
     research_service::{ResearchService, ResearchServiceConfig},
     research_store::ResearchStore,
     workspace::Workspace,
@@ -119,6 +123,34 @@ async fn task_test_app() -> (axum::Router, Database) {
         Auth::new(hash, "test-jwt-secret".into()),
     ));
     (app, db)
+}
+
+#[tokio::test]
+async fn intake_rejects_free_text_with_a_stable_search_required_code() {
+    let (app, db) = task_test_app().await;
+    let token = login_token(&app).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/intake")
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", token)
+                .body(Body::from(serde_json::json!({"source":"jepa"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let payload = json_response(response).await;
+    assert_eq!(payload["code"], "intake_search_required");
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(task_count, 0);
 }
 
 async fn json_response(response: axum::response::Response) -> Value {
@@ -1554,7 +1586,9 @@ async fn paper_pdf_supports_authenticated_ranges_and_etags() {
     assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
 }
 
-async fn research_test_app() -> (axum::Router, Database, Arc<ResearchService>) {
+async fn research_test_app_with(
+    providers: Vec<Arc<dyn ResearchProvider>>,
+) -> (axum::Router, Database, Arc<ResearchService>) {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.keep();
@@ -1562,7 +1596,7 @@ async fn research_test_app() -> (axum::Router, Database, Arc<ResearchService>) {
     let research = Arc::new(
         ResearchService::new(
             ResearchStore::new(db.clone()),
-            Vec::new(),
+            providers,
             Acquirer::new(1024 * 1024).unwrap(),
             ResearchServiceConfig {
                 cache_dir: root.join(".runtime/research-cache"),
@@ -1581,6 +1615,160 @@ async fn research_test_app() -> (axum::Router, Database, Arc<ResearchService>) {
     )
     .with_research_service(research.clone());
     (build_router(state), db, research)
+}
+
+async fn research_test_app() -> (axum::Router, Database, Arc<ResearchService>) {
+    research_test_app_with(Vec::new()).await
+}
+
+struct IntakeSearchProvider;
+
+#[async_trait]
+impl ResearchProvider for IntakeSearchProvider {
+    fn name(&self) -> &'static str {
+        "fixture"
+    }
+
+    async fn search(&self, query: &ResearchQuery) -> anyhow::Result<Vec<WorkMetadata>> {
+        assert_eq!(query.text, "jepa");
+        assert_eq!(query.limit, 12);
+        Ok(vec![WorkMetadata {
+            canonical_key: "arxiv:2301.08243".to_owned(),
+            doi: None,
+            arxiv_id: Some("2301.08243".to_owned()),
+            openalex_id: None,
+            title: "I-JEPA: Self-Supervised Learning from Images".to_owned(),
+            authors: vec!["Mahmoud Assran".to_owned()],
+            year: Some(2023),
+            abstract_text: Some("Joint embedding predictive architecture".to_owned()),
+            source_url: "https://arxiv.org/abs/2301.08243".to_owned(),
+            pdf_url: Some("https://arxiv.org/pdf/2301.08243".to_owned()),
+            evidence_level: EvidenceLevel::Abstract,
+            metadata: serde_json::json!({"fixture": true}),
+        }])
+    }
+}
+
+#[tokio::test]
+async fn intake_search_returns_ranked_candidates_without_creating_a_task() {
+    let (app, db, _) = research_test_app_with(vec![Arc::new(IntakeSearchProvider)]).await;
+    let token = login_token(&app).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/intake/search")
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", token)
+                .body(Body::from(serde_json::json!({"query":"jepa"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = json_response(response).await;
+    assert_eq!(payload["query"], "jepa");
+    assert_eq!(payload["state"], "completed");
+    assert_eq!(payload["providers"]["fixture"]["hits"], 1);
+    assert_eq!(
+        payload["results"][0]["work"]["title"],
+        "I-JEPA: Self-Supervised Learning from Images"
+    );
+    assert!(payload["results"][0]["match"]["score"].as_f64().unwrap() > 0.0);
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(task_count, 0);
+}
+
+#[tokio::test]
+async fn intake_candidate_import_reuses_an_existing_paper_from_server_metadata() {
+    let (app, db, research) = research_test_app().await;
+    let token = login_token(&app).await;
+    let project_id = db.create_project("jepa", "JEPA", "").await.unwrap();
+    let work = research
+        .store()
+        .upsert_work(candidate_work("10.1000/existing-intake"))
+        .await
+        .unwrap();
+    db.insert_paper("doi:10.1000/existing-intake", "Existing JEPA")
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE papers SET doi='10.1000/existing-intake' WHERE id='doi:10.1000/existing-intake'",
+    )
+    .execute(db.pool())
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/intake/candidates/{}/import", work.id))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", token)
+                .body(Body::from(
+                    serde_json::json!({"project_id":&project_id}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = json_response(response).await;
+    assert_eq!(payload["state"], "existing");
+    assert_eq!(payload["paper_id"], "doi:10.1000/existing-intake");
+    assert_eq!(
+        db.project_paper_ids(&project_id).await.unwrap(),
+        vec!["doi:10.1000/existing-intake"]
+    );
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(task_count, 0);
+}
+
+#[tokio::test]
+async fn failed_task_details_survive_database_reload_queries() {
+    let (_app, db) = task_test_app().await;
+    let task_id = db
+        .create_task(
+            "ingest",
+            r#"{"source":"https://openreview.net/pdf?id=test"}"#,
+        )
+        .await
+        .unwrap();
+    let details = serde_json::json!({
+        "code":"all_pdf_sources_failed",
+        "attempts":[{
+            "provider":"openreview",
+            "url":"https://openreview.net/pdf?id=test",
+            "status":403,
+            "reason_code":"browser_challenge_required",
+            "reason":"来源要求浏览器完成验证"
+        }]
+    });
+
+    db.fail_task(&task_id, "已定位论文，但所有 PDF 来源均失败", &details)
+        .await
+        .unwrap();
+
+    let task = db.get_task(&task_id).await.unwrap().unwrap();
+    assert_eq!(task.state, "failed");
+    assert_eq!(
+        task.error.as_deref(),
+        Some("已定位论文，但所有 PDF 来源均失败")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(task.error_details_json.as_deref().unwrap()).unwrap(),
+        details
+    );
 }
 
 fn candidate_work(doi: &str) -> WorkMetadata {

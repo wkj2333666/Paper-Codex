@@ -2,7 +2,7 @@ export interface Paper { id:string; title:string; authors_json:string; year:numb
 export interface Project { id:string; slug:string; name:string; purpose:string; parent_id:string|null; created_at:string; updated_at:string }
 export interface ProjectReadme { markdown:string; revision:string; updated_at:string }
 export interface ProjectReadmeSaveRequest { markdown:string; expected_revision:string }
-export interface Task { id:string; kind:string; state:string; input_json:string; paper_id:string|null; project_id:string|null; thread_id:string|null; error:string|null; created_at:string; updated_at:string; analysis_model?:string; reasoning_effort?:string; status_note?:string; analysis_warnings?:string[] }
+export interface Task { id:string; kind:string; state:string; input_json:string; paper_id:string|null; project_id:string|null; thread_id:string|null; error:string|null; error_details_json?:string|null; created_at:string; updated_at:string; analysis_model?:string; reasoning_effort?:string; status_note?:string; analysis_warnings?:string[] }
 export interface Dashboard { papers:Paper[]; projects:Project[]; tasks:Task[]; inbox:Paper[]; trash_count:number; project_memberships:Record<string,string[]> }
 export interface Evidence { paper_id:string; revision:string; page:number; section:string|null; locator:string|null; kind:string }
 export interface PaperAnalysis { takeaway?:string; research_question?:string; contribution?:string; method?:string; experimental_design?:string; baselines?:string[]; results?:string[]; limitations?:string[]; assumptions?:string[]; reproducibility?:string; evidence?:Evidence[]; [key:string]:unknown }
@@ -47,6 +47,13 @@ export type ResearchProgressPhase="research-planning"|"research-searching"|"rese
 export interface DiscoveredWork { id:string; canonical_key:string; doi:string|null; arxiv_id:string|null; openalex_id:string|null; title:string; authors:string[]; year:number|null; abstract_text:string|null; source_url:string; pdf_url:string|null; evidence_level:EvidenceLevel; metadata:Record<string,unknown> }
 export interface ProjectCandidate { project_id:string; work:DiscoveredWork; status:CandidateStatus; relevance_reason:string; relevance_tags:string[]; evidence_level:EvidenceLevel; discovered_by_search_run_id:string|null; discovered_by_conversation_id:string|null; import_task_id:string|null; paper_id:string|null; created_at:string; updated_at:string }
 export interface ProviderStatus { state:"completed"|"failed"|"cancelled"; hits:number; error:string|null }
+export type IntakeFulltextState="available"|"possible"|"unavailable"
+export interface IntakeSearchResult { work:DiscoveredWork; providers:string[]; best_rank:number|null; provider_scores:Record<string,unknown>; raw_results:unknown[]; match:{score:number;title_exact:boolean}; fulltext:{state:IntakeFulltextState;source_count:number} }
+export interface IntakeSearchResponse { query:string; state:"completed"|"partial"; providers:Record<string,ProviderStatus>; results:IntakeSearchResult[] }
+export type CandidateImportResult={state:"enqueued";task_id:string}|{state:"existing";paper_id:string}
+export interface DirectIntakeResult { kind:"enqueued"; task_id:string }
+export interface DownloadAttempt { provider:string; url:string; status:number|null; reason_code:string; reason:string }
+export interface TaskFailureDetails { code:string; attempts:DownloadAttempt[] }
 export interface LiteratureSearchRun { id:string; project_id:string; conversation_id:string; message_id:string; trigger:ResearchTrigger; question:string; query_plan:Record<string,unknown>; state:SearchRunState; provider_status:Record<string,ProviderStatus>; error:string|null; created_at:string; updated_at:string }
 export interface LiteratureSearchResult { search_run_id:string; work:DiscoveredWork; providers:string[]; best_rank:number|null; provider_scores:Record<string,unknown>; raw_results:unknown[]; created_at:string }
 export interface LiteratureSearchDetail { run:LiteratureSearchRun; results:LiteratureSearchResult[] }

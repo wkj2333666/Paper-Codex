@@ -48,4 +48,27 @@ describe("IntakeTaskCard", () => {
     expect(html).toContain("<details")
     expect(html).toContain("1 条图谱关系未写入")
   })
+
+  it("shows persisted PDF source attempts without exposing hidden response data", () => {
+    const value:Task={
+      ...task("failed"),
+      error:"已定位论文，但所有 PDF 来源均失败",
+      error_details_json:JSON.stringify({
+        code:"all_pdf_sources_failed",
+        attempts:[{
+          provider:"openreview",
+          url:"https://openreview.net/pdf",
+          status:403,
+          reason_code:"browser_challenge_required",
+          reason:"来源要求浏览器完成验证，服务器无法自动下载",
+        }],
+      }),
+    }
+    const html=renderToStaticMarkup(<IntakeTaskCard task={value} onCancel={()=>{}} onDismiss={()=>{}}/>)
+    expect(html).toContain("查看 1 个来源尝试")
+    expect(html).toContain("openreview")
+    expect(html).toContain("HTTP 403")
+    expect(html).toContain("来源要求浏览器完成验证")
+    expect(html).not.toContain("Challenge verification required")
+  })
 })

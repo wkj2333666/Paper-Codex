@@ -1,4 +1,4 @@
-import type { Annotation, AnnotationAnchor, CandidateBulkImportOutcome, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, GraphPayload, ImportCandidateOutcome, LiteratureSearchDetail, LiteratureSearchRun, MemoryItem, MemoryKind, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ProjectReadme, ProjectReadmeSaveRequest, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
+import type { Annotation, AnnotationAnchor, CandidateBulkImportOutcome, CandidateImportResult, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, DirectIntakeResult, GraphPayload, ImportCandidateOutcome, IntakeSearchResponse, LiteratureSearchDetail, LiteratureSearchRun, MemoryItem, MemoryKind, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ProjectReadme, ProjectReadmeSaveRequest, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
 
 export class ApiError extends Error { constructor(public status:number,message:string,public body:Record<string,unknown>={}){super(message)} }
 const TOKEN_KEY = "paper-codex-token"
@@ -23,7 +23,9 @@ export const api = {
   tasks:()=>request<Task[]>("/api/tasks"),
   cancelTask:(id:string)=>request<void>(`/api/tasks/${encodeURIComponent(id)}/cancel`,{method:"POST"}),
   dismissTask:(id:string)=>request<void>(`/api/tasks/${encodeURIComponent(id)}`,{method:"DELETE"}),
-  intake:(source:string,project_id?:string)=>request<{task_id:string}>("/api/intake",{method:"POST",body:JSON.stringify({source,project_id:project_id||null})}),
+  intake:(source:string,project_id?:string)=>request<DirectIntakeResult>("/api/intake",{method:"POST",body:JSON.stringify({source,project_id:project_id||null})}),
+  searchIntake:(query:string,limit=12)=>request<IntakeSearchResponse>("/api/intake/search",{method:"POST",body:JSON.stringify({query,limit})}),
+  importIntakeCandidate:(workId:string,projectId?:string)=>request<CandidateImportResult>(`/api/intake/candidates/${encodeURIComponent(workId)}/import`,{method:"POST",body:JSON.stringify({project_id:projectId||null})}),
   upload(file:File,project_id?:string){const body=new FormData();body.append("file",file);if(project_id)body.append("project_id",project_id);return request<{task_id:string}>("/api/intake/upload",{method:"POST",body})},
   createProject:(name:string,purpose:string,parent_id?:string|null)=>request<Project>("/api/projects",{method:"POST",body:JSON.stringify({name,purpose,parent_id:parent_id??null})}),
   updateProject:(id:string,value:{name:string;purpose:string;parent_id:string|null})=>request<Project>(`/api/projects/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(value)}),

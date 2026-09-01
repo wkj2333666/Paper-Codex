@@ -3,14 +3,15 @@ use paper_codex::{
     acquisition::Acquirer,
     db::Database,
     research::{
-        EvidenceLevel, ResearchProvider, ResearchQuery, ResearchTrigger, SearchRunState,
-        WorkMetadata,
+        EvidenceLevel, FulltextState, ResearchProvider, ResearchQuery, ResearchTrigger,
+        SearchRunState, WorkMetadata,
     },
     research_service::{
         ProjectResearchToolHandler, ProviderState, ResearchService, ResearchServiceConfig,
         SearchRequest,
     },
     research_store::ResearchStore,
+    tasks::IngestInput,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -84,6 +85,14 @@ fn sample_work(canonical_key: &str) -> WorkMetadata {
         evidence_level: EvidenceLevel::Abstract,
         metadata: json!({"fixture": canonical_key}),
     }
+}
+
+fn titled_work(canonical_key: &str, title: &str, authors: &[&str], year: i64) -> WorkMetadata {
+    let mut work = sample_work(canonical_key);
+    work.title = title.to_owned();
+    work.authors = authors.iter().map(|author| (*author).to_owned()).collect();
+    work.year = Some(year);
+    work
 }
 
 fn stub_ok(name: &'static str, works: Vec<WorkMetadata>) -> Arc<dyn ResearchProvider> {
@@ -186,6 +195,164 @@ async fn one_provider_failure_yields_a_partial_search() {
     assert_eq!(outcome.state, SearchRunState::Partial);
     assert_eq!(outcome.works.len(), 2);
     assert_eq!(outcome.providers["crossref"].state, ProviderState::Failed);
+}
+
+#[tokio::test]
+async fn discovery_is_project_independent_and_preserves_partial_provider_status() {
+    let harness = ResearchHarness::new(
+        vec![
+            stub_ok("openalex", vec![sample_work("doi:10.1000/discover")]),
+            stub_error("crossref", "timeout"),
+        ],
+        1024 * 1024,
+    )
+    .await;
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+    let outcome = harness
+        .service
+        .discover(harness.request().query, cancel_rx)
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.state, SearchRunState::Partial);
+    assert_eq!(outcome.results.len(), 1);
+    assert_eq!(outcome.results[0].fulltext.state, FulltextState::Possible);
+    assert_eq!(outcome.providers["crossref"].state, ProviderState::Failed);
+    assert!(harness
+        .store
+        .list_project_searches(&harness.project_id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn discovery_ranks_the_title_inside_a_full_citation_above_crossref_noise() {
+    let desired = titled_work(
+        "openalex:w-lecun",
+        "A Path Towards Autonomous Machine Intelligence",
+        &["Yann LeCun"],
+        2022,
+    );
+    let noise = titled_work("doi:10.5555/nts", "NTS 2022/62", &["Somebody Else"], 2022);
+    let harness = ResearchHarness::new(
+        vec![
+            stub_ok("openalex", vec![desired]),
+            stub_ok("crossref", vec![noise]),
+        ],
+        1024 * 1024,
+    )
+    .await;
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+    let outcome = harness
+        .service
+        .discover(
+            ResearchQuery {
+                text: "Yann LeCun. A Path Towards Autonomous Machine Intelligence version 0.9.2, 2022-06-27"
+                    .to_owned(),
+                title_terms: Vec::new(),
+                author: None,
+                year_from: None,
+                year_to: None,
+                limit: 12,
+            },
+            cancel_rx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outcome.results[0].work.metadata.title,
+        "A Path Towards Autonomous Machine Intelligence"
+    );
+    assert!(outcome.results[0].match_info.score > outcome.results[1].match_info.score);
+}
+
+#[tokio::test]
+async fn discovery_merges_all_provider_pdf_sources_for_the_same_work() {
+    let mut arxiv = titled_work(
+        "doi:10.1000/shared-sources",
+        "Shared Sources",
+        &["Ada Lovelace"],
+        2024,
+    );
+    arxiv.pdf_url = Some("https://arxiv.org/pdf/2401.00001".to_owned());
+    let mut openalex = arxiv.clone();
+    openalex.pdf_url = Some("https://openalex.test/oa/shared.pdf".to_owned());
+    let harness = ResearchHarness::new(
+        vec![
+            stub_ok("arxiv", vec![arxiv]),
+            stub_ok("openalex", vec![openalex]),
+        ],
+        1024 * 1024,
+    )
+    .await;
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+    let outcome = harness
+        .service
+        .discover(harness.request().query, cancel_rx)
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.results.len(), 1);
+    assert_eq!(outcome.results[0].providers, vec!["arxiv", "openalex"]);
+    assert_eq!(outcome.results[0].fulltext.state, FulltextState::Available);
+    assert_eq!(outcome.results[0].fulltext.source_count, 2);
+    let stored_sources = outcome.results[0]
+        .work
+        .metadata
+        .metadata
+        .pointer("/_paper_codex/pdf_sources")
+        .and_then(serde_json::Value::as_array)
+        .unwrap();
+    assert_eq!(stored_sources.len(), 2);
+}
+
+#[tokio::test]
+async fn candidate_snapshot_uses_persisted_metadata_and_ordered_pdf_sources() {
+    let harness = ResearchHarness::new(Vec::new(), 1024 * 1024).await;
+    let mut metadata = titled_work(
+        "arxiv:2301.08243",
+        "I-JEPA: Self-Supervised Learning from Images",
+        &["Mahmoud Assran"],
+        2023,
+    );
+    metadata.source_url = "https://arxiv.org/abs/2301.08243".to_owned();
+    metadata.pdf_url = Some("https://arxiv.org/pdf/2301.08243.pdf".to_owned());
+    metadata.metadata = json!({
+        "_paper_codex": {
+            "providers": ["openalex", "arxiv"],
+            "pdf_sources": [
+                {"provider":"openalex", "url":"https://mirror.test/i-jepa.pdf"},
+                {"provider":"arxiv", "url":"https://arxiv.org/pdf/2301.08243.pdf"}
+            ]
+        }
+    });
+    let work = harness.store.upsert_work(metadata).await.unwrap();
+
+    let snapshot = harness.service.candidate_snapshot(&work.id).await.unwrap();
+
+    assert_eq!(snapshot.work_id, work.id);
+    assert_eq!(
+        snapshot.title,
+        "I-JEPA: Self-Supervised Learning from Images"
+    );
+    assert_eq!(snapshot.pdf_sources.len(), 2);
+    assert_eq!(snapshot.pdf_sources[0].provider, "openalex");
+    assert_eq!(snapshot.pdf_sources[1].provider, "arxiv");
+}
+
+#[test]
+fn historical_ingest_json_deserializes_without_a_candidate_snapshot() {
+    let input: IngestInput = serde_json::from_str(
+        r#"{"source":"arxiv:2301.08243","project_id":null,"upload_path":null,"bulk_import":false}"#,
+    )
+    .unwrap();
+
+    assert!(input.candidate.is_none());
 }
 
 #[tokio::test]

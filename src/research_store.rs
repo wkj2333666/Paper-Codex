@@ -803,11 +803,81 @@ fn normalize_work(mut work: WorkMetadata) -> Result<WorkMetadata> {
 fn merge_json(current: Value, incoming: Value) -> Value {
     match (current, incoming) {
         (Value::Object(mut current), Value::Object(incoming)) => {
-            current.extend(incoming);
+            for (key, value) in incoming {
+                if key == "_paper_codex" {
+                    let merged = merge_paper_codex_metadata(current.remove(&key), value);
+                    current.insert(key, merged);
+                } else {
+                    current.insert(key, value);
+                }
+            }
             Value::Object(current)
         }
         (_, incoming) => incoming,
     }
+}
+
+fn merge_paper_codex_metadata(current: Option<Value>, incoming: Value) -> Value {
+    let mut merged = current
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let Some(incoming) = incoming.as_object() else {
+        return Value::Object(merged);
+    };
+
+    let mut providers = merged
+        .get("providers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    providers.extend(
+        incoming
+            .get("providers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned),
+    );
+    providers.sort();
+    providers.dedup();
+
+    let mut sources = merged
+        .get("pdf_sources")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    sources.extend(
+        incoming
+            .get("pdf_sources")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    );
+    let mut seen = std::collections::HashSet::new();
+    sources.retain(|source| {
+        source
+            .get("url")
+            .and_then(Value::as_str)
+            .map(normalized_source_url)
+            .is_some_and(|url| seen.insert(url))
+    });
+
+    merged.insert("providers".to_owned(), serde_json::json!(providers));
+    merged.insert("pdf_sources".to_owned(), Value::Array(sources));
+    for (key, value) in incoming {
+        if key != "providers" && key != "pdf_sources" {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(merged)
+}
+
+fn normalized_source_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
 fn work_from_row(row: &SqliteRow) -> Result<DiscoveredWork> {

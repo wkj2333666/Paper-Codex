@@ -1,5 +1,5 @@
 use crate::{
-    acquisition::Acquirer,
+    acquisition::{Acquirer, AllPdfSourcesFailed, PdfSource, ResolvedPaper},
     codex::{CodexOutcome, CodexRunSettings, CodexRuntime, CodexTurn},
     db::Database,
     domain::{Paper, Task, TaskEvent, TaskState},
@@ -65,6 +65,36 @@ pub struct IngestInput {
     pub upload_path: Option<PathBuf>,
     #[serde(default)]
     pub bulk_import: bool,
+    #[serde(default)]
+    pub candidate: Option<CandidateSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateSnapshot {
+    pub work_id: String,
+    pub canonical_key: String,
+    pub title: String,
+    pub authors: Vec<String>,
+    pub year: Option<i64>,
+    pub doi: Option<String>,
+    pub arxiv_id: Option<String>,
+    pub source_url: String,
+    pub pdf_sources: Vec<PdfSource>,
+}
+
+impl CandidateSnapshot {
+    fn resolved(&self, pdf_url: String) -> ResolvedPaper {
+        ResolvedPaper {
+            identity: Some(self.canonical_key.clone()),
+            title: self.title.clone(),
+            authors: self.authors.clone(),
+            year: self.year,
+            doi: self.doi.clone(),
+            arxiv_id: self.arxiv_id.clone(),
+            source_url: self.source_url.clone(),
+            pdf_url,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,15 +301,26 @@ impl TaskEngine {
             }
             let task = self.db.get_task(&id).await.ok().flatten();
             if task.as_ref().is_some_and(|task| task.state != "cancelled") {
-                let message = redact_error(&error.to_string());
-                if self
-                    .db
-                    .transition_task(&id, TaskState::Failed, Some(&message))
-                    .await
-                    .is_ok()
-                {
+                let source_failure = error.downcast_ref::<AllPdfSourcesFailed>();
+                let message = source_failure
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| redact_error(&error.to_string()));
+                let details = source_failure.map_or_else(
+                    || serde_json::json!({"code":"task_failed"}),
+                    |failure| {
+                        serde_json::json!({
+                            "code":"all_pdf_sources_failed",
+                            "attempts":&failure.attempts,
+                        })
+                    },
+                );
+                if self.db.fail_task(&id, &message, &details).await.is_ok() {
                     let _ = self
-                        .emit(&id, "failed", serde_json::json!({"message":message}))
+                        .emit(
+                            &id,
+                            "failed",
+                            serde_json::json!({"message":message,"details":details}),
+                        )
                         .await;
                 }
             }
@@ -311,21 +352,39 @@ impl TaskEngine {
     ) -> Result<()> {
         self.check_cancel(&cancel)?;
         self.stage(id, TaskState::Resolving).await?;
-        let resolved = if input.upload_path.is_some() {
+        let mut resolved = if input.upload_path.is_some() {
             None
+        } else if let Some(candidate) = &input.candidate {
+            Some(
+                candidate.resolved(
+                    candidate
+                        .pdf_sources
+                        .first()
+                        .map(|source| source.url.clone())
+                        .unwrap_or_default(),
+                ),
+            )
         } else {
             Some(self.acquirer.resolve(&input.source).await?)
         };
         self.check_cancel(&cancel)?;
         self.stage(id, TaskState::Fetching).await?;
-        let bytes = if let Some(path) = &input.upload_path {
+        let (bytes, revision_source) = if let Some(path) = &input.upload_path {
             let bytes = tokio::fs::read(path).await?;
             self.acquirer.validate_pdf(&bytes)?;
-            bytes
+            (bytes, None)
+        } else if let Some(candidate) = &input.candidate {
+            let downloaded = self
+                .acquirer
+                .download_pdf_sources(&candidate.pdf_sources, cancel.clone())
+                .await?;
+            if let Some(resolved) = &mut resolved {
+                resolved.pdf_url = downloaded.source.url.clone();
+            }
+            (downloaded.bytes, Some(downloaded.source.url))
         } else {
-            self.acquirer
-                .download_pdf(&resolved.as_ref().unwrap().pdf_url)
-                .await?
+            let source = resolved.as_ref().unwrap().pdf_url.clone();
+            (self.acquirer.download_pdf(&source).await?, Some(source))
         };
         let byte_hash = hex::encode(Sha256::digest(&bytes));
         let paper_id = resolved
@@ -339,11 +398,7 @@ impl TaskEngine {
             .unwrap_or_else(|| input.source.clone());
         let stored = self
             .workspace
-            .store_revision(
-                &paper_id,
-                &bytes,
-                resolved.as_ref().map(|p| p.pdf_url.as_str()),
-            )
+            .store_revision(&paper_id, &bytes, revision_source.as_deref())
             .await?;
         let now = chrono::Utc::now().to_rfc3339();
         let mut paper = Paper {
@@ -863,6 +918,7 @@ mod tests {
             project_id: Some("project".into()),
             upload_path: None,
             bulk_import: true,
+            candidate: None,
         };
         let restored: IngestInput =
             serde_json::from_str(&serde_json::to_string(&bulk).unwrap()).unwrap();
