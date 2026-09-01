@@ -96,6 +96,26 @@
   color: var(--ink);
 }
 
+[data-theme="dark"] .intake-search-results,
+[data-theme="dark"] .intake-candidate {
+  background: var(--paper-raised);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+[data-theme="dark"] .intake-provider-warning {
+  background: #302a1f;
+  border-color: #5b4c30;
+  color: #e8c987;
+}
+
+[data-theme="dark"] .intake-inline-error,
+[data-theme="dark"] .intake-search-error {
+  background: #332222;
+  border-color: #704544;
+  color: #f1aaa4;
+}
+
 [data-theme="dark"] .paper-card:hover,
 [data-theme="dark"] .search-results button:hover {
   border-color: #58816b;

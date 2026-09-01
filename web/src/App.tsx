@@ -14,6 +14,8 @@ import { briefFromAnalysis, describePaperImpact } from "./reading"
 import { initialState, projectPaperCount, reduceEvent } from "./state"
 import { groupIntakeTasks, mergeIntakeTaskEvent } from "./intake-status"
 import { IntakeTaskCard } from "./IntakeTaskCard"
+import { IntakeSearchResults } from "./IntakeSearchResults"
+import { routeIntakeSubmission } from "./intake-flow"
 import { MobilePanelRails, PanelCollapseButton, PanelRail } from "./PanelControls"
 import { PaperHeaderActions } from "./PaperHeaderActions"
 import { CodexPanel } from "./CodexPanel"
@@ -33,7 +35,7 @@ import {
   setPanelOpen,
   type PanelName,
 } from "./panel-preferences"
-import type { Dashboard, GraphNode, GraphPayload, KnowledgeKind, MessageCitation, Paper, PaperAnalysis, PaperAnnotation, PaperDetail, Project, SearchResult, Task } from "./types"
+import type { Dashboard, GraphNode, GraphPayload, IntakeSearchResponse, KnowledgeKind, MessageCitation, Paper, PaperAnalysis, PaperAnnotation, PaperDetail, Project, SearchResult, Task } from "./types"
 
 type Selection=CodexSelection
 type Select=(selection:Selection)=>void
@@ -241,7 +243,10 @@ function MainView({dashboard,selection,select,refresh,researchRevisions,citation
 
 export function Workbench({dashboard,select,refresh}:{dashboard:Dashboard;select:Select;refresh:()=>Promise<void>}){
   const [source,setSource]=useState("");const [project,setProject]=useState("");const [busy,setBusy]=useState(false);const fileRef=useRef<HTMLInputElement>(null)
-  const submit=async(event:FormEvent)=>{event.preventDefault();if(!source.trim())return;setBusy(true);try{await api.intake(source,project||undefined);await refresh();setSource("")}finally{setBusy(false)}}
+  const [searchResponse,setSearchResponse]=useState<IntakeSearchResponse|null>(null);const [searchError,setSearchError]=useState("");const [importingWorkId,setImportingWorkId]=useState<string|null>(null);const [importError,setImportError]=useState("")
+  const errorMessage=(error:unknown)=>error instanceof Error?error.message:"操作失败，请稍后重试"
+  const submit=async(event:FormEvent)=>{event.preventDefault();const query=source.trim();if(!query)return;setBusy(true);setSearchError("");setImportError("");try{const result=await routeIntakeSubmission(query,project||undefined,api);if(result.state==="candidates"){setSearchResponse(result.response);return}await refresh();setSource("");setSearchResponse(null)}catch(error){setSearchError(errorMessage(error))}finally{setBusy(false)}}
+  const importCandidate=async(workId:string)=>{setImportingWorkId(workId);setImportError("");try{const projectId=project||undefined;const result=await api.importIntakeCandidate(workId,projectId);await refresh();setSource("");setSearchResponse(null);if(result.state==="existing")select({kind:"paper",id:result.paper_id,...(projectId?{projectId}:{})})}catch(error){setImportError(errorMessage(error))}finally{setImportingWorkId(null)}}
   const upload=async(file?:File)=>{if(!file)return;setBusy(true);try{await api.upload(file,project||undefined);await refresh()}finally{setBusy(false)}}
   const recent=dashboard.papers.slice(0,6)
   const intakeTasks=groupIntakeTasks(dashboard.tasks)
@@ -250,7 +255,7 @@ export function Workbench({dashboard,select,refresh}:{dashboard:Dashboard;select
   const dismissTask=async(id:string)=>{await api.dismissTask(id);await refresh()}
   const clearFailures=async()=>{try{await Promise.all(intakeTasks.failed.map(task=>api.dismissTask(task.id)))}finally{await refresh()}}
   return <div className="content-wrap"><header className="hero"><p className="eyebrow">论文优先的研究工作流</p><h1>今天想读什么？</h1><p>输入论文名称、DOI、arXiv 或链接。Codex 会用中文整理证据，并把方法、概念和发现接入知识图谱。</p></header>
-    <form className="intake-card" onSubmit={submit}><div className="intake-line"><Sparkles/><input value={source} onChange={event=>setSource(event.target.value)} placeholder="粘贴论文名称、链接、DOI 或 arXiv…"/><button disabled={busy||!source.trim()}>{busy?<LoaderCircle className="spin"/>:<Send/>}</button></div><div className="intake-options"><select value={project} onChange={event=>setProject(event.target.value)}><option value="">暂不归类</option>{dashboard.projects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select><input ref={fileRef} hidden type="file" accept="application/pdf" onChange={event=>void upload(event.target.files?.[0])}/><button type="button" className="ghost" onClick={()=>fileRef.current?.click()}><Paperclip/>上传 PDF</button></div></form>
+    <form className="intake-card" onSubmit={submit}><div className="intake-line"><Sparkles/><input value={source} onChange={event=>{setSource(event.target.value);setSearchResponse(null);setSearchError("");setImportError("")}} placeholder="粘贴论文名称、链接、DOI 或 arXiv…"/><button disabled={busy||!source.trim()}>{busy?<LoaderCircle className="spin"/>:<Send/>}</button></div><div className="intake-options"><select value={project} onChange={event=>setProject(event.target.value)}><option value="">暂不归类</option>{dashboard.projects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select><input ref={fileRef} hidden type="file" accept="application/pdf" onChange={event=>void upload(event.target.files?.[0])}/><button type="button" className="ghost" onClick={()=>fileRef.current?.click()}><Paperclip/>上传 PDF</button></div>{searchError&&<div className="intake-inline-error"><CircleAlert/>{searchError}</div>}{searchResponse&&<IntakeSearchResults response={searchResponse} importingWorkId={importingWorkId} importError={importError} onImport={workId=>void importCandidate(workId)} onDismiss={()=>{setSearchResponse(null);setImportError("")}}/>}</form>
     <div className="stats"><div><Library/><strong>{dashboard.papers.length}</strong><span>论文</span></div><div><FolderTree/><strong>{dashboard.projects.length}</strong><span>研究项目</span></div><div><Network/><strong>{dashboard.papers.filter(paper=>paper.note_path).length}</strong><span>已结构化</span></div></div>
     {intakeTasks.active.length>0&&<><SectionHead title="正在处理"/><div className="paper-grid intake-task-grid">{intakeTasks.active.map(task=><IntakeTaskCard key={task.id} task={task} onCancel={id=>void cancelTask(id)} onDismiss={id=>void dismissTask(id)}/>)}</div></>}
     {recentFailures.length>0&&<><SectionHead title="最近失败" action="清除失败记录" onClick={()=>void clearFailures()}/><div className="paper-grid intake-task-grid">{recentFailures.map(task=><IntakeTaskCard key={task.id} task={task} onCancel={id=>void cancelTask(id)} onDismiss={id=>void dismissTask(id)}/>)}</div></>}

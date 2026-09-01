@@ -32,8 +32,9 @@ describe("intake status", () => {
   })
 
   it("stores failure and cancellation details from terminal events", () => {
-    const failed = mergeIntakeTaskEvent([task()], { id: 2, type: "failed", task_id: "task-1", payload: { message: "下载失败" }, created_at: "now" })
-    expect(failed[0]).toMatchObject({ state: "failed", error: "下载失败" })
+    const details={code:"all_pdf_sources_failed",attempts:[{provider:"openreview",url:"https://openreview.net/pdf",status:403,reason_code:"browser_challenge_required",reason:"来源要求浏览器完成验证"}]}
+    const failed = mergeIntakeTaskEvent([task()], { id: 2, type: "failed", task_id: "task-1", payload: { message: "下载失败",details }, created_at: "now" })
+    expect(failed[0]).toMatchObject({ state: "failed", error: "下载失败",error_details_json:JSON.stringify(details) })
     const cancelled = mergeIntakeTaskEvent(failed, { id: 3, type: "cancelled", task_id: "task-1", payload: {}, created_at: "now" })
     expect(cancelled[0].state).toBe("cancelled")
   })
