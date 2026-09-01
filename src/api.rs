@@ -8,7 +8,7 @@ use crate::{
     login_limiter::LoginLimiter,
     project_readme::{ProjectReadmeError, ProjectReadmeStore},
     research::{CandidateStatus, ResearchMode, ResearchQuery, SearchRunState},
-    research_service::{ResearchDiscoveryError, ResearchService},
+    research_service::{ImportCandidateOutcome, ResearchDiscoveryError, ResearchService},
     research_store::ResearchStore,
     search::SearchIndex,
     tasks::{IngestInput, QuestionInput, TaskEngine},
@@ -144,6 +144,15 @@ impl ApiError {
         }
     }
 
+    fn coded_conflict(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+            code: Some(code),
+            details: None,
+        }
+    }
+
     fn unprocessable(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNPROCESSABLE_ENTITY,
@@ -255,6 +264,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/graph", get(get_graph))
         .route("/api/intake", post(create_intake))
         .route("/api/intake/search", post(search_intake))
+        .route(
+            "/api/intake/candidates/{work_id}/import",
+            post(import_intake_candidate),
+        )
         .route("/api/intake/upload", post(upload_pdf))
         .route("/api/tasks", get(list_tasks))
         .route("/api/tasks/{id}", get(get_task).delete(dismiss_task))
@@ -1096,6 +1109,11 @@ struct IntakeSearchRequest {
     limit: Option<usize>,
 }
 
+#[derive(Deserialize)]
+struct CandidateImportRequest {
+    project_id: Option<String>,
+}
+
 async fn search_intake(
     State(state): State<AppState>,
     Json(request): Json<IntakeSearchRequest>,
@@ -1148,6 +1166,87 @@ async fn search_intake(
     })))
 }
 
+async fn import_intake_candidate(
+    State(state): State<AppState>,
+    Path(work_id): Path<String>,
+    Json(request): Json<CandidateImportRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let research = require_research(&state)?;
+    let work = research
+        .store()
+        .get_work(&work_id)
+        .await
+        .map_err(map_research_error)?
+        .ok_or_else(|| ApiError::not_found("候选论文不存在"))?;
+    if let Some(paper) = state
+        .db
+        .find_paper_by_identity(
+            work.metadata.doi.as_deref(),
+            work.metadata.arxiv_id.as_deref(),
+        )
+        .await?
+    {
+        if let Some(project_id) = request.project_id.as_deref() {
+            state.db.add_paper_to_project(&paper.id, project_id).await?;
+        }
+        return Ok(Json(json!({"state":"existing","paper_id":paper.id})));
+    }
+
+    let snapshot = research
+        .candidate_snapshot(&work_id)
+        .await
+        .map_err(|error| {
+            if error.to_string().contains("no importable PDF source") {
+                ApiError::coded_conflict(
+                    "candidate_not_importable",
+                    "候选论文没有可自动下载的 PDF 来源",
+                )
+            } else {
+                map_research_error(error)
+            }
+        })?;
+    let engine = state
+        .engine
+        .as_deref()
+        .ok_or_else(|| ApiError::unavailable("论文导入服务尚未启用"))?;
+    if let Some(project_id) = request.project_id.as_deref() {
+        research
+            .save_candidate(
+                project_id,
+                &work_id,
+                "用户从首页搜索结果确认导入",
+                &[],
+                None,
+                None,
+            )
+            .await
+            .map_err(map_research_error)?;
+        return match research
+            .import_candidate(project_id, &work_id, Some(engine))
+            .await
+            .map_err(map_research_error)?
+        {
+            ImportCandidateOutcome::Enqueued { task_id } => {
+                Ok(Json(json!({"state":"enqueued","task_id":task_id})))
+            }
+            ImportCandidateOutcome::AlreadyInProject { paper_id }
+            | ImportCandidateOutcome::LinkedExisting { paper_id } => {
+                Ok(Json(json!({"state":"existing","paper_id":paper_id})))
+            }
+        };
+    }
+    let task_id = engine
+        .create_ingest(IngestInput {
+            source: snapshot.source_url.clone(),
+            project_id: None,
+            upload_path: None,
+            bulk_import: false,
+            candidate: Some(snapshot),
+        })
+        .await?;
+    Ok(Json(json!({"state":"enqueued","task_id":task_id})))
+}
+
 async fn create_intake(
     State(state): State<AppState>,
     Json(request): Json<IntakeRequest>,
@@ -1171,6 +1270,7 @@ async fn create_intake(
             project_id: request.project_id,
             upload_path: None,
             bulk_import: false,
+            candidate: None,
         })
         .await?;
     Ok((
@@ -1229,6 +1329,7 @@ async fn upload_pdf(
             project_id: project_id.filter(|v| !v.is_empty()),
             upload_path: Some(path),
             bulk_import: false,
+            candidate: None,
         })
         .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({"task_id":id}))))

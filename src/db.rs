@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS project_papers (
 );
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL, input_json TEXT NOT NULL,
-  paper_id TEXT, project_id TEXT, thread_id TEXT, error TEXT,
+  paper_id TEXT, project_id TEXT, thread_id TEXT, error TEXT, error_details_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS task_events (
@@ -307,6 +307,11 @@ impl Database {
         }
         if !has_column(pool, "papers", "deleted_at").await? {
             sqlx::query("ALTER TABLE papers ADD COLUMN deleted_at TEXT")
+                .execute(pool)
+                .await?;
+        }
+        if !has_column(pool, "tasks", "error_details_json").await? {
+            sqlx::query("ALTER TABLE tasks ADD COLUMN error_details_json TEXT")
                 .execute(pool)
                 .await?;
         }
@@ -1135,6 +1140,38 @@ impl Database {
                 "task state changed concurrently from {current} to {}",
                 actual.as_deref().unwrap_or("missing")
             );
+        }
+        Ok(())
+    }
+
+    pub async fn fail_task(
+        &self,
+        id: &str,
+        message: &str,
+        details: &serde_json::Value,
+    ) -> Result<()> {
+        let current: String = sqlx::query_scalar("SELECT state FROM tasks WHERE id=?")
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await?;
+        let current: TaskState = current.parse().map_err(anyhow::Error::msg)?;
+        if !current.can_transition_to(TaskState::Failed) {
+            bail!("illegal task transition {current} -> failed");
+        }
+        let updated = sqlx::query(
+            r#"UPDATE tasks
+               SET state='failed',error=?,error_details_json=?,updated_at=CURRENT_TIMESTAMP
+               WHERE id=? AND state=?"#,
+        )
+        .bind(message)
+        .bind(serde_json::to_string(details)?)
+        .bind(id)
+        .bind(current.as_str())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if updated == 0 {
+            bail!("task state changed concurrently from {current}");
         }
         Ok(())
     }

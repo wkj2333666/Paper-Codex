@@ -1,5 +1,5 @@
 use crate::{
-    acquisition::Acquirer,
+    acquisition::{Acquirer, PdfSource},
     codex::CodexEvent,
     codex_tools::{DynamicToolCall, DynamicToolDefinition, DynamicToolHandler, DynamicToolSession},
     conversation_context::ConversationContextBuilder,
@@ -12,7 +12,7 @@ use crate::{
         ResearchTrigger, SearchRunState, WorkMetadata,
     },
     research_store::ResearchStore,
-    tasks::{IngestInput, TaskEngine},
+    tasks::{CandidateSnapshot, IngestInput, TaskEngine},
     workspace::atomic_write,
 };
 use anyhow::{bail, Context, Result};
@@ -847,6 +847,51 @@ impl ResearchService {
         Ok(self.execute_discovery(query, cancel).await?.outcome)
     }
 
+    pub async fn candidate_snapshot(&self, work_id: &str) -> Result<CandidateSnapshot> {
+        let work = self
+            .store
+            .get_work(work_id)
+            .await?
+            .context("discovered work does not exist")?;
+        let mut sources = persisted_pdf_sources(&work);
+        if let Some(pdf_url) = work.metadata.pdf_url.as_deref() {
+            push_pdf_source(&mut sources, "provider", pdf_url);
+        }
+        if let Some(arxiv_id) = work.metadata.arxiv_id.as_deref() {
+            push_pdf_source(
+                &mut sources,
+                "arxiv",
+                &format!("https://arxiv.org/pdf/{arxiv_id}.pdf"),
+            );
+        }
+        let has_identity_resolver = sources
+            .iter()
+            .any(|source| matches!(source.provider.as_str(), "crossref" | "openalex"));
+        let needs_identity_fallback =
+            sources.is_empty() || sources.iter().any(|source| source.provider == "openreview");
+        if !has_identity_resolver && needs_identity_fallback {
+            if let Some(doi) = work.metadata.doi.as_deref() {
+                if let Ok(resolved) = self.acquirer.resolve(&format!("doi:{doi}")).await {
+                    push_pdf_source(&mut sources, "crossref", &resolved.pdf_url);
+                }
+            }
+        }
+        if sources.is_empty() {
+            bail!("candidate has no importable PDF source");
+        }
+        Ok(CandidateSnapshot {
+            work_id: work.id,
+            canonical_key: work.metadata.canonical_key,
+            title: work.metadata.title,
+            authors: work.metadata.authors,
+            year: work.metadata.year,
+            doi: work.metadata.doi,
+            arxiv_id: work.metadata.arxiv_id,
+            source_url: work.metadata.source_url,
+            pdf_sources: sources,
+        })
+    }
+
     async fn execute_discovery(
         &self,
         normalized_query: ResearchQuery,
@@ -1143,28 +1188,15 @@ impl ResearchService {
             };
         }
 
-        let source = candidate
-            .work
-            .metadata
-            .arxiv_id
-            .as_deref()
-            .map(|id| format!("arxiv:{id}"))
-            .or_else(|| {
-                candidate
-                    .work
-                    .metadata
-                    .doi
-                    .as_deref()
-                    .map(|doi| format!("doi:{doi}"))
-            })
-            .or_else(|| candidate.work.metadata.pdf_url.clone())
-            .context("candidate has no importable source")?;
+        let snapshot = self.candidate_snapshot(work_id).await?;
+        let source = snapshot.source_url.clone();
         let engine = engine.context("paper import service is unavailable")?;
         let input = IngestInput {
             source,
             project_id: Some(project_id.to_owned()),
             upload_path: None,
             bulk_import,
+            candidate: Some(snapshot),
         };
         let task_id = engine.create_ingest(input).await?;
         if let Err(error) = self
@@ -1404,6 +1436,51 @@ fn discovery_fulltext(work: &DiscoveredWork) -> DiscoveryFulltext {
 
 fn normalized_pdf_url(url: &str) -> String {
     url.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
+fn persisted_pdf_sources(work: &DiscoveredWork) -> Vec<PdfSource> {
+    let mut sources = Vec::new();
+    for value in work
+        .metadata
+        .metadata
+        .pointer("/_paper_codex/pdf_sources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(provider) = value.get("provider").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(url) = value.get("url").and_then(Value::as_str) else {
+            continue;
+        };
+        push_pdf_source(&mut sources, provider, url);
+    }
+    sources
+}
+
+fn push_pdf_source(sources: &mut Vec<PdfSource>, provider: &str, value: &str) {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        return;
+    }
+    let Ok(url) = url::Url::parse(value.trim()) else {
+        return;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return;
+    }
+    let normalized = normalized_pdf_url(url.as_str());
+    if sources
+        .iter()
+        .any(|source| normalized_pdf_url(&source.url) == normalized)
+    {
+        return;
+    }
+    sources.push(PdfSource {
+        provider: provider.to_owned(),
+        url: url.to_string(),
+    });
 }
 
 fn abstract_inspection(work: DiscoveredWork) -> InspectionOutcome {
