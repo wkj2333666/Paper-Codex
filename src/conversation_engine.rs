@@ -279,6 +279,16 @@ impl ConversationEngine {
         tasks: Option<Arc<TaskEngine>>,
     ) -> Result<Arc<Self>> {
         Self::recover_states(&db).await?;
+        Self::start_with_services_after_recovery(db, workspace, codex, research, tasks).await
+    }
+
+    pub async fn start_with_services_after_recovery(
+        db: Database,
+        workspace: Workspace,
+        codex: Arc<CodexRuntime>,
+        research: Option<Arc<ResearchService>>,
+        tasks: Option<Arc<TaskEngine>>,
+    ) -> Result<Arc<Self>> {
         let queued = db.queued_assistant_messages().await?;
         let (queue, mut receiver) = mpsc::channel::<String>(128);
         let (events, _) = broadcast::channel(1024);
