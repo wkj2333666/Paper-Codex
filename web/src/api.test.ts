@@ -100,6 +100,17 @@ test("task cancellation and dismissal use separate encoded endpoints", async()=>
   ])
 })
 
+test("intake search and confirmed candidate import use dedicated endpoints", async()=>{
+  await api.searchIntake("jepa",12)
+  await api.importIntakeCandidate("work/one","project/one")
+  expect(capturedRequests.slice(-2).map(request=>[request.method,request.url])).toEqual([
+    ["POST","/api/intake/search"],
+    ["POST","/api/intake/candidates/work%2Fone/import"],
+  ])
+  expect(JSON.parse(String(capturedRequests.at(-2)?.body))).toEqual({query:"jepa",limit:12})
+  expect(JSON.parse(String(capturedRequests.at(-1)?.body))).toEqual({project_id:"project/one"})
+})
+
 test("Codex capabilities and conversation settings use the conversation API", async()=>{
   await api.codexCapabilities()
   await api.createConversation("设置对话", [], {model:"gpt-test", reasoning_effort:"high", service_tier:"priority"})
