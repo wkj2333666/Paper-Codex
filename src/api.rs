@@ -1,4 +1,5 @@
 use crate::{
+    acquisition::{classify_input, IntakeKind},
     auth::{require_auth, Auth},
     conversation_engine::ConversationEngine,
     conversations::{AnnotationAnchor, ConversationEvent, ConversationScopeInput},
@@ -6,8 +7,8 @@ use crate::{
     domain::TaskEvent,
     login_limiter::LoginLimiter,
     project_readme::{ProjectReadmeError, ProjectReadmeStore},
-    research::{CandidateStatus, ResearchMode},
-    research_service::ResearchService,
+    research::{CandidateStatus, ResearchMode, ResearchQuery, SearchRunState},
+    research_service::{ResearchDiscoveryError, ResearchService},
     research_store::ResearchStore,
     search::SearchIndex,
     tasks::{IngestInput, QuestionInput, TaskEngine},
@@ -105,6 +106,8 @@ impl AppState {
 pub struct ApiError {
     status: StatusCode,
     message: String,
+    code: Option<&'static str>,
+    details: Option<Value>,
 }
 
 impl ApiError {
@@ -112,24 +115,50 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: message.into(),
+            code: None,
+            details: None,
         }
     }
     fn unavailable(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             message: message.into(),
+            code: None,
+            details: None,
         }
     }
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
             message: message.into(),
+            code: None,
+            details: None,
         }
     }
     fn conflict(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
             message: message.into(),
+            code: None,
+            details: None,
+        }
+    }
+
+    fn unprocessable(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: message.into(),
+            code: Some(code),
+            details: None,
+        }
+    }
+
+    fn service_failure(code: &'static str, message: impl Into<String>, details: Value) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: message.into(),
+            code: Some(code),
+            details: Some(details),
         }
     }
 }
@@ -140,6 +169,8 @@ impl From<anyhow::Error> for ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: "operation failed".into(),
+            code: None,
+            details: None,
         }
     }
 }
@@ -152,7 +183,15 @@ impl From<std::io::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({"error":self.message}))).into_response()
+        let mut payload = serde_json::Map::new();
+        payload.insert("error".to_owned(), Value::String(self.message));
+        if let Some(code) = self.code {
+            payload.insert("code".to_owned(), Value::String(code.to_owned()));
+        }
+        if let Some(details) = self.details {
+            payload.insert("details".to_owned(), details);
+        }
+        (self.status, Json(Value::Object(payload))).into_response()
     }
 }
 
@@ -215,6 +254,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/relations", get(get_relations))
         .route("/api/graph", get(get_graph))
         .route("/api/intake", post(create_intake))
+        .route("/api/intake/search", post(search_intake))
         .route("/api/intake/upload", post(upload_pdf))
         .route("/api/tasks", get(list_tasks))
         .route("/api/tasks/{id}", get(get_task).delete(dismiss_task))
@@ -452,6 +492,8 @@ async fn get_project(
         .ok_or_else(|| ApiError {
             status: StatusCode::NOT_FOUND,
             message: "项目不存在".into(),
+            code: None,
+            details: None,
         })
 }
 
@@ -752,6 +794,8 @@ async fn get_paper(
         .ok_or_else(|| ApiError {
             status: StatusCode::NOT_FOUND,
             message: "paper not found".into(),
+            code: None,
+            details: None,
         })?;
     let mut analysis = state.db.paper_analysis(&query.id).await?;
     if analysis.is_none() {
@@ -812,6 +856,8 @@ async fn permanently_delete_paper(
         .ok_or_else(|| ApiError {
             status: StatusCode::NOT_FOUND,
             message: "论文不存在".into(),
+            code: None,
+            details: None,
         })?;
     state
         .db
@@ -870,6 +916,8 @@ async fn get_pdf(
         .ok_or_else(|| ApiError {
             status: StatusCode::NOT_FOUND,
             message: "paper not found".into(),
+            code: None,
+            details: None,
         })?;
     let sha = paper.canonical_sha256.context("paper has no revision")?;
     let path = state
@@ -1041,12 +1089,77 @@ struct IntakeRequest {
     source: String,
     project_id: Option<String>,
 }
+
+#[derive(Deserialize)]
+struct IntakeSearchRequest {
+    query: String,
+    limit: Option<usize>,
+}
+
+async fn search_intake(
+    State(state): State<AppState>,
+    Json(request): Json<IntakeSearchRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let query = request.query.trim();
+    if query.is_empty() {
+        return Err(ApiError::bad_request("paper search query is required"));
+    }
+    let limit = request.limit.unwrap_or(12);
+    if !(1..=25).contains(&limit) {
+        return Err(ApiError::bad_request(
+            "paper search limit must be between 1 and 25",
+        ));
+    }
+    let research = require_research(&state)?;
+    let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    let outcome = research
+        .discover(
+            ResearchQuery {
+                text: query.to_owned(),
+                title_terms: Vec::new(),
+                author: None,
+                year_from: None,
+                year_to: None,
+                limit,
+            },
+            cancel_rx,
+        )
+        .await
+        .map_err(|error| {
+            if let Some(discovery) = error.downcast_ref::<ResearchDiscoveryError>() {
+                ApiError::service_failure(
+                    "paper_search_failed",
+                    "所有论文检索来源均失败",
+                    json!({"providers": discovery.providers}),
+                )
+            } else {
+                tracing::error!(error=%error, "intake paper search failed");
+                ApiError::unavailable("论文检索暂时不可用")
+            }
+        })?;
+    if outcome.state == SearchRunState::Cancelled {
+        return Err(ApiError::unavailable("论文检索已取消"));
+    }
+    Ok(Json(json!({
+        "query": query,
+        "state": outcome.state,
+        "providers": outcome.providers,
+        "results": outcome.results,
+    })))
+}
+
 async fn create_intake(
     State(state): State<AppState>,
     Json(request): Json<IntakeRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     if request.source.trim().is_empty() {
         return Err(ApiError::bad_request("paper name or link is required"));
+    }
+    if matches!(classify_input(&request.source), IntakeKind::Title(_)) {
+        return Err(ApiError::unprocessable(
+            "intake_search_required",
+            "论文名称或引用需要先搜索并选择候选",
+        ));
     }
     let engine = state
         .engine
@@ -1060,7 +1173,10 @@ async fn create_intake(
             bulk_import: false,
         })
         .await?;
-    Ok((StatusCode::ACCEPTED, Json(json!({"task_id":id}))))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"kind":"enqueued","task_id":id})),
+    ))
 }
 
 async fn upload_pdf(
@@ -1133,6 +1249,8 @@ async fn get_task(
         .ok_or_else(|| ApiError {
             status: StatusCode::NOT_FOUND,
             message: "task not found".into(),
+            code: None,
+            details: None,
         })
 }
 async fn dismiss_task(
