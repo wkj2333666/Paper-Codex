@@ -7,8 +7,9 @@ use crate::{
     extraction::extract_pdf,
     project_context::project_path,
     research::{
-        CandidateStatus, DiscoveredWork, EvidenceLevel, ProjectCandidate, ResearchProvider,
-        ResearchQuery, ResearchTrigger, SearchRunState,
+        CandidateStatus, DiscoveredWork, DiscoveryFulltext, DiscoveryMatch, DiscoveryResult,
+        EvidenceLevel, FulltextState, ProjectCandidate, ResearchProvider, ResearchQuery,
+        ResearchTrigger, SearchRunState, WorkMetadata,
     },
     research_store::ResearchStore,
     tasks::{IngestInput, TaskEngine},
@@ -79,6 +80,25 @@ pub struct SearchOutcome {
     pub state: SearchRunState,
     pub works: Vec<DiscoveredWork>,
     pub providers: HashMap<String, ProviderStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryOutcome {
+    pub state: SearchRunState,
+    pub results: Vec<DiscoveryResult>,
+    pub providers: HashMap<String, ProviderStatus>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("paper discovery failed: {message}")]
+pub struct ResearchDiscoveryError {
+    pub message: String,
+    pub providers: HashMap<String, ProviderStatus>,
+}
+
+struct DiscoveryExecution {
+    outcome: DiscoveryOutcome,
+    provider_works: BTreeMap<String, Vec<DiscoveredWork>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -720,7 +740,7 @@ impl ResearchService {
     pub async fn search_with_cancel(
         &self,
         request: SearchRequest,
-        mut cancel: watch::Receiver<bool>,
+        cancel: watch::Receiver<bool>,
     ) -> Result<SearchOutcome> {
         let normalized_query = request.query.normalized()?;
         let run = self
@@ -750,6 +770,98 @@ impl ResearchService {
             });
         }
 
+        let execution = match self
+            .execute_discovery(normalized_query, cancel.clone())
+            .await
+        {
+            Ok(execution) => execution,
+            Err(error) => {
+                let discovery = error.downcast_ref::<ResearchDiscoveryError>();
+                let providers = discovery
+                    .map(|error| error.providers.clone())
+                    .unwrap_or_default();
+                let message = discovery
+                    .map(|error| error.message.clone())
+                    .unwrap_or_else(|| error.to_string());
+                self.store
+                    .finish_search(
+                        &run.id,
+                        SearchRunState::Failed,
+                        &serde_json::to_value(&providers)?,
+                        Some(&message),
+                    )
+                    .await?;
+                return Err(ResearchSearchError {
+                    run_id: run.id,
+                    message,
+                }
+                .into());
+            }
+        };
+
+        if execution.outcome.state == SearchRunState::Cancelled {
+            self.store
+                .finish_search(
+                    &run.id,
+                    SearchRunState::Cancelled,
+                    &serde_json::json!({}),
+                    Some("cancelled"),
+                )
+                .await?;
+            return Ok(SearchOutcome {
+                run_id: run.id,
+                state: SearchRunState::Cancelled,
+                works: Vec::new(),
+                providers: HashMap::new(),
+            });
+        }
+
+        for (provider, works) in execution.provider_works {
+            self.store
+                .save_search_results(&run.id, &provider, &works)
+                .await?;
+        }
+        let provider_status = serde_json::to_value(&execution.outcome.providers)?;
+        self.store
+            .finish_search(&run.id, execution.outcome.state, &provider_status, None)
+            .await?;
+        Ok(SearchOutcome {
+            run_id: run.id,
+            state: execution.outcome.state,
+            works: execution
+                .outcome
+                .results
+                .into_iter()
+                .map(|result| result.work)
+                .collect(),
+            providers: execution.outcome.providers,
+        })
+    }
+
+    pub async fn discover(
+        &self,
+        query: ResearchQuery,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<DiscoveryOutcome> {
+        let query = query.normalized()?;
+        Ok(self.execute_discovery(query, cancel).await?.outcome)
+    }
+
+    async fn execute_discovery(
+        &self,
+        normalized_query: ResearchQuery,
+        mut cancel: watch::Receiver<bool>,
+    ) -> Result<DiscoveryExecution> {
+        if *cancel.borrow() {
+            return Ok(DiscoveryExecution {
+                outcome: DiscoveryOutcome {
+                    state: SearchRunState::Cancelled,
+                    results: Vec::new(),
+                    providers: HashMap::new(),
+                },
+                provider_works: BTreeMap::new(),
+            });
+        }
         let searches = self.providers.iter().map(|provider| {
             let provider = provider.clone();
             let query = normalized_query.clone();
@@ -771,45 +883,74 @@ impl ResearchService {
         tokio::pin!(joined);
         let results = tokio::select! {
             _ = wait_for_cancel(&mut cancel) => {
-                self.store.finish_search(
-                    &run.id,
-                    SearchRunState::Cancelled,
-                    &serde_json::json!({}),
-                    Some("cancelled"),
-                ).await?;
-                return Ok(SearchOutcome {
-                    run_id: run.id,
-                    state: SearchRunState::Cancelled,
-                    works: Vec::new(),
-                    providers: HashMap::new(),
+                return Ok(DiscoveryExecution {
+                    outcome: DiscoveryOutcome {
+                        state: SearchRunState::Cancelled,
+                        results: Vec::new(),
+                        providers: HashMap::new(),
+                    },
+                    provider_works: BTreeMap::new(),
                 });
             }
             results = &mut joined => results,
         };
 
         let mut providers = HashMap::new();
-        let mut works = BTreeMap::<String, DiscoveredWork>::new();
+        let mut aggregated = BTreeMap::<String, DiscoveryResult>::new();
+        let mut provider_works = BTreeMap::<String, Vec<DiscoveredWork>>::new();
         let mut failures = Vec::new();
         for (provider, result) in results {
             match result {
-                Ok(provider_works) => {
-                    let mut persisted = Vec::with_capacity(provider_works.len());
-                    for work in provider_works {
-                        let work = self.store.upsert_work(work).await?;
-                        works.insert(work.id.clone(), work.clone());
+                Ok(provider_results) => {
+                    let mut persisted = Vec::with_capacity(provider_results.len());
+                    for (index, work) in provider_results.into_iter().enumerate() {
+                        let raw_result = work.metadata.clone();
+                        let work = self
+                            .store
+                            .upsert_work(with_discovery_source(work, &provider))
+                            .await?;
+                        let rank =
+                            i64::try_from(index + 1).context("provider result rank exceeds i64")?;
+                        let entry =
+                            aggregated
+                                .entry(work.id.clone())
+                                .or_insert_with(|| DiscoveryResult {
+                                    work: work.clone(),
+                                    providers: Vec::new(),
+                                    best_rank: None,
+                                    provider_scores: serde_json::json!({}),
+                                    raw_results: Vec::new(),
+                                    match_info: DiscoveryMatch {
+                                        score: 0.0,
+                                        title_exact: false,
+                                    },
+                                    fulltext: DiscoveryFulltext {
+                                        state: FulltextState::Unavailable,
+                                        source_count: 0,
+                                    },
+                                });
+                        entry.work = work.clone();
+                        if !entry.providers.contains(&provider) {
+                            entry.providers.push(provider.clone());
+                            entry.providers.sort();
+                        }
+                        entry.best_rank =
+                            Some(entry.best_rank.map_or(rank, |value| value.min(rank)));
+                        if let Some(scores) = entry.provider_scores.as_object_mut() {
+                            scores.insert(provider.clone(), serde_json::json!(rank));
+                        }
+                        entry.raw_results.push(raw_result);
                         persisted.push(work);
                     }
-                    self.store
-                        .save_search_results(&run.id, &provider, &persisted)
-                        .await?;
                     providers.insert(
-                        provider,
+                        provider.clone(),
                         ProviderStatus {
                             state: ProviderState::Completed,
                             hits: persisted.len(),
                             error: None,
                         },
                     );
+                    provider_works.insert(provider, persisted);
                 }
                 Err(error) => {
                     let message = error.to_string();
@@ -826,7 +967,6 @@ impl ResearchService {
             }
         }
 
-        let provider_status = serde_json::to_value(&providers)?;
         if providers.is_empty()
             || providers
                 .values()
@@ -837,33 +977,36 @@ impl ResearchService {
             } else {
                 failures.join("; ")
             };
-            self.store
-                .finish_search(
-                    &run.id,
-                    SearchRunState::Failed,
-                    &provider_status,
-                    Some(&message),
-                )
-                .await?;
-            return Err(ResearchSearchError {
-                run_id: run.id,
-                message,
-            }
-            .into());
+            return Err(ResearchDiscoveryError { message, providers }.into());
         }
+
         let state = if failures.is_empty() {
             SearchRunState::Completed
         } else {
             SearchRunState::Partial
         };
-        self.store
-            .finish_search(&run.id, state, &provider_status, None)
-            .await?;
-        Ok(SearchOutcome {
-            run_id: run.id,
-            state,
-            works: works.into_values().collect(),
-            providers,
+        let mut results = aggregated.into_values().collect::<Vec<_>>();
+        for result in &mut results {
+            result.match_info = discovery_match(&normalized_query, result);
+            result.fulltext = discovery_fulltext(&result.work);
+        }
+        results.sort_by(|left, right| {
+            right
+                .match_info
+                .score
+                .total_cmp(&left.match_info.score)
+                .then_with(|| left.best_rank.cmp(&right.best_rank))
+                .then_with(|| left.work.id.cmp(&right.work.id))
+        });
+        results.truncate(normalized_query.limit);
+
+        Ok(DiscoveryExecution {
+            outcome: DiscoveryOutcome {
+                state,
+                results,
+                providers,
+            },
+            provider_works,
         })
     }
 
@@ -1133,6 +1276,134 @@ mod project_tool_definition_tests {
                 .is_none());
         }
     }
+}
+
+fn with_discovery_source(mut work: WorkMetadata, provider: &str) -> WorkMetadata {
+    let pdf_sources = work
+        .pdf_url
+        .as_deref()
+        .map(|url| vec![serde_json::json!({"provider": provider, "url": url})])
+        .unwrap_or_default();
+    let server_metadata = serde_json::json!({
+        "providers": [provider],
+        "pdf_sources": pdf_sources,
+    });
+    match &mut work.metadata {
+        Value::Object(metadata) => {
+            metadata.insert("_paper_codex".to_owned(), server_metadata);
+        }
+        metadata => {
+            *metadata = serde_json::json!({
+                "provider_metadata": metadata.clone(),
+                "_paper_codex": server_metadata,
+            });
+        }
+    }
+    work
+}
+
+fn discovery_match(query: &ResearchQuery, result: &DiscoveryResult) -> DiscoveryMatch {
+    let query_terms = normalized_terms(&query.text);
+    let title_terms = normalized_terms(&result.work.metadata.title);
+    let normalized_query = query_terms.join(" ");
+    let normalized_title = title_terms.join(" ");
+    let title_exact = normalized_query == normalized_title;
+    let title_coverage = if title_terms.is_empty() {
+        0.0
+    } else {
+        let matching = title_terms
+            .iter()
+            .filter(|term| query_terms.contains(term))
+            .count();
+        matching as f64 / title_terms.len() as f64
+    };
+    let containment = if title_exact {
+        1.0
+    } else if !normalized_title.is_empty() && normalized_query.contains(&normalized_title) {
+        0.9
+    } else if !normalized_query.is_empty() && normalized_title.contains(&normalized_query) {
+        0.75
+    } else {
+        0.0
+    };
+    let author_match = result.work.metadata.authors.iter().any(|author| {
+        normalized_terms(author)
+            .into_iter()
+            .filter(|term| term.len() > 1)
+            .any(|term| query_terms.contains(&term))
+    });
+    let year_match = result
+        .work
+        .metadata
+        .year
+        .is_some_and(|year| query_terms.iter().any(|term| term == &year.to_string()));
+    let provider_agreement = (result.providers.len().saturating_sub(1).min(3) as f64) * 0.025;
+    let rank_bonus = result
+        .best_rank
+        .filter(|rank| *rank > 0)
+        .map(|rank| 0.05 / rank as f64)
+        .unwrap_or_default();
+    let score = (containment * 0.5
+        + title_coverage * 0.3
+        + if author_match { 0.05 } else { 0.0 }
+        + if year_match { 0.05 } else { 0.0 }
+        + provider_agreement
+        + rank_bonus)
+        .clamp(0.0, 1.0);
+    DiscoveryMatch { score, title_exact }
+}
+
+fn normalized_terms(value: &str) -> Vec<String> {
+    let mut normalized = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_alphanumeric() {
+            normalized.extend(character.to_lowercase());
+        } else {
+            normalized.push(' ');
+        }
+    }
+    normalized
+        .split_whitespace()
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn discovery_fulltext(work: &DiscoveredWork) -> DiscoveryFulltext {
+    let mut sources = work
+        .metadata
+        .metadata
+        .pointer("/_paper_codex/pdf_sources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|source| source.get("url").and_then(Value::as_str))
+        .map(normalized_pdf_url)
+        .collect::<Vec<_>>();
+    if let Some(pdf_url) = work.metadata.pdf_url.as_deref() {
+        sources.push(normalized_pdf_url(pdf_url));
+    }
+    sources.sort();
+    sources.dedup();
+    let source_count = sources.len();
+    let state = if source_count > 0 {
+        FulltextState::Available
+    } else if work.metadata.doi.is_some()
+        || work.metadata.arxiv_id.is_some()
+        || work.metadata.source_url.starts_with("http://")
+        || work.metadata.source_url.starts_with("https://")
+    {
+        FulltextState::Possible
+    } else {
+        FulltextState::Unavailable
+    };
+    DiscoveryFulltext {
+        state,
+        source_count,
+    }
+}
+
+fn normalized_pdf_url(url: &str) -> String {
+    url.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
 fn abstract_inspection(work: DiscoveredWork) -> InspectionOutcome {
