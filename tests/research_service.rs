@@ -11,6 +11,7 @@ use paper_codex::{
         SearchRequest,
     },
     research_store::ResearchStore,
+    tasks::IngestInput,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -308,6 +309,50 @@ async fn discovery_merges_all_provider_pdf_sources_for_the_same_work() {
         .and_then(serde_json::Value::as_array)
         .unwrap();
     assert_eq!(stored_sources.len(), 2);
+}
+
+#[tokio::test]
+async fn candidate_snapshot_uses_persisted_metadata_and_ordered_pdf_sources() {
+    let harness = ResearchHarness::new(Vec::new(), 1024 * 1024).await;
+    let mut metadata = titled_work(
+        "arxiv:2301.08243",
+        "I-JEPA: Self-Supervised Learning from Images",
+        &["Mahmoud Assran"],
+        2023,
+    );
+    metadata.source_url = "https://arxiv.org/abs/2301.08243".to_owned();
+    metadata.pdf_url = Some("https://arxiv.org/pdf/2301.08243.pdf".to_owned());
+    metadata.metadata = json!({
+        "_paper_codex": {
+            "providers": ["openalex", "arxiv"],
+            "pdf_sources": [
+                {"provider":"openalex", "url":"https://mirror.test/i-jepa.pdf"},
+                {"provider":"arxiv", "url":"https://arxiv.org/pdf/2301.08243.pdf"}
+            ]
+        }
+    });
+    let work = harness.store.upsert_work(metadata).await.unwrap();
+
+    let snapshot = harness.service.candidate_snapshot(&work.id).await.unwrap();
+
+    assert_eq!(snapshot.work_id, work.id);
+    assert_eq!(
+        snapshot.title,
+        "I-JEPA: Self-Supervised Learning from Images"
+    );
+    assert_eq!(snapshot.pdf_sources.len(), 2);
+    assert_eq!(snapshot.pdf_sources[0].provider, "openalex");
+    assert_eq!(snapshot.pdf_sources[1].provider, "arxiv");
+}
+
+#[test]
+fn historical_ingest_json_deserializes_without_a_candidate_snapshot() {
+    let input: IngestInput = serde_json::from_str(
+        r#"{"source":"arxiv:2301.08243","project_id":null,"upload_path":null,"bulk_import":false}"#,
+    )
+    .unwrap();
+
+    assert!(input.candidate.is_none());
 }
 
 #[tokio::test]

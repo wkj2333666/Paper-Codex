@@ -1,5 +1,5 @@
 use paper_codex::{
-    acquisition::{classify_input, validate_pdf_bytes, Acquirer, IntakeKind},
+    acquisition::{classify_input, validate_pdf_bytes, Acquirer, IntakeKind, PdfSource},
     extraction::{extract_pdf, pages_as_markdown},
 };
 use std::sync::{
@@ -16,6 +16,21 @@ async fn flaky_pdf(
     } else {
         (axum::http::StatusCode::OK, b"%PDF-1.7\nbody".to_vec())
     }
+}
+
+async fn browser_challenge() -> (axum::http::StatusCode, &'static str) {
+    (
+        axum::http::StatusCode::FORBIDDEN,
+        "Challenge verification required",
+    )
+}
+
+async fn missing_pdf() -> axum::http::StatusCode {
+    axum::http::StatusCode::NOT_FOUND
+}
+
+async fn valid_fallback_pdf() -> Vec<u8> {
+    b"%PDF-1.7\nfallback".to_vec()
 }
 
 #[test]
@@ -111,6 +126,77 @@ async fn pdf_download_retries_dropped_connections() {
 
     assert_eq!(bytes, b"%PDF-1.7\nbody");
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn pdf_source_chain_falls_back_after_an_openreview_browser_challenge() {
+    let app = axum::Router::new()
+        .route("/openreview", axum::routing::get(browser_challenge))
+        .route("/mirror.pdf", axum::routing::get(valid_fallback_pdf));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+
+    let downloaded = Acquirer::new(1024)
+        .unwrap()
+        .download_pdf_sources(
+            &[
+                PdfSource {
+                    provider: "openreview".to_owned(),
+                    url: format!("http://{address}/openreview"),
+                },
+                PdfSource {
+                    provider: "mirror".to_owned(),
+                    url: format!("http://{address}/mirror.pdf"),
+                },
+            ],
+            cancel_rx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(downloaded.bytes, b"%PDF-1.7\nfallback");
+    assert_eq!(downloaded.source.provider, "mirror");
+    server.abort();
+}
+
+#[tokio::test]
+async fn exhausted_pdf_sources_report_safe_structured_attempts() {
+    let app = axum::Router::new()
+        .route("/openreview", axum::routing::get(browser_challenge))
+        .route("/missing.pdf", axum::routing::get(missing_pdf));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+
+    let error = Acquirer::new(1024)
+        .unwrap()
+        .download_pdf_sources(
+            &[
+                PdfSource {
+                    provider: "openreview".to_owned(),
+                    url: format!("http://{address}/openreview?token=must-not-leak"),
+                },
+                PdfSource {
+                    provider: "mirror".to_owned(),
+                    url: format!("http://{address}/missing.pdf"),
+                },
+            ],
+            cancel_rx,
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.attempts.len(), 2);
+    assert_eq!(error.attempts[0].status, Some(403));
+    assert_eq!(error.attempts[0].reason_code, "browser_challenge_required");
+    assert_eq!(error.attempts[1].status, Some(404));
+    let serialized = serde_json::to_string(&error.attempts).unwrap();
+    assert!(!serialized.contains("must-not-leak"));
+    assert!(!serialized.contains("Challenge verification required"));
+    server.abort();
 }
 
 #[test]

@@ -1684,6 +1684,93 @@ async fn intake_search_returns_ranked_candidates_without_creating_a_task() {
     assert_eq!(task_count, 0);
 }
 
+#[tokio::test]
+async fn intake_candidate_import_reuses_an_existing_paper_from_server_metadata() {
+    let (app, db, research) = research_test_app().await;
+    let token = login_token(&app).await;
+    let project_id = db.create_project("jepa", "JEPA", "").await.unwrap();
+    let work = research
+        .store()
+        .upsert_work(candidate_work("10.1000/existing-intake"))
+        .await
+        .unwrap();
+    db.insert_paper("doi:10.1000/existing-intake", "Existing JEPA")
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE papers SET doi='10.1000/existing-intake' WHERE id='doi:10.1000/existing-intake'",
+    )
+    .execute(db.pool())
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/intake/candidates/{}/import", work.id))
+                .header("content-type", "application/json")
+                .header("x-paper-codex-token", token)
+                .body(Body::from(
+                    serde_json::json!({"project_id":&project_id}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = json_response(response).await;
+    assert_eq!(payload["state"], "existing");
+    assert_eq!(payload["paper_id"], "doi:10.1000/existing-intake");
+    assert_eq!(
+        db.project_paper_ids(&project_id).await.unwrap(),
+        vec!["doi:10.1000/existing-intake"]
+    );
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(task_count, 0);
+}
+
+#[tokio::test]
+async fn failed_task_details_survive_database_reload_queries() {
+    let (_app, db) = task_test_app().await;
+    let task_id = db
+        .create_task(
+            "ingest",
+            r#"{"source":"https://openreview.net/pdf?id=test"}"#,
+        )
+        .await
+        .unwrap();
+    let details = serde_json::json!({
+        "code":"all_pdf_sources_failed",
+        "attempts":[{
+            "provider":"openreview",
+            "url":"https://openreview.net/pdf?id=test",
+            "status":403,
+            "reason_code":"browser_challenge_required",
+            "reason":"来源要求浏览器完成验证"
+        }]
+    });
+
+    db.fail_task(&task_id, "已定位论文，但所有 PDF 来源均失败", &details)
+        .await
+        .unwrap();
+
+    let task = db.get_task(&task_id).await.unwrap().unwrap();
+    assert_eq!(task.state, "failed");
+    assert_eq!(
+        task.error.as_deref(),
+        Some("已定位论文，但所有 PDF 来源均失败")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(task.error_details_json.as_deref().unwrap()).unwrap(),
+        details
+    );
+}
+
 fn candidate_work(doi: &str) -> WorkMetadata {
     WorkMetadata {
         canonical_key: format!("doi:{doi}"),
