@@ -4,9 +4,18 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use sqlx::Row;
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
-use std::collections::{HashMap, HashSet};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    SqlitePool,
+};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+    time::Duration,
+};
 use uuid::Uuid;
+
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 
 type KnowledgeEdgeRow = (String, String, String, String, i64, f64, String, String);
 
@@ -272,9 +281,12 @@ pub struct Database {
 impl Database {
     pub async fn connect(url: &str) -> Result<Self> {
         let max_connections = if url.contains(":memory:") { 1 } else { 4 };
+        let options = SqliteConnectOptions::from_str(url)
+            .with_context(|| format!("parse sqlite database URL: {url}"))?
+            .busy_timeout(SQLITE_BUSY_TIMEOUT);
         let pool = SqlitePoolOptions::new()
             .max_connections(max_connections)
-            .connect(url)
+            .connect_with(options)
             .await
             .with_context(|| format!("connect sqlite database: {url}"))?;
         sqlx::raw_sql(SCHEMA)
@@ -1356,5 +1368,33 @@ fn parse_kind(value: &str) -> KnowledgeKind {
         "dataset" => KnowledgeKind::Dataset,
         "finding" => KnowledgeKind::Finding,
         _ => KnowledgeKind::Paper,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn every_file_database_connection_waits_for_transient_write_locks() {
+        let root = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            root.path().join("state.sqlite").display()
+        );
+        let db = Database::connect(&url).await.unwrap();
+        let mut connections = Vec::new();
+
+        for _ in 0..4 {
+            connections.push(db.pool.acquire().await.unwrap());
+        }
+
+        for connection in &mut connections {
+            let timeout_ms: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+                .fetch_one(&mut **connection)
+                .await
+                .unwrap();
+            assert_eq!(timeout_ms, SQLITE_BUSY_TIMEOUT.as_millis() as i64);
+        }
     }
 }

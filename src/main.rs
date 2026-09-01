@@ -71,6 +71,10 @@ async fn main() -> Result<()> {
         remaining_bytes = pruned.remaining_bytes,
         "research cache pruned"
     );
+    // Finish all synchronous database recovery before task workers are allowed to
+    // resume queued work. Otherwise a recovered task can race this transaction
+    // during startup and abort the whole service with SQLITE_BUSY.
+    ConversationEngine::recover_states(&db).await?;
     let codex = CodexRuntime::spawn(CodexCommand::app_server(
         config.codex_bin.clone(),
         config.codex_home.clone(),
@@ -85,7 +89,7 @@ async fn main() -> Result<()> {
         Some(research_store),
     )
     .await?;
-    let conversation_engine = ConversationEngine::start_with_services(
+    let conversation_engine = ConversationEngine::start_with_services_after_recovery(
         db.clone(),
         workspace.clone(),
         codex,
