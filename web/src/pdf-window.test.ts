@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { pageItemsForNumber, stableVisiblePageRange, visiblePageWindow } from "./pdf-window"
+import * as pdfWindow from "./pdf-window"
+
+const { pageItemsForNumber, stableVisiblePageRange, visiblePageWindow } = pdfWindow
+
+type Rect = { left: number; top: number; width: number; height: number }
+type ZoomLayout = { viewport: Rect; pages: Array<{ page: number; rect: Rect }> }
+type ZoomAnchor = { page: number; xRatio: number; yRatio: number; viewportX: number; viewportY: number }
 
 describe("visiblePageWindow", () => {
   it("adds bounded overscan around the visible pages", () => {
@@ -37,5 +43,54 @@ describe("pageItemsForNumber", () => {
     const itemsByPage = new Map([[3, items]])
 
     expect(pageItemsForNumber(itemsByPage, 3)).toBe(items)
+  })
+})
+
+describe("PDF zoom viewport", () => {
+  it("captures the page coordinate currently at the viewport center", () => {
+    const capturePdfZoomAnchor = (pdfWindow as unknown as {
+      capturePdfZoomAnchor?: (layout: ZoomLayout) => ZoomAnchor | null
+    }).capturePdfZoomAnchor
+    expect(capturePdfZoomAnchor).toBeTypeOf("function")
+    if (!capturePdfZoomAnchor) return
+
+    expect(capturePdfZoomAnchor({
+      viewport: { left: 0, top: 0, width: 1_000, height: 800 },
+      pages: [
+        { page: 4, rect: { left: 200, top: 100, width: 600, height: 800 } },
+        { page: 5, rect: { left: 200, top: 920, width: 600, height: 800 } },
+      ],
+    })).toEqual({ page: 4, xRatio: 0.5, yRatio: 0.375, viewportX: 500, viewportY: 400 })
+  })
+
+  it("restores the anchor and returns the visible pages after scrolling", () => {
+    const finishPdfZoom = (pdfWindow as unknown as {
+      finishPdfZoom?: (
+        anchor: ZoomAnchor | null,
+        readLayout: () => ZoomLayout,
+        scrollBy: (left: number, top: number) => void,
+      ) => { first: number; last: number } | null
+    }).finishPdfZoom
+    expect(finishPdfZoom).toBeTypeOf("function")
+    if (!finishPdfZoom) return
+
+    let scrollLeft = 0
+    let scrollTop = 0
+    const readLayout = (): ZoomLayout => ({
+      viewport: { left: 0, top: 0, width: 1_000, height: 800 },
+      pages: [
+        { page: 4, rect: { left: 50 - scrollLeft, top: 50 - scrollTop, width: 900, height: 1_200 } },
+        { page: 5, rect: { left: 50 - scrollLeft, top: 850 - scrollTop, width: 900, height: 1_200 } },
+      ],
+    })
+
+    const visible = finishPdfZoom(
+      { page: 4, xRatio: 0.5, yRatio: 0.375, viewportX: 500, viewportY: 400 },
+      readLayout,
+      (left, top) => { scrollLeft += left; scrollTop += top },
+    )
+
+    expect({ scrollLeft, scrollTop }).toEqual({ scrollLeft: 0, scrollTop: 100 })
+    expect(visible).toEqual({ first: 4, last: 5 })
   })
 })
