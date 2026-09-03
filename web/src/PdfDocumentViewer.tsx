@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { getDocument, GlobalWorkerOptions, TextLayer, type PDFDocumentProxy } from "pdfjs-dist"
 import { AnnotationGutter } from "./AnnotationGutter"
 import { api } from "./api"
@@ -6,7 +6,7 @@ import { matchCitationText, type CitationMatchStatus } from "./citation-matcher"
 import { equationNumber, formulaOutlineRegion, locateEquationRegion } from "./equation-locator"
 import { mergeHighlightRects, pdfTextRangeToPageRect, textLayerScaleStyle, textLayerViewportScale } from "./pdf-highlight-geometry"
 import { PdfReaderToolbar, togglePdfFullscreen } from "./PdfFullscreenButton"
-import { pageItemsForNumber, stableVisiblePageRange, visiblePageWindow } from "./pdf-window"
+import { capturePdfZoomAnchor, finishPdfZoom, pageItemsForNumber, stableVisiblePageRange, visiblePdfPageRange, visiblePageWindow, type PdfZoomAnchor, type PdfZoomLayout } from "./pdf-window"
 import type { ResolvedTheme } from "./theme"
 import type { MessageCitation, PaperAnnotation } from "./types"
 
@@ -17,6 +17,26 @@ const PDF_BASE_SCALE = 1.35
 type PageSize = { width: number; height: number }
 type HighlightRect = { left: number; top: number; width: number; height: number }
 type VisualMatch = { status: CitationMatchStatus; rects: HighlightRect[]; anchorRatio: number }
+
+function readPdfZoomLayout(root: HTMLDivElement): PdfZoomLayout {
+  const rootRect = root.getBoundingClientRect()
+  const pages: PdfZoomLayout["pages"] = []
+  for (const element of root.querySelectorAll<HTMLElement>("[data-pdf-page]")) {
+    const page = Number(element.dataset.pdfPage)
+    if (!Number.isFinite(page)) continue
+    const rect = element.getBoundingClientRect()
+    pages.push({ page, rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } })
+  }
+  return {
+    viewport: {
+      left: rootRect.left + root.clientLeft,
+      top: rootRect.top + root.clientTop,
+      width: root.clientWidth,
+      height: root.clientHeight,
+    },
+    pages,
+  }
+}
 
 export function PdfDocumentViewer({ paperId, className = "", citations = [], annotations = [], focusedCitationId = null, currentRevision, onPin, onHide, theme = "light" }: {
   paperId: string
@@ -37,6 +57,7 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
   const [fullscreen, setFullscreen] = useState(false)
   const [zoom, setZoom] = useState(100)
   const scroller = useRef<HTMLDivElement>(null)
+  const pendingZoom = useRef<{ anchor: PdfZoomAnchor | null } | null>(null)
   const savedAnchorSignatures = useRef<Record<string, string>>({})
   const annotationByCitation = useMemo(() => new Map(annotations.filter(annotation => annotation.annotation.state === "visible").map(annotation => [annotation.citation.id, annotation])), [annotations])
   const citationsByPage = useMemo(() => {
@@ -45,18 +66,26 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
     return pages
   }, [citations])
 
+  const changeZoom = useCallback((nextZoom: number) => {
+    if (nextZoom === zoom) return
+    const root = scroller.current
+    pendingZoom.current = { anchor: root ? capturePdfZoomAnchor(readPdfZoomLayout(root)) : null }
+    setZoom(nextZoom)
+  }, [zoom])
+
   useEffect(() => {
     const updateFullscreen = () => {
       const next = document.fullscreenElement === scroller.current
       setFullscreen(next)
-      if (!next) setZoom(100)
+      if (!next) changeZoom(100)
     }
     document.addEventListener("fullscreenchange", updateFullscreen)
     return () => document.removeEventListener("fullscreenchange", updateFullscreen)
-  }, [])
+  }, [changeZoom])
 
   useEffect(() => {
     let active = true
+    pendingZoom.current = null
     setPdfDocument(null); setSizes([]); setMatches({}); setError(""); setZoom(100)
     const task = getDocument({ url: api.pdfUrl(paperId), httpHeaders: api.authHeaders(), rangeChunkSize: 65_536 })
     void task.promise.then(async value => {
@@ -92,18 +121,25 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
     void api.replaceAnnotationAnchors(annotation.annotation.id, value.rects.map((rect, rectIndex) => ({ page: citation.page, rect_index: rectIndex, x: rect.left, y: rect.top, width: rect.width, height: rect.height }))).catch(() => {})
   }, [annotationByCitation, citations])
 
-  const updateVisible = () => {
+  const updateVisible = useCallback(() => {
     const root = scroller.current
     if (!root) return
-    const rootRect = root.getBoundingClientRect()
-    const hits = Array.from(root.querySelectorAll<HTMLElement>("[data-pdf-page]"))
-      .filter(page => { const rect = page.getBoundingClientRect(); return rect.bottom > rootRect.top && rect.top < rootRect.bottom })
-      .map(page => Number(page.dataset.pdfPage))
-    if (hits.length) {
-      const next = { first: Math.min(...hits), last: Math.max(...hits) }
-      setVisible(current => stableVisiblePageRange(current, next))
-    }
-  }
+    const next = visiblePdfPageRange(readPdfZoomLayout(root))
+    if (next) setVisible(current => stableVisiblePageRange(current, next))
+  }, [])
+
+  useLayoutEffect(() => {
+    const pending = pendingZoom.current
+    const root = scroller.current
+    if (!pending || !root) return
+    pendingZoom.current = null
+    const next = finishPdfZoom(
+      pending.anchor,
+      () => readPdfZoomLayout(root),
+      (left, top) => { root.scrollLeft += left; root.scrollTop += top },
+    )
+    if (next) setVisible(current => stableVisiblePageRange(current, next))
+  }, [zoom])
 
   const toggleFullscreen = async () => {
     if (!scroller.current) return
@@ -114,7 +150,7 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
   if (error) return <div className="pdf-error">无法显示 PDF：{error}</div>
   return <div className={`pdf-viewer ${theme === "dark" ? "dark-reader " : ""}${className}`} ref={scroller} onScroll={updateVisible}>
     <div className="pdf-reader-toolbar">
-      <PdfReaderToolbar fullscreen={fullscreen} zoom={zoom} onToggle={toggleFullscreen} onZoomChange={setZoom}/>
+      <PdfReaderToolbar fullscreen={fullscreen} zoom={zoom} onToggle={toggleFullscreen} onZoomChange={changeZoom}/>
     </div>
     {!pdfDocument || !sizes.length
       ? <div className="pdf-loading">正在加载论文原文…</div>
