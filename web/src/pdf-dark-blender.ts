@@ -2,14 +2,26 @@ export type PdfThemeColors = { background: string; foreground: string }
 
 type Rgba = { r: number; g: number; b: number; a: number }
 type DrawImage = (...args: unknown[]) => void
+type FillText = (text: string, x: number, y: number, maxWidth?: number) => void
 type WrappedContext = {
   drawImage: PropertyDescriptor | undefined
+  fillText: PropertyDescriptor | undefined
+  save: PropertyDescriptor | undefined
+  restore: PropertyDescriptor | undefined
   fillStyle: PropertyDescriptor | undefined
   strokeStyle: PropertyDescriptor | undefined
+  mutations: Map<string, PropertyDescriptor | undefined>
+  originalFillStyle: string | null
+  originalFillStyleStack: Array<string | null>
+  setRawFillStyle: ((value: string) => void) | null
+  cachedBackground: ImageData | null
 }
 
 const NEUTRAL_DEVIATION = 12
 const MAX_SCRATCH_PIXELS = 16_777_216
+const MIN_TEXT_CONTRAST = 4.5
+const BACKGROUND_MATCH_TOLERANCE = 18
+const CANVAS_MUTATIONS = ["fill", "fillRect", "stroke", "strokeRect", "clearRect", "putImageData"] as const
 
 export function mapPdfColor(style: string, theme: PdfThemeColors) {
   const color = parseColor(style)
@@ -104,14 +116,54 @@ export class PdfDarkBlender {
 
   private wrap(context: CanvasRenderingContext2D) {
     if (this.wrapped.has(context)) return
+    const fillStyleDescriptor = inheritedDescriptor(context, "fillStyle")
+    const initialFillStyle = fillStyleDescriptor?.get?.call(context)
     const saved: WrappedContext = {
       drawImage: Object.getOwnPropertyDescriptor(context, "drawImage"),
+      fillText: Object.getOwnPropertyDescriptor(context, "fillText"),
+      save: Object.getOwnPropertyDescriptor(context, "save"),
+      restore: Object.getOwnPropertyDescriptor(context, "restore"),
       fillStyle: Object.getOwnPropertyDescriptor(context, "fillStyle"),
       strokeStyle: Object.getOwnPropertyDescriptor(context, "strokeStyle"),
+      mutations: new Map(),
+      originalFillStyle: typeof initialFillStyle === "string" ? initialFillStyle : null,
+      originalFillStyleStack: [],
+      setRawFillStyle: fillStyleDescriptor?.set
+        ? value => fillStyleDescriptor.set?.call(context, value)
+        : null,
+      cachedBackground: null,
     }
     this.wrapped.set(context, saved)
     this.wrapStyle(context, "fillStyle")
     this.wrapStyle(context, "strokeStyle")
+    this.wrapMutations(context, saved)
+    const originalSave = context.save.bind(context)
+    const originalRestore = context.restore.bind(context)
+    Object.defineProperty(context, "save", {
+      configurable: true,
+      writable: true,
+      value: () => {
+        saved.originalFillStyleStack.push(saved.originalFillStyle)
+        originalSave()
+      },
+    })
+    Object.defineProperty(context, "restore", {
+      configurable: true,
+      writable: true,
+      value: () => {
+        originalRestore()
+        if (saved.originalFillStyleStack.length > 0) {
+          saved.originalFillStyle = saved.originalFillStyleStack.pop() ?? null
+        }
+      },
+    })
+    const originalFillText = context.fillText.bind(context) as FillText
+    Object.defineProperty(context, "fillText", {
+      configurable: true,
+      writable: true,
+      value: (text: string, x: number, y: number, maxWidth?: number) =>
+        this.fillText(context, originalFillText, text, x, y, maxWidth),
+    })
     const originalDrawImage = context.drawImage.bind(context) as DrawImage
     Object.defineProperty(context, "drawImage", {
       configurable: true,
@@ -130,21 +182,103 @@ export class PdfDarkBlender {
       set: value => {
         descriptor.set?.call(context, value)
         const normalized = descriptor.get?.call(context)
-        if (typeof normalized === "string") descriptor.set?.call(context, mapPdfColor(normalized, this.theme))
+        if (typeof normalized === "string") {
+          if (property === "fillStyle") {
+            const saved = this.wrapped.get(context)
+            if (saved) saved.originalFillStyle = normalized
+          }
+          descriptor.set?.call(context, mapPdfColor(normalized, this.theme))
+        }
       },
     })
+  }
+
+  private wrapMutations(context: CanvasRenderingContext2D, saved: WrappedContext) {
+    const target = context as unknown as Record<string, unknown>
+    for (const method of CANVAS_MUTATIONS) {
+      const original = target[method]
+      if (typeof original !== "function") continue
+      saved.mutations.set(method, Object.getOwnPropertyDescriptor(context, method))
+      const bound = original.bind(context) as (...args: unknown[]) => unknown
+      Object.defineProperty(context, method, {
+        configurable: true,
+        writable: true,
+        value: (...args: unknown[]) => {
+          const result = bound(...args)
+          this.invalidateBackground(context)
+          return result
+        },
+      })
+    }
   }
 
   private restore(context: CanvasRenderingContext2D) {
     const saved = this.wrapped.get(context)
     if (!saved) return
     restoreOwnDescriptor(context, "drawImage", saved.drawImage)
+    restoreOwnDescriptor(context, "fillText", saved.fillText)
+    restoreOwnDescriptor(context, "save", saved.save)
+    restoreOwnDescriptor(context, "restore", saved.restore)
     restoreOwnDescriptor(context, "fillStyle", saved.fillStyle)
     restoreOwnDescriptor(context, "strokeStyle", saved.strokeStyle)
+    for (const [method, descriptor] of saved.mutations) restoreOwnDescriptor(context, method, descriptor)
     this.wrapped.delete(context)
   }
 
+  private fillText(context: CanvasRenderingContext2D, original: FillText, text: string, x: number, y: number, maxWidth?: number) {
+    const saved = this.wrapped.get(context)
+    const originalStyle = saved?.originalFillStyle
+    const mappedStyle = context.fillStyle
+    if (!saved || !originalStyle || typeof mappedStyle !== "string" || !saved.setRawFillStyle) {
+      return maxWidth === undefined ? original(text, x, y) : original(text, x, y, maxWidth)
+    }
+
+    const background = this.textBackground(context, saved, text, x, y)
+    const textStyle = background
+      ? readableTextStyle(originalStyle, mappedStyle, background, this.theme)
+      : mappedStyle
+    if (textStyle === mappedStyle) {
+      return maxWidth === undefined ? original(text, x, y) : original(text, x, y, maxWidth)
+    }
+
+    context.save()
+    try {
+      saved.setRawFillStyle(textStyle)
+      return maxWidth === undefined ? original(text, x, y) : original(text, x, y, maxWidth)
+    } finally {
+      context.restore()
+    }
+  }
+
+  private textBackground(context: CanvasRenderingContext2D, saved: WrappedContext, text: string, x: number, y: number): Rgba | null {
+    const width = context.canvas.width
+    const height = context.canvas.height
+    if (!width || !height) return null
+    try {
+      saved.cachedBackground ??= context.getImageData(0, 0, width, height)
+      const metrics = context.measureText(text)
+      const textX = x + metrics.width / 2
+      const textY = y - (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2
+      const point = context.getTransform().transformPoint({ x: textX, y: textY })
+      const pixelX = Math.round(point.x)
+      const pixelY = Math.round(point.y)
+      if (pixelX < 0 || pixelY < 0 || pixelX >= width || pixelY >= height) return null
+      const offset = (pixelY * width + pixelX) * 4
+      const data = saved.cachedBackground.data
+      if (offset + 3 >= data.length) return null
+      return { r: data[offset], g: data[offset + 1], b: data[offset + 2], a: data[offset + 3] / 255 }
+    } catch {
+      return null
+    }
+  }
+
+  private invalidateBackground(context: CanvasRenderingContext2D) {
+    const saved = this.wrapped.get(context)
+    if (saved) saved.cachedBackground = null
+  }
+
   private drawImage(context: CanvasRenderingContext2D, original: DrawImage, args: unknown[]) {
+    this.invalidateBackground(context)
     const source = args[0]
     if (!source || (typeof source === "object" && this.renderedGroupCanvases.has(source))) {
       original(...args)
@@ -260,6 +394,49 @@ function numberArg(value: unknown) {
 
 function isNeutral(r: number, g: number, b: number, deviation: number) {
   return Math.max(r, g, b) - Math.min(r, g, b) <= deviation
+}
+
+function readableTextStyle(originalStyle: string, mappedStyle: string, background: Rgba, theme: PdfThemeColors) {
+  const original = parseColor(originalStyle)
+  const mapped = parseColor(mappedStyle)
+  const themeBackground = parseColor(theme.background)
+  const themeForeground = parseColor(theme.foreground)
+  if (!original || !mapped || !themeBackground || !themeForeground) return mappedStyle
+  if (colorDistance(background, themeBackground) <= BACKGROUND_MATCH_TOLERANCE) return mappedStyle
+  if (contrastRatio(original, background) >= MIN_TEXT_CONTRAST) return originalStyle
+
+  const candidates = [
+    { style: mappedStyle, color: mapped },
+    { style: theme.foreground, color: themeForeground },
+    { style: theme.background, color: themeBackground },
+  ]
+  return candidates.reduce((best, candidate) =>
+    contrastRatio(candidate.color, background) > contrastRatio(best.color, background) ? candidate : best
+  ).style
+}
+
+function colorDistance(first: Rgba, second: Rgba) {
+  return Math.sqrt(
+    (first.r - second.r) ** 2
+    + (first.g - second.g) ** 2
+    + (first.b - second.b) ** 2,
+  )
+}
+
+function contrastRatio(first: Rgba, second: Rgba) {
+  const firstLuminance = relativeLuminance(first)
+  const secondLuminance = relativeLuminance(second)
+  const lighter = Math.max(firstLuminance, secondLuminance)
+  const darker = Math.min(firstLuminance, secondLuminance)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+function relativeLuminance(color: Rgba) {
+  const linear = (component: number) => {
+    const value = component / 255
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
 }
 
 function interpolate(start: number, end: number, amount: number) {

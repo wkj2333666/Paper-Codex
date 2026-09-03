@@ -59,9 +59,14 @@ class RecordingCanvasContext {
   get strokeStyle() { return this.#strokeStyle }
   set strokeStyle(value: string) { this.#strokeStyle = value }
   drawImage(..._args: unknown[]) {}
+  fillRect(..._args: unknown[]) {}
   fillText(..._args: unknown[]) { this.renderedTextColors.push(this.#fillStyle) }
   measureText(..._args: unknown[]) { return { width: 20, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 } }
-  getImageData(..._args: unknown[]) { return { data: this.sampledBackground } }
+  getImageData(_x: number, _y: number, width = 1, height = 1) {
+    const data = new Uint8ClampedArray(width * height * 4)
+    for (let offset = 0; offset < data.length; offset += 4) data.set(this.sampledBackground, offset)
+    return { data }
+  }
   getTransform() { return { transformPoint: ({ x, y }: { x: number; y: number }) => ({ x, y }) } }
   save() { this.#savedFillStyles.push(this.#fillStyle) }
   restore() { this.#fillStyle = this.#savedFillStyles.pop() ?? this.#fillStyle }
@@ -104,6 +109,21 @@ describe("PDF dark-mode canvas interception", () => {
     context.fillText("ordinary body text", 10, 20)
 
     expect(context.renderedTextColors).toEqual(["#edf2ed"])
+    blender.unwrap()
+  })
+
+  it("refreshes the sampled background after vector drawing mutates the canvas", () => {
+    const context = new RecordingCanvasContext()
+    const blender = new PdfDarkBlender(context as unknown as CanvasRenderingContext2D, darkTheme)
+
+    context.fillStyle = "#000000"
+    context.fillText("body", 10, 20)
+    context.sampledBackground = new Uint8ClampedArray([232, 231, 255, 255])
+    context.fillRect(0, 0, 50, 50)
+    context.fillStyle = "#000000"
+    context.fillText("colored box", 10, 20)
+
+    expect(context.renderedTextColors).toEqual(["#edf2ed", "#000000"])
     blender.unwrap()
   })
 })
