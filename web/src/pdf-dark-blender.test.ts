@@ -49,13 +49,22 @@ describe("PDF dark-mode raster handling", () => {
 class RecordingCanvasContext {
   #fillStyle = "#000000"
   #strokeStyle = "#000000"
-  canvas = {}
+  #savedFillStyles: string[] = []
+  readonly renderedTextColors: string[] = []
+  canvas = { width: 100, height: 100 }
+  sampledBackground = new Uint8ClampedArray([23, 27, 25, 255])
 
   get fillStyle() { return this.#fillStyle }
   set fillStyle(value: string) { this.#fillStyle = value }
   get strokeStyle() { return this.#strokeStyle }
   set strokeStyle(value: string) { this.#strokeStyle = value }
   drawImage(..._args: unknown[]) {}
+  fillText(..._args: unknown[]) { this.renderedTextColors.push(this.#fillStyle) }
+  measureText(..._args: unknown[]) { return { width: 20, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 } }
+  getImageData(..._args: unknown[]) { return { data: this.sampledBackground } }
+  getTransform() { return { transformPoint: ({ x, y }: { x: number; y: number }) => ({ x, y }) } }
+  save() { this.#savedFillStyles.push(this.#fillStyle) }
+  restore() { this.#fillStyle = this.#savedFillStyles.pop() ?? this.#fillStyle }
 }
 
 describe("PDF dark-mode canvas interception", () => {
@@ -73,5 +82,28 @@ describe("PDF dark-mode canvas interception", () => {
     context.strokeStyle = "#ffffff"
     expect(context.fillStyle).toBe("#000000")
     expect(context.strokeStyle).toBe("#ffffff")
+  })
+
+  it("keeps readable original text dark when its colored background is preserved", () => {
+    const context = new RecordingCanvasContext()
+    context.sampledBackground = new Uint8ClampedArray([232, 231, 255, 255])
+    const blender = new PdfDarkBlender(context as unknown as CanvasRenderingContext2D, darkTheme)
+
+    context.fillStyle = "#000000"
+    context.fillText("Current ML systems", 10, 20)
+
+    expect(context.renderedTextColors).toEqual(["#000000"])
+    blender.unwrap()
+  })
+
+  it("still maps dark body text to the light foreground on the themed page background", () => {
+    const context = new RecordingCanvasContext()
+    const blender = new PdfDarkBlender(context as unknown as CanvasRenderingContext2D, darkTheme)
+
+    context.fillStyle = "#000000"
+    context.fillText("ordinary body text", 10, 20)
+
+    expect(context.renderedTextColors).toEqual(["#edf2ed"])
+    blender.unwrap()
   })
 })
