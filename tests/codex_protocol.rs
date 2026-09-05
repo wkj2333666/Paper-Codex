@@ -189,6 +189,31 @@ async fn advertises_and_defaults_to_model_from_codex_config() {
 }
 
 #[tokio::test]
+async fn advertises_glm_flash_without_changing_the_configured_default() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("config.toml"),
+        "model = \"glm-5.3\"\nmodel_provider = \"glm\"\nmodel_reasoning_effort = \"max\"\n",
+    )
+    .unwrap();
+    let mut command = fake_command();
+    command.codex_home = Some(home.path().to_path_buf());
+
+    let runtime = CodexRuntime::spawn(command).await.unwrap();
+    let capabilities = runtime.capabilities();
+
+    assert_eq!(capabilities.default.model, "glm-5.3");
+    let flash = capabilities
+        .models
+        .iter()
+        .find(|model| model.id == "glm-5.3-flash")
+        .expect("GLM Flash is advertised for the GLM provider");
+    assert_eq!(flash.display_name, "GLM-5.3-Flash");
+    assert_eq!(flash.supported_reasoning_efforts, vec!["max"]);
+    assert!(!flash.supports_fast);
+}
+
+#[tokio::test]
 async fn accepts_current_reasoning_effort_fields_without_dropping_models() {
     let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
     let capabilities = runtime.capabilities();

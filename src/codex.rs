@@ -57,6 +57,12 @@ pub struct CodexCapabilities {
     pub supports_dynamic_tools: bool,
 }
 
+#[derive(Debug, Clone)]
+struct ConfiguredCodexSettings {
+    settings: CodexRunSettings,
+    model_provider: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexSkill {
     pub name: String,
@@ -204,66 +210,95 @@ impl CodexCapabilities {
         }
     }
 
-    fn apply_configured_settings(mut self, configured: Option<CodexRunSettings>) -> Self {
+    fn apply_configured_settings(mut self, configured: Option<ConfiguredCodexSettings>) -> Self {
         let Some(configured) = configured else {
             return self;
         };
-        let Some(model) = self
+        let settings = configured.settings;
+        if let Some(model) = self
             .models
             .iter_mut()
-            .find(|model| model.id == configured.model)
-        else {
-            let reasoning_effort = configured.reasoning_effort.clone();
+            .find(|model| model.id == settings.model)
+        {
+            let reasoning_effort = model
+                .supported_reasoning_efforts
+                .iter()
+                .find(|effort| **effort == settings.reasoning_effort)
+                .cloned()
+                .unwrap_or_else(|| model.default_reasoning_effort.clone());
+            self.default = CodexRunSettings {
+                model: model.id.clone(),
+                reasoning_effort,
+                service_tier: None,
+            };
+        } else {
+            let reasoning_effort = settings.reasoning_effort.clone();
             self.models.push(CodexModel {
-                id: configured.model.clone(),
-                display_name: display_name_for_model(&configured.model),
+                id: settings.model.clone(),
+                display_name: display_name_for_model(&settings.model),
                 default_reasoning_effort: reasoning_effort.clone(),
                 supported_reasoning_efforts: vec![reasoning_effort],
                 supports_fast: false,
             });
             self.default = CodexRunSettings {
                 service_tier: None,
-                ..configured
+                ..settings
             };
-            return self;
-        };
-        let reasoning_effort = model
-            .supported_reasoning_efforts
-            .iter()
-            .find(|effort| **effort == configured.reasoning_effort)
-            .cloned()
-            .unwrap_or_else(|| model.default_reasoning_effort.clone());
-        self.default = CodexRunSettings {
-            model: model.id.clone(),
-            reasoning_effort,
-            service_tier: None,
-        };
+        }
+        self.add_provider_models(configured.model_provider.as_deref());
         self
+    }
+
+    fn add_provider_models(&mut self, provider: Option<&str>) {
+        if provider != Some("glm") {
+            return;
+        }
+        let reasoning_effort = self.default.reasoning_effort.clone();
+        for model in ["glm-5.3-flash"] {
+            if self.models.iter().any(|item| item.id == model) {
+                continue;
+            }
+            self.models.push(CodexModel {
+                id: model.into(),
+                display_name: display_name_for_model(model),
+                default_reasoning_effort: reasoning_effort.clone(),
+                supported_reasoning_efforts: vec![reasoning_effort.clone()],
+                supports_fast: false,
+            });
+        }
     }
 }
 
 fn display_name_for_model(model: &str) -> String {
     if let Some(version) = model.strip_prefix("glm-") {
-        return format!("GLM-{version}");
+        return format!(
+            "GLM-{}",
+            version
+                .split('-')
+                .map(display_name_part)
+                .collect::<Vec<_>>()
+                .join("-")
+        );
     }
     model
         .split('-')
-        .map(|part| {
-            if part
-                .chars()
-                .all(|character| character.is_ascii_digit() || character == '.')
-            {
-                part.to_owned()
-            } else {
-                let mut characters = part.chars();
-                characters
-                    .next()
-                    .map(|first| first.to_uppercase().collect::<String>() + characters.as_str())
-                    .unwrap_or_default()
-            }
-        })
+        .map(display_name_part)
         .collect::<Vec<_>>()
         .join("-")
+}
+
+fn display_name_part(part: &str) -> String {
+    if part
+        .chars()
+        .all(|character| character.is_ascii_digit() || character == '.')
+    {
+        return part.to_owned();
+    }
+    let mut characters = part.chars();
+    characters
+        .next()
+        .map(|first| first.to_uppercase().collect::<String>() + characters.as_str())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone)]
@@ -306,7 +341,7 @@ impl CodexCommand {
         Ok(())
     }
 
-    fn configured_settings(&self) -> Option<CodexRunSettings> {
+    fn configured_settings(&self) -> Option<ConfiguredCodexSettings> {
         let home = self.codex_home.as_ref()?;
         let contents = std::fs::read_to_string(home.join("config.toml")).ok()?;
         let mut values = HashMap::new();
@@ -327,10 +362,13 @@ impl CodexCommand {
         let reasoning_effort = values
             .remove("model_reasoning_effort")
             .unwrap_or_else(|| "medium".into());
-        Some(CodexRunSettings {
-            model,
-            reasoning_effort,
-            service_tier: None,
+        Some(ConfiguredCodexSettings {
+            settings: CodexRunSettings {
+                model,
+                reasoning_effort,
+                service_tier: None,
+            },
+            model_provider: values.remove("model_provider"),
         })
     }
 }
