@@ -9,7 +9,7 @@ export type PaperReadingPosition = {
 }
 
 type ReadStorage = Pick<Storage, "getItem">
-type WriteStorage = Pick<Storage, "setItem">
+type WriteStorage = Pick<Storage, "getItem" | "setItem">
 
 function isPaperReadingPosition(value: unknown): value is PaperReadingPosition {
   if (!value || typeof value !== "object") return false
