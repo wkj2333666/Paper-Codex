@@ -6,6 +6,7 @@ import { matchCitationText, type CitationMatchStatus } from "./citation-matcher"
 import { equationNumber, formulaOutlineRegion, locateEquationRegion } from "./equation-locator"
 import { mergeHighlightRects, pdfTextRangeToPageRect, textLayerScaleStyle, textLayerViewportScale } from "./pdf-highlight-geometry"
 import { PdfReaderToolbar, togglePdfFullscreen } from "./PdfFullscreenButton"
+import type { PaperReadingPosition } from "./paper-reading-position"
 import { capturePdfZoomAnchor, finishPdfZoom, pageItemsForNumber, stableVisiblePageRange, visiblePdfPageRange, visiblePageWindow, type PdfZoomAnchor, type PdfZoomLayout } from "./pdf-window"
 import type { ResolvedTheme } from "./theme"
 import type { MessageCitation, PaperAnnotation } from "./types"
@@ -38,7 +39,7 @@ function readPdfZoomLayout(root: HTMLDivElement): PdfZoomLayout {
   }
 }
 
-export function PdfDocumentViewer({ paperId, className = "", citations = [], annotations = [], focusedCitationId = null, currentRevision, onPin, onHide, theme = "light" }: {
+export function PdfDocumentViewer({ paperId, className = "", readingMode = "original", initialReadingPosition = null, onReadingPositionChange, citations = [], annotations = [], focusedCitationId = null, currentRevision, onPin, onHide, theme = "light" }: {
   paperId: string
   theme?: ResolvedTheme
   className?: string
@@ -46,6 +47,9 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
   annotations?: PaperAnnotation[]
   focusedCitationId?: string | null
   currentRevision?: string | null
+  readingMode?: "enhanced" | "original"
+  initialReadingPosition?: PaperReadingPosition | null
+  onReadingPositionChange?: (position: PaperReadingPosition) => void
   onPin?: (citation: MessageCitation) => void
   onHide?: (citation: MessageCitation) => void
 }) {
@@ -58,6 +62,7 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
   const [zoom, setZoom] = useState(100)
   const scroller = useRef<HTMLDivElement>(null)
   const pendingZoom = useRef<{ anchor: PdfZoomAnchor | null } | null>(null)
+  const pendingReadingPosition = useRef<PaperReadingPosition | null>(null)
   const savedAnchorSignatures = useRef<Record<string, string>>({})
   const annotationByCitation = useMemo(() => new Map(annotations.filter(annotation => annotation.annotation.state === "visible").map(annotation => [annotation.citation.id, annotation])), [annotations])
   const citationsByPage = useMemo(() => {
@@ -69,9 +74,19 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
   const changeZoom = useCallback((nextZoom: number) => {
     if (nextZoom === zoom) return
     const root = scroller.current
-    pendingZoom.current = { anchor: root ? capturePdfZoomAnchor(readPdfZoomLayout(root)) : null }
+    const anchor = root ? capturePdfZoomAnchor(readPdfZoomLayout(root)) : null
+    pendingZoom.current = { anchor }
+    if (anchor) {
+      onReadingPositionChange?.({
+        mode: readingMode,
+        page: anchor.page,
+        xRatio: anchor.xRatio,
+        yRatio: anchor.yRatio,
+        zoom: nextZoom,
+      })
+    }
     setZoom(nextZoom)
-  }, [zoom])
+  }, [onReadingPositionChange, readingMode, zoom])
 
   useEffect(() => {
     const updateFullscreen = () => {
@@ -86,7 +101,8 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
   useEffect(() => {
     let active = true
     pendingZoom.current = null
-    setPdfDocument(null); setSizes([]); setMatches({}); setError(""); setZoom(100)
+    pendingReadingPosition.current = initialReadingPosition
+    setPdfDocument(null); setSizes([]); setMatches({}); setError(""); setZoom(initialReadingPosition?.zoom ?? 100)
     const task = getDocument({ url: api.pdfUrl(paperId), httpHeaders: api.authHeaders(), rangeChunkSize: 65_536 })
     void task.promise.then(async value => {
       if (!active) return
@@ -99,7 +115,7 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
       if (active) setSizes(next)
     }).catch(value => active && setError(value instanceof Error ? value.message : "PDF 加载失败"))
     return () => { active = false; void task.destroy() }
-  }, [paperId])
+  }, [initialReadingPosition, paperId])
 
   useEffect(() => {
     const focused = citations.find(citation => citation.id === focusedCitationId)
@@ -108,6 +124,38 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
     const frame = requestAnimationFrame(() => scroller.current?.querySelector<HTMLElement>(`[data-pdf-page="${focused.page}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }))
     return () => cancelAnimationFrame(frame)
   }, [citations, focusedCitationId, sizes.length])
+
+  useEffect(() => {
+    if (!pdfDocument || !sizes.length || focusedCitationId) return
+    const pending = pendingReadingPosition.current
+    if (!pending || pending.page > sizes.length) {
+      pendingReadingPosition.current = null
+      return
+    }
+    setVisible({ first: pending.page, last: pending.page })
+    const frame = requestAnimationFrame(() => {
+      const root = scroller.current
+      const page = root?.querySelector<HTMLElement>(`[data-pdf-page="${pending.page}"]`)
+      if (!root || !page) return
+      const rootRect = root.getBoundingClientRect()
+      const pageRect = page.getBoundingClientRect()
+      root.scrollLeft += pageRect.left + pageRect.width * pending.xRatio - (rootRect.left + root.clientWidth / 2)
+      root.scrollTop += pageRect.top + pageRect.height * pending.yRatio - (rootRect.top + root.clientHeight / 2)
+      pendingReadingPosition.current = null
+      const layout = readPdfZoomLayout(root)
+      const anchor = capturePdfZoomAnchor(layout)
+      if (anchor) {
+        onReadingPositionChange?.({
+          mode: readingMode,
+          page: anchor.page,
+          xRatio: anchor.xRatio,
+          yRatio: anchor.yRatio,
+          zoom,
+        })
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusedCitationId, onReadingPositionChange, pdfDocument, readingMode, sizes.length, zoom])
 
   const rendered = useMemo(() => new Set(visiblePageWindow({ pageCount: sizes.length, firstVisible: visible.first, lastVisible: visible.last, overscan: 2 })), [sizes.length, visible])
   const acceptMatch = useCallback((citationId: string, value: VisualMatch) => {
@@ -126,7 +174,17 @@ export function PdfDocumentViewer({ paperId, className = "", citations = [], ann
     if (!root) return
     const next = visiblePdfPageRange(readPdfZoomLayout(root))
     if (next) setVisible(current => stableVisiblePageRange(current, next))
-  }, [])
+    const anchor = capturePdfZoomAnchor(readPdfZoomLayout(root))
+    if (anchor) {
+      onReadingPositionChange?.({
+        mode: readingMode,
+        page: anchor.page,
+        xRatio: anchor.xRatio,
+        yRatio: anchor.yRatio,
+        zoom,
+      })
+    }
+  }, [onReadingPositionChange, readingMode, zoom])
 
   useLayoutEffect(() => {
     const pending = pendingZoom.current

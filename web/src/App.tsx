@@ -22,7 +22,9 @@ import { CodexPanel } from "./CodexPanel"
 import { citationsForPaper } from "./citation-overlay"
 import type { CodexSelection } from "./conversation-scope"
 import { projectIdForSelection, withProjectContext } from "./codex-context"
+import { loadPaperReadingPosition, savePaperReadingPosition } from "./paper-reading-position"
 import { ResizableDivider } from "./ResizableDivider"
+import { selectionFromHistoryState, selectionHistoryState, selectionsEqual } from "./selection-history"
 import { ThemeToggle } from "./ThemeToggle"
 import { ProjectResearch } from "./ProjectResearch"
 import { cycleThemePreference, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from "./theme"
@@ -65,6 +67,7 @@ export default function App(){
   const [candidateFocus,setCandidateFocus]=useState<CandidateFocus|null>(null)
   const [citationOverlay,setCitationOverlay]=useState<MessageCitation[]>([])
   const [researchRevisions,setResearchRevisions]=useState<Record<string,number>>({})
+  const selectionRef=useRef(selection)
   const updateCitationOverlay=useCallback((next:MessageCitation[])=>setCitationOverlay(current=>current.length===next.length&&current.every((item,index)=>item.id===next[index]?.id&&item.revision===next[index]?.revision)?current:next),[])
   const [activeDrawer,setActiveDrawer]=useState<PanelName|null>(null)
   const resolvedTheme=resolveTheme(themePreference,systemDark)
@@ -92,8 +95,27 @@ export default function App(){
   },[load])
   useEffect(()=>{if(authenticated)void load()},[authenticated,load])
   const select=useCallback((next:Selection)=>{
-    setSelection(current=>dashboard?withProjectContext(next,projectIdForSelection(current),dashboard):next)
+    const previous=selectionRef.current
+    const normalized=dashboard?withProjectContext(next,projectIdForSelection(previous),dashboard):next
+    if(selectionsEqual(normalized,previous))return
+    selectionRef.current=normalized
+    setSelection(normalized)
+    window.history.pushState(selectionHistoryState(normalized),"")
   },[dashboard])
+  useEffect(()=>{selectionRef.current=selection},[selection])
+  useEffect(()=>{
+    window.history.replaceState(selectionHistoryState(selection),"")
+  },[selection])
+  useEffect(()=>{
+    const restore=(event:PopStateEvent)=>{
+      const restored=selectionFromHistoryState(event.state)
+      if(!restored)return
+      selectionRef.current=restored
+      setSelection(restored)
+    }
+    window.addEventListener("popstate",restore)
+    return()=>window.removeEventListener("popstate",restore)
+  },[])
   useEffect(()=>{document.documentElement.dataset.theme=resolvedTheme;document.documentElement.style.colorScheme=resolvedTheme},[resolvedTheme])
   useEffect(()=>{writeThemePreference(themePreference)},[themePreference])
   useEffect(()=>{
@@ -275,11 +297,18 @@ function ProjectView({project,dashboard,select,refresh,researchRevision,candidat
 
 function PaperView({id,dashboard,select,refresh,citations,citationFocus,paperGraphOpen,paperGraphWidth,isNarrow,drawerOpen,onExpandGraph,onCollapseGraph,onResizeGraph,onResetGraph,theme}:{id:string;dashboard:Dashboard;select:Select;refresh:()=>Promise<void>;citations:MessageCitation[];citationFocus:MessageCitation|null;paperGraphOpen:boolean;paperGraphWidth:number;isNarrow:boolean;drawerOpen:boolean;onExpandGraph:(trigger:HTMLButtonElement)=>void;onCollapseGraph:()=>void;onResizeGraph:(delta:number)=>void;onResetGraph:()=>void;theme:ResolvedTheme}){
   const [detail,setDetail]=useState<PaperDetail|null>(null);const [graph,setGraph]=useState<GraphPayload>({nodes:[],edges:[]});const [annotations,setAnnotations]=useState<PaperAnnotation[]>([]);const [focusedCitation,setFocusedCitation]=useState<MessageCitation|null>(null);const [project,setProject]=useState("");const [tab,setTab]=useState("overview");const [readerMode,setReaderMode]=useState<"smart"|"enhanced"|"original">("smart");const [reanalyzing,setReanalyzing]=useState(false)
+  const savedReadingPosition=useMemo(()=>loadPaperReadingPosition(id),[id])
+  const restoredPaperId=useRef<string|null>(null)
   const citationKey=citations.map(citation=>citation.id).join("|")
   const reload=useCallback(async()=>{const [paper,graph,annotations]=await Promise.all([api.paper(id),api.graph({paper_id:id}),api.paperAnnotations(id)]);setDetail(paper);setGraph(graph);setAnnotations(annotations)},[id])
   useEffect(()=>{setDetail(null);setAnnotations([]);setFocusedCitation(null);void reload()},[reload])
+  useEffect(()=>{
+    if(restoredPaperId.current===id)return
+    restoredPaperId.current=id
+    setReaderMode(savedReadingPosition?.mode??"smart")
+  },[id,savedReadingPosition])
   useEffect(()=>{if(citationFocus){setFocusedCitation(citationFocus);setReaderMode("enhanced")}},[citationFocus])
-  useEffect(()=>{if(citations.length)setReaderMode("enhanced")},[citationKey])
+  useEffect(()=>{if(citations.length&&!savedReadingPosition)setReaderMode("enhanced")},[citationKey,savedReadingPosition])
   if(!detail)return <div className="boot"><LoaderCircle className="spin"/>加载论文…</div>
   let authors:string[]=[];try{authors=JSON.parse(detail.paper.authors_json)}catch{}
   const brief=briefFromAnalysis(detail.analysis)
@@ -293,6 +322,7 @@ function PaperView({id,dashboard,select,refresh,citations,citationFocus,paperGra
   const hideActive=async(citation:MessageCitation=focusedCitation as MessageCitation)=>{const annotation=annotations.find(item=>item.citation.id===citation?.id);if(!annotation)return;await api.updateAnnotation(annotation.annotation.id,"hidden");setAnnotations(value=>value.map(item=>item.annotation.id===annotation.annotation.id?{...item,annotation:{...item.annotation,state:"hidden"}}:item));if(focusedCitation?.id===citation.id)setFocusedCitation(null);await reload()}
   const visibleAnnotations=annotations.filter(item=>item.annotation.state==="visible")
   const available=dashboard.projects.filter(item=>!detail.projects.includes(item.id))
+  const saveReadingPosition=useCallback((position:Parameters<typeof savePaperReadingPosition>[1])=>savePaperReadingPosition(id,position),[id])
   const paperGraphVisible=isNarrow?drawerOpen:paperGraphOpen
   return <div className={`paper-page${readerMode!=="smart"?" reader-active":""}${!paperGraphVisible?" paper-graph-collapsed":""}`}><div className="paper-reading"><header className="paper-head"><div><p className="eyebrow">{detail.paper.year??"论文"} · {detail.paper.doi??detail.paper.arxiv_id??detail.paper.id}</p><h1>{detail.paper.title}</h1><p>{authors.join(", ")||"作者信息待补充"}</p></div><PaperHeaderActions reanalyzing={reanalyzing} paperGraphOpen={paperGraphVisible} onOpenPdf={openPdf} onReanalyze={()=>void reanalyze()} onTrash={()=>void trash()} onToggleGraph={trigger=>paperGraphVisible?onCollapseGraph():onExpandGraph(trigger)}/></header>
     <div className="reader-mode-tabs">{[["smart","智能阅读"],["enhanced","增强阅读"],["original","原文"]].map(([key,label])=><button key={key} className={readerMode===key?"active":""} onClick={()=>setReaderMode(key as typeof readerMode)}>{label}</button>)}</div>
@@ -300,7 +330,7 @@ function PaperView({id,dashboard,select,refresh,citations,citationFocus,paperGra
     <div className="takeaway"><span>一句话读懂</span><strong>{brief.takeaway}</strong></div>
     <div className="brief-grid"><BriefCard icon={<Lightbulb/>} title="研究问题" values={brief.researchQuestion}/><BriefCard icon={<Sparkles/>} title="核心方法" values={brief.method}/><BriefCard icon={<CheckCircle2/>} title="关键结果" values={brief.results}/><BriefCard icon={<CircleAlert/>} title="主要局限" values={brief.limitations}/></div>
     <div className="paper-toolbar"><div className="membership-chips">{detail.projects.map(projectId=>{const item=dashboard.projects.find(project=>project.id===projectId);return item&&<span key={projectId}>{item.name}<button title="移出项目" onClick={()=>void removeMembership(projectId)}><X/></button></span>})}</div><select value={project} onChange={event=>setProject(event.target.value)}><option value="">添加到项目…</option>{available.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select><button onClick={()=>void add()} disabled={!project}>添加</button></div>
-    <div className="reading-tabs">{[["overview","概要"],["method","方法与实验"],["results","结果"],["limitations","局限与复现"],["evidence","证据"]].map(([key,label])=><button key={key} className={tab===key?"active":""} onClick={()=>setTab(key)}>{label}</button>)}</div><AnalysisTab tab={tab} analysis={detail.analysis}/></>:<>{readerMode==="enhanced"&&visibleAnnotations.length>0&&<div className="annotation-browser"><strong>已固定说明</strong>{visibleAnnotations.map((item,index)=><button className={item.citation.id===focusedCitation?.id?"active":""} key={item.annotation.id} onClick={()=>{setFocusedCitation(item.citation);setReaderMode("enhanced")}}>#{index+1} · 第 {item.citation.page} 页</button>)}</div>}<Suspense fallback={<div className="pdf-loading"><LoaderCircle className="spin"/>正在加载阅读器…</div>}><PdfDocumentViewer paperId={id} theme={theme} className={readerMode==="enhanced"?"enhanced-reader":"original-reader"} citations={readerMode==="enhanced"?citations:[]} annotations={readerMode==="enhanced"?annotations:[]} focusedCitationId={readerMode==="enhanced"?focusedCitation?.id:null} currentRevision={detail.paper.canonical_sha256} onPin={citation=>{setFocusedCitation(citation);void pinActive(citation)}} onHide={citation=>void hideActive(citation)}/></Suspense></>}
+    <div className="reading-tabs">{[["overview","概要"],["method","方法与实验"],["results","结果"],["limitations","局限与复现"],["evidence","证据"]].map(([key,label])=><button key={key} className={tab===key?"active":""} onClick={()=>setTab(key)}>{label}</button>)}</div><AnalysisTab tab={tab} analysis={detail.analysis}/></>:<>{readerMode==="enhanced"&&visibleAnnotations.length>0&&<div className="annotation-browser"><strong>已固定说明</strong>{visibleAnnotations.map((item,index)=><button className={item.citation.id===focusedCitation?.id?"active":""} key={item.annotation.id} onClick={()=>{setFocusedCitation(item.citation);setReaderMode("enhanced")}}>#{index+1} · 第 {item.citation.page} 页</button>)}</div>}<Suspense fallback={<div className="pdf-loading"><LoaderCircle className="spin"/>正在加载阅读器…</div>}><PdfDocumentViewer paperId={id} theme={theme} className={readerMode==="enhanced"?"enhanced-reader":"original-reader"} readingMode={readerMode} initialReadingPosition={savedReadingPosition} onReadingPositionChange={saveReadingPosition} citations={readerMode==="enhanced"?citations:[]} annotations={readerMode==="enhanced"?annotations:[]} focusedCitationId={readerMode==="enhanced"?focusedCitation?.id:null} currentRevision={detail.paper.canonical_sha256} onPin={citation=>{setFocusedCitation(citation);void pinActive(citation)}} onHide={citation=>void hideActive(citation)}/></Suspense></>}
   </div>{!isNarrow&&paperGraphOpen&&<ResizableDivider panel="paperGraph" value={paperGraphWidth} min={PANEL_LIMITS.paperGraph[0]} max={PANEL_LIMITS.paperGraph[1]} onResize={onResizeGraph} onReset={onResetGraph}/>} {(isNarrow||paperGraphOpen)&&<aside id="paper-graph-panel" className={`paper-graph workspace-panel${drawerOpen?" drawer-open":""}`} data-panel="paperGraph"><div className="paper-graph-head"><div><p className="eyebrow">相关知识</p><h2>这篇论文连接了什么？</h2><p>实线表示有论文证据，弱化关系表示 Codex 的待验证假设。</p></div><PanelCollapseButton label="相关知识" direction="right" onCollapse={onCollapseGraph}/></div><GraphErrorBoundary><Suspense fallback={<GraphLoading/>}><SemanticGraph theme={theme} compact payload={graph} focusNode={id} onOpenFull={()=>select({kind:"graph",id})}/></Suspense></GraphErrorBoundary></aside>}</div>
 }
 
