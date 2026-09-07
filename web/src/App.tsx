@@ -299,6 +299,7 @@ function PaperView({id,dashboard,select,refresh,citations,citationFocus,paperGra
   const [detail,setDetail]=useState<PaperDetail|null>(null);const [graph,setGraph]=useState<GraphPayload>({nodes:[],edges:[]});const [annotations,setAnnotations]=useState<PaperAnnotation[]>([]);const [focusedCitation,setFocusedCitation]=useState<MessageCitation|null>(null);const [project,setProject]=useState("");const [tab,setTab]=useState("overview");const [readerMode,setReaderMode]=useState<"smart"|"enhanced"|"original">("smart");const [reanalyzing,setReanalyzing]=useState(false)
   const savedReadingPosition=useMemo(()=>loadPaperReadingPosition(id),[id])
   const restoredPaperId=useRef<string|null>(null)
+  const saveReadingPosition=useCallback((position:Parameters<typeof savePaperReadingPosition>[1])=>savePaperReadingPosition(id,position),[id])
   const citationKey=citations.map(citation=>citation.id).join("|")
   const reload=useCallback(async()=>{const [paper,graph,annotations]=await Promise.all([api.paper(id),api.graph({paper_id:id}),api.paperAnnotations(id)]);setDetail(paper);setGraph(graph);setAnnotations(annotations)},[id])
   useEffect(()=>{setDetail(null);setAnnotations([]);setFocusedCitation(null);void reload()},[reload])
@@ -322,7 +323,6 @@ function PaperView({id,dashboard,select,refresh,citations,citationFocus,paperGra
   const hideActive=async(citation:MessageCitation=focusedCitation as MessageCitation)=>{const annotation=annotations.find(item=>item.citation.id===citation?.id);if(!annotation)return;await api.updateAnnotation(annotation.annotation.id,"hidden");setAnnotations(value=>value.map(item=>item.annotation.id===annotation.annotation.id?{...item,annotation:{...item.annotation,state:"hidden"}}:item));if(focusedCitation?.id===citation.id)setFocusedCitation(null);await reload()}
   const visibleAnnotations=annotations.filter(item=>item.annotation.state==="visible")
   const available=dashboard.projects.filter(item=>!detail.projects.includes(item.id))
-  const saveReadingPosition=useCallback((position:Parameters<typeof savePaperReadingPosition>[1])=>savePaperReadingPosition(id,position),[id])
   const paperGraphVisible=isNarrow?drawerOpen:paperGraphOpen
   return <div className={`paper-page${readerMode!=="smart"?" reader-active":""}${!paperGraphVisible?" paper-graph-collapsed":""}`}><div className="paper-reading"><header className="paper-head"><div><p className="eyebrow">{detail.paper.year??"论文"} · {detail.paper.doi??detail.paper.arxiv_id??detail.paper.id}</p><h1>{detail.paper.title}</h1><p>{authors.join(", ")||"作者信息待补充"}</p></div><PaperHeaderActions reanalyzing={reanalyzing} paperGraphOpen={paperGraphVisible} onOpenPdf={openPdf} onReanalyze={()=>void reanalyze()} onTrash={()=>void trash()} onToggleGraph={trigger=>paperGraphVisible?onCollapseGraph():onExpandGraph(trigger)}/></header>
     <div className="reader-mode-tabs">{[["smart","智能阅读"],["enhanced","增强阅读"],["original","原文"]].map(([key,label])=><button key={key} className={readerMode===key?"active":""} onClick={()=>setReaderMode(key as typeof readerMode)}>{label}</button>)}</div>
