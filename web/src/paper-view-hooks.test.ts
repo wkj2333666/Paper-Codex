@@ -1,3 +1,4 @@
+// @ts-expect-error Node built-ins are available in Vitest
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 
