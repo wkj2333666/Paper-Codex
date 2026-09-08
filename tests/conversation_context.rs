@@ -102,6 +102,38 @@ async fn refuses_deleted_or_pathless_papers() {
 }
 
 #[tokio::test]
+async fn empty_paper_keeps_identity_but_is_explicitly_unavailable_as_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = Workspace::initialize(temp.path()).await.unwrap();
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.insert_paper("paper:empty", "FAST").await.unwrap();
+    sqlx::query("UPDATE papers SET canonical_sha256='empty' WHERE id='paper:empty'")
+        .execute(db.pool())
+        .await
+        .unwrap();
+    atomic_write(
+        &workspace
+            .state_dir()
+            .join("cache/extraction/empty/pages.md"),
+        b"<!-- page:1 -->\n\n---\n\n<!-- page:2 -->\n",
+    )
+    .await
+    .unwrap();
+    let bundle = ConversationContextBuilder::new(db, workspace)
+        .refresh("empty-context", &[paper_scope("paper:empty")])
+        .await
+        .unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&tokio::fs::read(bundle.manifest_path).await.unwrap()).unwrap();
+    assert_eq!(manifest["papers"][0]["text_available"], false);
+    let summary = tokio::fs::read_to_string(bundle.summary_path)
+        .await
+        .unwrap();
+    assert!(summary.contains("FAST"));
+    assert!(summary.contains("正文提取为空"));
+}
+
+#[tokio::test]
 async fn project_scope_records_the_research_goal() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = Workspace::initialize(temp.path()).await.unwrap();

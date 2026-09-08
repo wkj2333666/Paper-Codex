@@ -183,6 +183,20 @@ mod tests {
         Arc,
     };
 
+    #[tokio::test]
+    async fn empty_legacy_cache_is_not_accepted_as_extracted_text() {
+        let temp = tempfile::tempdir().unwrap();
+        let cached = temp.path().join("extraction/empty/pages.json");
+        crate::workspace::atomic_write(&cached, b"[\"\",\"  \"]")
+            .await
+            .unwrap();
+        let result = extract_pdf(&temp.path().join("missing.pdf"), temp.path(), "empty").await;
+        assert!(
+            result.is_err(),
+            "empty cached pages must trigger extraction, not success"
+        );
+    }
+
     #[test]
     fn successful_primary_extraction_keeps_existing_result() {
         let fallback_called = Arc::new(AtomicBool::new(false));
