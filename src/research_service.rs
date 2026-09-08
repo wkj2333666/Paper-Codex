@@ -817,9 +817,32 @@ impl ResearchService {
         }
 
         for (provider, works) in execution.provider_works {
-            self.store
+            if let Err(error) = self
+                .store
                 .save_search_results(&run.id, &provider, &works)
-                .await?;
+                .await
+                .with_context(|| {
+                    format!(
+                        "persist research results from {provider} for run {}",
+                        run.id
+                    )
+                })
+            {
+                let message = format!("{error:#}");
+                if let Err(state_error) = self
+                    .store
+                    .finish_search(
+                        &run.id,
+                        SearchRunState::Failed,
+                        &serde_json::to_value(&execution.outcome.providers)?,
+                        Some(&message),
+                    )
+                    .await
+                {
+                    tracing::warn!(run_id = %run.id, error = ?state_error, "could not finalize failed research persistence");
+                }
+                return Err(error);
+            }
         }
         let provider_status = serde_json::to_value(&execution.outcome.providers)?;
         self.store

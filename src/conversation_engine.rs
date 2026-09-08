@@ -757,7 +757,7 @@ impl ConversationEngine {
                 tracing::error!(
                     conversation_id = %conversation_id,
                     message_id = %message.id,
-                    error = %error,
+                    error = ?error,
                     "conversation turn failed"
                 );
                 let error_text = if is_transport_failure(&error) {
@@ -1285,20 +1285,36 @@ impl ConversationEngine {
         turn: impl std::future::Future<Output = Result<T>>,
         events: &mut mpsc::UnboundedReceiver<CodexEvent>,
     ) -> Result<T> {
-        tokio::pin!(turn);
-        loop {
-            tokio::select! {
-                result = &mut turn => {
-                    while let Ok(event) = events.try_recv() {
-                        self.handle_turn_event(conversation_id, message_id, preview, event).await?;
+        let (finished, mut completion) = tokio::sync::oneshot::channel();
+        let producer = async {
+            let result = turn.await;
+            let _ = finished.send(());
+            // Preserve turn errors until queued events have been drained.
+            Ok::<_, anyhow::Error>(result)
+        };
+        let consumer = async {
+            loop {
+                tokio::select! {
+                    _ = &mut completion => break,
+                    event = events.recv() => {
+                        let Some(event) = event else { break };
+                        self.handle_turn_event(conversation_id, message_id, preview, event)
+                            .await?;
                     }
-                    return result;
-                }
-                Some(event) = events.recv() => {
-                    self.handle_turn_event(conversation_id, message_id, preview, event).await?;
                 }
             }
-        }
+            while let Ok(event) = events.try_recv() {
+                self.handle_turn_event(conversation_id, message_id, preview, event)
+                    .await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        // Poll the tool even while event persistence awaits SQLite. A select arm
+        // that awaits persistence alone can suspend the owner of the writer lock.
+        // try_join keeps cancellation scoped: a consumer failure drops the tool
+        // future (and its transaction), without leaving a detached task running.
+        let (result, ()) = tokio::try_join!(producer, consumer)?;
+        result
     }
 
     async fn handle_turn_event(
@@ -1460,7 +1476,8 @@ impl ConversationEngine {
         let event = self
             .db
             .append_conversation_event(conversation_id, message_id, event_type, &payload)
-            .await?;
+            .await
+            .with_context(|| format!("persist conversation event {event_type}"))?;
         let _ = self.events.send(event.clone());
         Ok(event)
     }
