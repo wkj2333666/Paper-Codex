@@ -37,6 +37,15 @@ fn pages_contain_visible_text(pages: &[String]) -> bool {
     !pages.is_empty() && pages.iter().any(|page| !page.trim().is_empty())
 }
 
+pub(crate) fn markdown_contains_visible_text(markdown: &str) -> bool {
+    markdown.lines().any(|line| {
+        let line = line.trim();
+        !line.is_empty()
+            && line != "---"
+            && !(line.starts_with("<!-- page:") && line.ends_with("-->"))
+    })
+}
+
 fn panic_message(payload: &(dyn Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<String>() {
         message.clone()
@@ -126,16 +135,27 @@ pub async fn extract_pdf(path: &Path, cache_root: &Path, sha256: &str) -> Result
     if let Ok(bytes) = tokio::fs::read(&cache_path).await {
         let pages: Vec<String> =
             serde_json::from_slice(&bytes).context("decode cached PDF pages")?;
-        let markdown = pages_as_markdown(&pages);
-        if tokio::fs::metadata(&markdown_path).await.is_err() {
-            crate::workspace::atomic_write(&markdown_path, markdown.as_bytes()).await?;
+        if pages_contain_visible_text(&pages) {
+            let markdown = pages_as_markdown(&pages);
+            if tokio::fs::read_to_string(&markdown_path)
+                .await
+                .ok()
+                .as_deref()
+                != Some(&markdown)
+            {
+                crate::workspace::atomic_write(&markdown_path, markdown.as_bytes()).await?;
+            }
+            return Ok(ExtractedPaper {
+                markdown,
+                pages,
+                cache_path,
+                markdown_path,
+            });
         }
-        return Ok(ExtractedPaper {
-            markdown,
-            pages,
-            cache_path,
-            markdown_path,
-        });
+        tracing::warn!(
+            revision = sha256,
+            "cached PDF extraction is empty; extracting again"
+        );
     }
     let primary_source = path.to_path_buf();
     let fallback_source = primary_source.clone();
@@ -182,6 +202,20 @@ mod tests {
         atomic::{AtomicBool, Ordering},
         Arc,
     };
+
+    #[tokio::test]
+    async fn empty_legacy_cache_is_not_accepted_as_extracted_text() {
+        let temp = tempfile::tempdir().unwrap();
+        let cached = temp.path().join("extraction/empty/pages.json");
+        crate::workspace::atomic_write(&cached, b"[\"\",\"  \"]")
+            .await
+            .unwrap();
+        let result = extract_pdf(&temp.path().join("missing.pdf"), temp.path(), "empty").await;
+        assert!(
+            result.is_err(),
+            "empty cached pages must trigger extraction, not success"
+        );
+    }
 
     #[test]
     fn successful_primary_extraction_keeps_existing_result() {

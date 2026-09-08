@@ -211,7 +211,15 @@ impl ResearchStore {
         if self.get_search(run_id).await?.is_none() {
             bail!("literature search does not exist");
         }
-        let mut transaction = self.db.pool().begin().await?;
+        // Acquire the writer reservation before reading merge state. With a
+        // deferred transaction a concurrent stream write can make the subsequent
+        // read-to-write upgrade fail immediately, bypassing busy_timeout.
+        let mut transaction = self
+            .db
+            .pool()
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .context("begin research result merge transaction")?;
         for (rank, work) in works.iter().enumerate() {
             let existing = sqlx::query(
                 r#"SELECT providers_json,best_rank,raw_results_json
@@ -253,9 +261,13 @@ impl ResearchStore {
             .bind(best_rank)
             .bind(serde_json::to_string(&raw_results)?)
             .execute(&mut *transaction)
-            .await?;
+            .await
+            .context("merge research search result")?;
         }
-        transaction.commit().await?;
+        transaction
+            .commit()
+            .await
+            .context("commit research search results")?;
         Ok(())
     }
 

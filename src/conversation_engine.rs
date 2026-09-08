@@ -757,7 +757,7 @@ impl ConversationEngine {
                 tracing::error!(
                     conversation_id = %conversation_id,
                     message_id = %message.id,
-                    error = %error,
+                    error = ?error,
                     "conversation turn failed"
                 );
                 let error_text = if is_transport_failure(&error) {
@@ -989,20 +989,15 @@ impl ConversationEngine {
                 turn_event_tx.clone(),
                 research_handler.as_ref().map(|handler| handler.session()),
             );
-            tokio::pin!(turn);
-            let result = loop {
-                tokio::select! {
-                    result = &mut turn => {
-                        while let Ok(event) = turn_event_rx.try_recv() {
-                            self.handle_turn_event(&conversation.id, &assistant.id, &mut preview, event).await?;
-                        }
-                        break result;
-                    }
-                    Some(event) = turn_event_rx.recv() => {
-                        self.handle_turn_event(&conversation.id, &assistant.id, &mut preview, event).await?;
-                    }
-                }
-            };
+            let result = self
+                .drive_turn(
+                    &conversation.id,
+                    &assistant.id,
+                    &mut preview,
+                    turn,
+                    &mut turn_event_rx,
+                )
+                .await;
             if *cancel.borrow() {
                 self.finish_cancelled_answer(
                     &conversation.id,
@@ -1282,6 +1277,46 @@ impl ConversationEngine {
         Ok(())
     }
 
+    async fn drive_turn<T>(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        preview: &mut AnswerPreview,
+        turn: impl std::future::Future<Output = Result<T>>,
+        events: &mut mpsc::UnboundedReceiver<CodexEvent>,
+    ) -> Result<T> {
+        let (finished, mut completion) = tokio::sync::oneshot::channel();
+        let producer = async {
+            let result = turn.await;
+            let _ = finished.send(());
+            // Preserve turn errors until queued events have been drained.
+            Ok::<_, anyhow::Error>(result)
+        };
+        let consumer = async {
+            loop {
+                tokio::select! {
+                    _ = &mut completion => break,
+                    event = events.recv() => {
+                        let Some(event) = event else { break };
+                        self.handle_turn_event(conversation_id, message_id, preview, event)
+                            .await?;
+                    }
+                }
+            }
+            while let Ok(event) = events.try_recv() {
+                self.handle_turn_event(conversation_id, message_id, preview, event)
+                    .await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        // Poll the tool even while event persistence awaits SQLite. A select arm
+        // that awaits persistence alone can suspend the owner of the writer lock.
+        // try_join keeps cancellation scoped: a consumer failure drops the tool
+        // future (and its transaction), without leaving a detached task running.
+        let (result, ()) = tokio::try_join!(producer, consumer)?;
+        result
+    }
+
     async fn handle_turn_event(
         &self,
         conversation_id: &str,
@@ -1441,7 +1476,8 @@ impl ConversationEngine {
         let event = self
             .db
             .append_conversation_event(conversation_id, message_id, event_type, &payload)
-            .await?;
+            .await
+            .with_context(|| format!("persist conversation event {event_type}"))?;
         let _ = self.events.send(event.clone());
         Ok(event)
     }
@@ -1603,6 +1639,96 @@ mod tests {
         assert!(should_generate_conversation_title("新对话"));
         assert!(should_generate_conversation_title("论文对话"));
         assert!(!should_generate_conversation_title("我的消融实验问题"));
+    }
+
+    #[tokio::test]
+    async fn tool_transaction_can_commit_while_stream_event_waits_for_database() {
+        use crate::{
+            codex::{CodexCommand, CodexEvent, CodexRuntime},
+            workspace::Workspace,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::connect(&format!(
+            "sqlite://{}?mode=rwc",
+            temp.path().join("state.sqlite").display()
+        ))
+        .await
+        .unwrap();
+        let mut connections = Vec::new();
+        for _ in 0..4 {
+            let mut connection = db.pool().acquire().await.unwrap();
+            sqlx::query("PRAGMA busy_timeout=500")
+                .execute(&mut *connection)
+                .await
+                .unwrap();
+            connections.push(connection);
+        }
+        drop(connections);
+        let workspace = Workspace::initialize(temp.path().join("workspace"))
+            .await
+            .unwrap();
+        let codex = CodexRuntime::spawn(CodexCommand {
+            program: "python3".into(),
+            args: vec![format!(
+                "{}/fixtures/fake-app-server.py",
+                env!("CARGO_MANIFEST_DIR")
+            )],
+            codex_home: None,
+            runtime_tmp: None,
+        })
+        .await
+        .unwrap();
+        let engine = super::ConversationEngine::start(db.clone(), workspace, codex)
+            .await
+            .unwrap();
+        let conversation = db.create_conversation("lock regression").await.unwrap();
+        let message = db
+            .append_chat_message(&conversation.id, "assistant", "", "completed")
+            .await
+            .unwrap();
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let turn = async {
+            let mut tx = db.pool().begin().await?;
+            sqlx::query("UPDATE conversations SET title='committed' WHERE id=?")
+                .bind(&conversation.id)
+                .execute(&mut *tx)
+                .await?;
+            sender.send(CodexEvent {
+                kind: "agent-delta".into(),
+                text: Some("{\"answer_markdown\":\"visible answer\"}".into()),
+                payload: serde_json::json!({"params":{"itemId":"answer"}}),
+            })?;
+            // A tool holds the writer lock across an await. The event consumer must
+            // not prevent that tool from being polled again to commit.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tx.commit().await?;
+            anyhow::Ok(())
+        };
+        let mut preview = AnswerPreview::default();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            engine.drive_turn(
+                &conversation.id,
+                &message.id,
+                &mut preview,
+                turn,
+                &mut receiver,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            db.get_conversation(&conversation.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .title,
+            "committed"
+        );
+        let payload: String = sqlx::query_scalar("SELECT payload_json FROM conversation_events WHERE message_id=? AND event_type='answer-delta'")
+            .bind(&message.id).fetch_one(db.pool()).await.unwrap();
+        assert!(payload.contains("visible answer"));
     }
 
     #[test]

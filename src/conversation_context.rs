@@ -28,6 +28,8 @@ pub struct ContextPaper {
     pub revision: String,
     pub page_count: u32,
     pub file: String,
+    #[serde(default)]
+    pub text_available: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +189,7 @@ impl ConversationContextBuilder {
                 revision,
                 page_count,
                 file,
+                text_available: crate::extraction::markdown_contains_visible_text(&contents),
             });
         }
 
@@ -541,6 +544,9 @@ fn append_paper_reference(summary: &mut String, paper: &ContextPaper) {
         "\n- `{}` — {}（revision `{}`，{} 页，文件 `papers/{}`）",
         paper.paper_id, paper.title, paper.revision, paper.page_count, paper.file
     ));
+    if !paper.text_available {
+        summary.push_str("\n  - 正文提取为空：页码标记不代表正文可读。论文身份仍以上述 ID 和标题为准；不要引用这个空文件，也不要用其他论文冒充当前论文。需要原文时应查找同一论文的可读版本，并向用户说明缺失。");
+    }
 }
 
 #[cfg(test)]
