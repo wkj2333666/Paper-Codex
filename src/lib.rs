@@ -4,6 +4,7 @@ pub mod auth;
 pub mod briefing;
 mod briefing_editorial;
 mod briefing_email;
+mod briefing_media;
 pub mod codex;
 pub mod codex_tools;
 pub mod config;
