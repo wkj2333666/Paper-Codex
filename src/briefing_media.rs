@@ -1,6 +1,5 @@
-//! Best-effort, bounded publisher metadata and inline original figures.
+//! Best-effort, bounded publisher metadata and original figure URLs.
 use anyhow::{bail, Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::Client;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -49,29 +48,6 @@ async fn download(client: &Client, url: Url, limit: usize) -> Result<Vec<u8>> {
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
-}
-
-async fn download_figure(client: &Client, url: Url, limit: usize) -> Result<Vec<u8>> {
-    match download(client, url.clone(), limit).await {
-        Ok(bytes) => Ok(bytes),
-        Err(error) => {
-            // One bounded retry for transport/server failures, never for size
-            // rejection, 4xx or invalid sources. The whole image stage also
-            // has a hard deadline in BriefingService.
-            let transient = error.downcast_ref::<reqwest::Error>().is_some_and(|error| {
-                error.is_timeout()
-                    || error.is_connect()
-                    || error
-                        .status()
-                        .is_some_and(|status| status.is_server_error())
-            });
-            if !transient {
-                return Err(error);
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            download(client, url, limit).await
-        }
-    }
 }
 
 pub(crate) async fn metadata(paper: &Value, cache: &Path) -> Result<Value> {
@@ -158,48 +134,6 @@ pub(crate) async fn metadata(paper: &Value, cache: &Path) -> Result<Value> {
     tokio::fs::create_dir_all(cache).await?;
     crate::workspace::atomic_write(&path, &serde_json::to_vec(&result)?).await?;
     Ok(result)
-}
-
-pub(crate) async fn attach_figures(markdown: &str, sources: &mut [Value]) {
-    let Ok(client) = client() else {
-        return;
-    };
-    let mut budget = 5 * 1024 * 1024;
-    for source in sources {
-        let Some(paper_url) = source["paper"]["source_url"].as_str() else {
-            continue;
-        };
-        if !markdown.contains(&format!("]({paper_url})")) {
-            continue;
-        }
-        let Some(url) = source["presentation"]["figure"]["image_url"]
-            .as_str()
-            .and_then(|value| Url::parse(value).ok())
-        else {
-            continue;
-        };
-        if budget == 0 {
-            break;
-        }
-        let Ok(bytes) = download_figure(&client, url, budget.min(2 * 1024 * 1024)).await else {
-            source["presentation"]["figure"]["acquisition_status"] =
-                json!("unavailable_or_over_budget");
-            continue;
-        };
-        let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-            "image/png"
-        } else if bytes.starts_with(b"\xff\xd8\xff") {
-            "image/jpeg"
-        } else {
-            continue;
-        };
-        budget -= bytes.len();
-        let cid = format!("figure-{}@paper-codex", hex::encode(Sha256::digest(&bytes)));
-        source["presentation"]["figure"]["mime"] = json!(mime);
-        source["presentation"]["figure"]["cid"] = json!(cid);
-        source["presentation"]["figure"]["data_base64"] = json!(STANDARD.encode(bytes));
-        source["presentation"]["figure"]["acquisition_status"] = json!("acquired");
-    }
 }
 
 #[cfg(test)]
