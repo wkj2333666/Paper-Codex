@@ -76,6 +76,14 @@ class MailTests(unittest.TestCase):
             self.run_mail(server, '<p>正文</p>', [{'cid':'bad\r\nheader', 'mime':'image/svg+xml', 'data_base64':''}])
         server.send_message.assert_not_called()
 
+    def test_accepts_realistic_teaser_sizes_but_enforces_single_image_limit(self):
+        server = MagicMock()
+        image = {'cid':'figure-' + 'b' * 64 + '@paper-codex', 'mime':'image/png', 'data_base64':base64.b64encode(b'\x89PNG\r\n\x1a\n' + b'x' * 1500000).decode()}
+        self.assertEqual(self.run_mail(server, '<p>图文</p>', [image]), 0)
+        image['data_base64'] = base64.b64encode(b'\x89PNG\r\n\x1a\n' + b'x' * (2 * 1024 * 1024)).decode()
+        with self.assertRaises(ValueError):
+            self.run_mail(MagicMock(), '<p>图文</p>', [image])
+
     def test_auth_failure_never_sends_data(self):
         server = MagicMock()
         server.login.side_effect = smtplib.SMTPAuthenticationError(535, b"rejected")
