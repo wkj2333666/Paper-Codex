@@ -168,16 +168,34 @@ fn valid_mailbox(value: &str) -> bool {
 }
 
 pub(crate) fn selected_works(markdown: &str, sources: &[Value]) -> Vec<WorkMetadata> {
-    use pulldown_cmark::{Event, Parser, Tag};
-    let links: std::collections::BTreeSet<_> = Parser::new(markdown)
-        .filter_map(|event| {
-            if let Event::Start(Tag::Link { dest_url, .. }) = event {
-                Some(dest_url.to_string())
-            } else {
-                None
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    static BARE_URL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let bare_url =
+        BARE_URL.get_or_init(|| regex::Regex::new(r#"https?://[^\s<>\[\]()\"']+"#).unwrap());
+    let mut links = std::collections::BTreeSet::new();
+    let mut in_code = false;
+    for event in Parser::new(markdown) {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => in_code = true,
+            Event::End(TagEnd::CodeBlock) => in_code = false,
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                links.insert(dest_url.to_string());
             }
-        })
-        .collect();
+            // Earlier reports used plain URLs, which Markdown renders as text.
+            // Match complete URLs, not substrings (paper 123 must not match 1234).
+            Event::Text(text) if !in_code => {
+                for matched in bare_url.find_iter(&text) {
+                    links.insert(
+                        matched
+                            .as_str()
+                            .trim_end_matches(['.', ',', ';', '。', '，', '；', '）'])
+                            .to_owned(),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
     let mut seen = std::collections::BTreeSet::new();
     sources
         .iter()
@@ -833,6 +851,16 @@ mod tests {
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].canonical_key, works[0].canonical_key);
         assert!(selected_works("没有引用候选论文", &sources).is_empty());
+        let legacy = format!("- **链接**：{}\n", works[0].source_url);
+        assert_eq!(selected_works(&legacy, &sources).len(), 1);
+        assert_eq!(
+            selected_works(&format!("原文：{}。", works[0].source_url), &sources).len(),
+            1
+        );
+        assert!(selected_works(&format!("{}999", works[0].source_url), &sources).is_empty());
+        assert!(
+            selected_works(&format!("```text\n{}\n```", works[0].source_url), &sources).is_empty()
+        );
     }
 
     #[test]
