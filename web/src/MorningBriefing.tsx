@@ -69,7 +69,7 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
       <fieldset><legend>参考项目目标与已保存兴趣</legend>{projects.length ? projects.map(project => <label key={project.id}><input type="checkbox" checked={draft.project_ids.includes(project.id)} onChange={e => update({ project_ids: e.target.checked ? [...draft.project_ids, project.id] : draft.project_ids.filter(id => id !== project.id) })}/>{project.name}</label>) : <span>暂无项目；仍参考全局兴趣。</span>}</fieldset>
       <label><input type="checkbox" checked={draft.email_enabled} disabled={!data?.mail_configured} onChange={e => update({ email_enabled: e.target.checked })}/>邮件投递{!data?.mail_configured && "（服务端尚未设置凭据文件）"}</label>
       <label>收件邮箱<input type="email" required={draft.email_enabled} value={draft.recipient} onChange={e => update({ recipient: e.target.value })}/></label>
-      <p>无需保持网页开启。没有新论文不发邮件；邮件失败不会重新生成晨报。SMTP 密码仅从服务器本地文件读取。</p>
+      <p>无需保持网页开启。没有新论文不发邮件；邮件失败不会重新生成晨报。仅选择一个项目时，晨报还会进入该项目的对话历史；不选或选择多个项目时保存在首页。SMTP 密码仅从服务器本地文件读取。</p>
       <button disabled={busy} type="submit">保存设置</button>
     </form>}
     {item ? <><div className="briefing-actions"><select aria-label="晨报日期" value={item.id} onChange={e => setSelected(e.target.value)}>{data?.items.map(entry => <option key={entry.id} value={entry.id}>{entry.day} · {labels[entry.status] ?? entry.status}</option>)}</select><span>生成：{labels[item.status] ?? item.status} · 邮件：{labels[item.mail_status] ?? item.mail_status}</span>

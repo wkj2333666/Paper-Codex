@@ -487,7 +487,6 @@ impl BriefingService {
             }
             sources.push(entry);
         }
-        let mut conversation_id = None;
         let markdown = if sources.is_empty() {
             "本次没有符合关注方向的新增论文。已检查近期更新并排除重复论文。".into()
         } else {
@@ -519,54 +518,58 @@ impl BriefingService {
                 }
                 return Err(ModelRejected.into());
             }
-            let text = outcome.final_text;
-            let scopes = if config.project_ids.len() == 1 {
-                vec![ConversationScopeInput {
-                    scope_type: "project".into(),
-                    scope_id: Some(config.project_ids[0].clone()),
-                }]
-            } else {
-                vec![ConversationScopeInput {
-                    scope_type: "global".into(),
-                    scope_id: None,
-                }]
-            };
-            if *cancel.borrow() {
-                bail!("晨报生成已取消");
-            }
-            let conversation = self
-                .conversations
-                .create_conversation(&format!("{day} 论文晨报"), scopes)
-                .await?;
-            self.db
-                .append_chat_message(
-                    &conversation.id,
-                    "user",
-                    "请根据本次提供的论文证据生成晨报",
-                    "completed",
-                )
-                .await?;
-            self.db
-                .append_chat_message(&conversation.id, "assistant", &text, "completed")
-                .await?;
-            conversation_id = Some(conversation.id);
-            text
+            outcome.final_text
         };
         if *cancel.borrow() {
             bail!("晨报生成已取消");
         }
-        let mut transaction = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
-        for paper in &unseen {
-            sqlx::query("INSERT OR IGNORE INTO briefing_seen(paper_id,updated) VALUES(?,?)")
-                .bind(&paper.canonical_key)
-                .bind(paper.metadata["updated"].as_str().unwrap_or_default())
-                .execute(&mut *transaction)
-                .await?;
+        persist_briefing(
+            &self.db,
+            id,
+            &markdown,
+            &sources,
+            &unseen,
+            config.email_enabled,
+        )
+        .await?;
+        // Chat archival is optional and must never discard a completed digest.
+        if !sources.is_empty() {
+            if let Err(error) = self.archive_briefing(id, &day, config, &markdown).await {
+                tracing::warn!(%error, briefing_id=id, "briefing saved but project chat archival failed");
+            }
         }
-        sqlx::query("UPDATE daily_briefings SET status=?,markdown=?,sources_json=?,conversation_id=?,completed_at=?,next_attempt_at=NULL,mail_status=? WHERE id=?")
-            .bind(if sources.is_empty() {"empty"} else {"completed"}).bind(markdown).bind(serde_json::to_string(&sources)?).bind(conversation_id).bind(Utc::now().to_rfc3339())
-            .bind(if sources.is_empty() || !config.email_enabled {"skipped"} else {"pending"}).bind(id).execute(&mut *transaction).await?;
-        transaction.commit().await?;
+        Ok(())
+    }
+    async fn archive_briefing(
+        &self,
+        id: &str,
+        day: &str,
+        config: &BriefingConfig,
+        markdown: &str,
+    ) -> Result<()> {
+        let Some(scope) = briefing_chat_scope(config) else {
+            return Ok(());
+        };
+        let conversation = self
+            .conversations
+            .create_conversation(&format!("{day} 论文晨报"), vec![scope])
+            .await?;
+        self.db
+            .append_chat_message(
+                &conversation.id,
+                "user",
+                "请根据本次提供的论文证据生成晨报",
+                "completed",
+            )
+            .await?;
+        self.db
+            .append_chat_message(&conversation.id, "assistant", markdown, "completed")
+            .await?;
+        sqlx::query("UPDATE daily_briefings SET conversation_id=? WHERE id=?")
+            .bind(conversation.id)
+            .bind(id)
+            .execute(self.db.pool())
+            .await?;
         Ok(())
     }
     pub async fn deliver(
@@ -640,5 +643,88 @@ impl BriefingService {
             .await
             .context("邮件发送超时，请检查邮箱后重试")??;
         Ok(status.code().unwrap_or(2))
+    }
+}
+
+fn briefing_chat_scope(config: &BriefingConfig) -> Option<ConversationScopeInput> {
+    if config.project_ids.len() != 1 {
+        return None;
+    }
+    Some(ConversationScopeInput {
+        scope_type: "project".into(),
+        scope_id: Some(config.project_ids[0].clone()),
+    })
+}
+
+async fn persist_briefing(
+    db: &Database,
+    id: &str,
+    markdown: &str,
+    sources: &[Value],
+    unseen: &[WorkMetadata],
+    email_enabled: bool,
+) -> Result<()> {
+    let mut transaction = db.pool().begin_with("BEGIN IMMEDIATE").await?;
+    for paper in unseen {
+        sqlx::query("INSERT OR IGNORE INTO briefing_seen(paper_id,updated) VALUES(?,?)")
+            .bind(&paper.canonical_key)
+            .bind(paper.metadata["updated"].as_str().unwrap_or_default())
+            .execute(&mut *transaction)
+            .await?;
+    }
+    sqlx::query("UPDATE daily_briefings SET status=?,markdown=?,sources_json=?,error=NULL,completed_at=?,next_attempt_at=NULL,mail_status=? WHERE id=?")
+        .bind(if sources.is_empty() {"empty"} else {"completed"}).bind(markdown).bind(serde_json::to_string(sources)?).bind(Utc::now().to_rfc3339())
+        .bind(if sources.is_empty() || !email_enabled {"skipped"} else {"pending"}).bind(id).execute(&mut *transaction).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standalone_and_cross_project_briefings_do_not_invent_a_global_chat_scope() {
+        let mut config = BriefingConfig::default();
+        assert!(briefing_chat_scope(&config).is_none());
+        config.project_ids = vec!["project-a".into()];
+        let scope = briefing_chat_scope(&config).unwrap();
+        assert_eq!(scope.scope_type, "project");
+        assert_eq!(scope.scope_id.as_deref(), Some("project-a"));
+        config.project_ids.push("project-b".into());
+        assert!(briefing_chat_scope(&config).is_none());
+    }
+
+    #[tokio::test]
+    async fn completed_body_and_delivery_are_persisted_without_a_chat_project() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        BriefingService::recover_states(&db).await.unwrap();
+        sqlx::query("INSERT INTO daily_briefings(id,day,status,started_at,settings_json) VALUES('digest','2026-09-27','running','2026-09-27','{}')").execute(db.pool()).await.unwrap();
+        let works =
+            parse_arxiv_search(include_str!("../fixtures/research/arxiv-search.xml")).unwrap();
+        persist_briefing(
+            &db,
+            "digest",
+            "# 已生成的正文",
+            &[json!({"paper":works[0]})],
+            &works,
+            true,
+        )
+        .await
+        .unwrap();
+        // This is also the state retained if optional archival later fails.
+        let item: Briefing = sqlx::query_as("SELECT * FROM daily_briefings WHERE id='digest'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(item.status, "completed");
+        assert_eq!(item.markdown, "# 已生成的正文");
+        assert_eq!(item.mail_status, "pending");
+        assert!(item.conversation_id.is_none());
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM briefing_seen")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
     }
 }
