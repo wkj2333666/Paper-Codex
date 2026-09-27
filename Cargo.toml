@@ -27,7 +27,7 @@ libc = "0.2"
 mime_guess = "2"
 pdf-extract = "0.12"
 pdf_oxide = { version = "=0.3.77", default-features = false }
-quick-xml = { version = "0.38", features = ["serialize"] }
+quick-xml = { version = "0.38", features = ["serialize", "overlapped-lists"] }
 rand = "0.9"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }

@@ -255,8 +255,28 @@ pub fn parse_crossref_search(body: &str) -> Result<Vec<WorkMetadata>> {
 }
 
 pub fn parse_arxiv_search(body: &str) -> Result<Vec<WorkMetadata>> {
-    let response: ArxivFeed =
-        quick_xml::de::from_str(body).context("parse arXiv search response")?;
+    if body.len() > 8 * 1024 * 1024 {
+        bail!("arXiv search response exceeds metadata size limit");
+    }
+    // A proxy's HTML error page must not become a successful empty feed.
+    let mut reader = quick_xml::Reader::from_str(body);
+    loop {
+        match reader.read_event().context("read arXiv feed root")? {
+            quick_xml::events::Event::Start(tag) | quick_xml::events::Event::Empty(tag) => {
+                if tag.local_name().as_ref() != b"feed" {
+                    bail!("arXiv response is not an Atom feed");
+                }
+                break;
+            }
+            quick_xml::events::Event::Eof => bail!("arXiv response is empty"),
+            _ => {}
+        }
+    }
+    // Atom does not require repeated link/author elements to be contiguous.
+    let mut deserializer = quick_xml::de::Deserializer::from_str(body);
+    deserializer.event_buffer_size(std::num::NonZeroUsize::new(100_000));
+    let response =
+        ArxivFeed::deserialize(&mut deserializer).context("parse arXiv search response")?;
     response
         .entries
         .into_iter()

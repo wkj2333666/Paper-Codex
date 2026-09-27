@@ -66,6 +66,43 @@ fn arxiv_versions_normalize_to_one_identifier() {
     assert_eq!(works[1].arxiv_id.as_deref(), Some("cs/9901001"));
 }
 
+#[test]
+fn arxiv_atom_allows_interleaved_links_and_authors() {
+    let response = r#"<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+      <entry>
+        <id>http://arxiv.org/abs/2609.30264v2</id>
+        <link href="https://arxiv.org/abs/2609.30264v2" rel="alternate"/>
+        <title>Interleaved Atom example</title>
+        <author><name>First Author</name></author>
+        <updated>2026-09-24T17:59:41Z</updated>
+        <summary>A deterministic metadata fixture.</summary>
+        <category term="cs.RO"/>
+        <link href="https://arxiv.org/pdf/2609.30264v2" rel="related" type="application/pdf"/>
+        <published>2026-09-23T17:59:41Z</published>
+        <author><name>Second Author</name></author>
+        <arxiv:doi>10.1000/example</arxiv:doi>
+        <link href="https://doi.org/10.1000/example" rel="related"/>
+      </entry>
+    </feed>"#;
+    let works = parse_arxiv_search(response).unwrap();
+    assert_eq!(works.len(), 1);
+    assert_eq!(works[0].authors, ["First Author", "Second Author"]);
+    assert_eq!(works[0].metadata["links"].as_array().unwrap().len(), 3);
+    assert_eq!(works[0].metadata["published"], "2026-09-23T17:59:41Z");
+    assert_eq!(works[0].metadata["updated"], "2026-09-24T17:59:41Z");
+}
+
+#[test]
+fn arxiv_does_not_silently_accept_an_html_error_page() {
+    assert!(parse_arxiv_search("<html><body>Service unavailable</body></html>").is_err());
+    assert!(parse_arxiv_search("").is_err());
+    assert!(
+        parse_arxiv_search("<feed xmlns='http://www.w3.org/2005/Atom'/>")
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[derive(Clone)]
 struct RetryState {
     attempts: Arc<AtomicUsize>,
