@@ -34,6 +34,14 @@ def main():
         server.login(sender, password)
         try:
             server.send_message(message)
+        except smtplib.SMTPDataError as error:
+            # SMTPException inherits OSError. A definitive DATA rejection is
+            # not an uncertain disconnect and must not trigger duplicate checks.
+            return 4 if error.smtp_code >= 500 else 1
+        except smtplib.SMTPResponseException as error:
+            return 3 if error.smtp_code >= 500 else 1
+        except smtplib.SMTPRecipientsRefused as error:
+            return 3 if any(code >= 500 for code, _ in error.recipients.values()) else 1
         except (smtplib.SMTPServerDisconnected, OSError):
             # The server may have accepted DATA before the connection was lost.
             return 2
