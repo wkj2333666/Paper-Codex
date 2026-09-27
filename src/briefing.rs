@@ -253,16 +253,8 @@ impl BriefingService {
         .await
     }
     pub async fn list(&self) -> Result<Vec<Briefing>> {
-        let mut items: Vec<Briefing> =
-            sqlx::query_as("SELECT * FROM daily_briefings ORDER BY day DESC LIMIT 60")
-                .fetch_all(self.db.pool())
-                .await?;
-        // Fulltext evidence stays on disk; do not repeatedly send megabytes to a polling UI.
-        for item in &mut items {
-            item.sources_json = "[]".into();
-            item.settings_json = "{}".into();
-        }
-        Ok(items)
+        // Poll only small status records. Fetch the chosen day's body separately.
+        Ok(sqlx::query_as("SELECT id,day,status,'' AS markdown,error,conversation_id,mail_status,mail_attempts,attempts,started_at,completed_at,'[]' AS sources_json,'{}' AS settings_json,next_attempt_at,mail_error FROM daily_briefings ORDER BY day DESC LIMIT 60").fetch_all(self.db.pool()).await?)
     }
     pub async fn get(&self, id: &str) -> Result<Briefing> {
         sqlx::query_as("SELECT * FROM daily_briefings WHERE id=?")
@@ -413,7 +405,7 @@ impl BriefingService {
         .await?;
         let since = previous
             .and_then(|v| DateTime::parse_from_rfc3339(&v).ok())
-            .map(|v| v.with_timezone(&Utc()) - chrono::Duration::days(2))
+            .map(|v| v.with_timezone(&Utc) - chrono::Duration::days(2))
             .unwrap_or_else(|| Utc::now() - chrono::Duration::days(4));
         let papers = self.fetch(since, config).await?;
         let mut unseen = Vec::new();

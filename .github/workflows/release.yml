@@ -206,6 +206,8 @@ jobs:
           cp -a web/dist/. "${package}/web/"
           cp deploy/paper-codex.user.service "${package}/"
           cp deploy/paper-codex.user.env.example "${package}/paper-codex.env.example"
+          cp deploy/briefing.yaml.example "${package}/briefing.yaml.example"
+          cp docs/daily-briefing.md "${package}/DAILY-BRIEFING.md"
           install -m 0755 scripts/init-codex-home.sh "${package}/init-codex-home.sh"
           cat > "${package}/INSTALL.txt" <<EOF
           mkdir -p .runtime/releases/${RELEASE_TAG}

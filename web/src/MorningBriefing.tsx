@@ -25,6 +25,16 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
   const [busy, setBusy] = useState(false)
+  const [detail, setDetail] = useState<Briefing | null>(null)
+  const item = data?.items.find(item => item.id === selected) ?? data?.items[0]
+  useEffect(() => {
+    let active = true
+    setDetail(null)
+    if (item && ["completed", "empty"].includes(item.status)) {
+      void api.briefing(item.id).then(value => { if (active) setDetail(value) }).catch(error => { if (active) setError(message(error)) })
+    }
+    return () => { active = false }
+  }, [item?.id, item?.status])
   useEffect(() => {
     let active = true
     let timer: ReturnType<typeof setTimeout>
@@ -42,7 +52,6 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
     catch (error) { setError(message(error)) }
     finally { setBusy(false) }
   }
-  const item = data?.items.find(item => item.id === selected) ?? data?.items[0]
   const update = (value: Partial<BriefingConfig>) => setDraft(current => current ? { ...current, ...value } : current)
   return <section className="morning-briefing" aria-label="论文晨报">
     <header><div><h2>论文晨报</h2><p>{data?.config?.enabled ? `每天 ${data.config.time} · 北京时间` : "定时生成未开启"} · {data?.config?.email_enabled ? "邮件已启用" : "站内阅读"}</p></div>
@@ -67,7 +76,7 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
       {item.status === "completed" && !["sent", "sending"].includes(item.mail_status) && <button disabled={busy || !data?.config?.email_enabled || item.mail_attempts >= 3} onClick={() => { if (item.mail_status === "uncertain" && !window.confirm("上次邮件可能已送达。确认检查邮箱后仍要重发？")) return; void action(() => api.sendBriefing(item.id), "已提交发送请求，请查看发送状态。") }}>发送邮件</button>}</div>
       {item.error && <p role="alert">{item.error}</p>}{item.mail_error && <p role="alert">{item.mail_error}</p>}
       {item.status === "running" && <p role="status">正在检索和整理论文，可离开页面，完成后会保存在这里。</p>}
-      {item.markdown && <details open><summary>{item.day} 晨报正文</summary><div className="briefing-content chat-markdown"><ChatMarkdown>{item.markdown}</ChatMarkdown></div></details>}
+      {detail?.id === item.id && detail.markdown && <details open><summary>{item.day} 晨报正文</summary><div className="briefing-content chat-markdown"><ChatMarkdown>{detail.markdown}</ChatMarkdown></div></details>}
       {item.conversation_id && <p>可在 Codex 历史对话中打开「{item.day} 论文晨报」继续追问。</p>}
     </> : <p>还没有晨报。设置关注方向后，可手动生成第一份。</p>}
   </section>

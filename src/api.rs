@@ -281,6 +281,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/tasks", get(list_tasks))
         .route("/api/briefings", get(list_briefings).post(run_briefing))
         .route("/api/briefings/config", put(save_briefing_config))
+        .route("/api/briefings/{id}", get(get_briefing))
         .route("/api/briefings/{id}/send", post(send_briefing))
         .route("/api/tasks/{id}", get(get_task).delete(dismiss_task))
         .route("/api/tasks/{id}/cancel", post(cancel_task))
@@ -444,6 +445,23 @@ async fn save_briefing_config(
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_briefing(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let service = state
+        .briefings
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("晨报服务未启用"))?;
+    let mut item = service
+        .get(&id)
+        .await
+        .map_err(|e| ApiError::not_found(e.to_string()))?;
+    item.sources_json = "[]".into();
+    item.settings_json = "{}".into();
+    Ok(Json(json!(item)))
 }
 
 async fn run_briefing(

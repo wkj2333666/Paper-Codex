@@ -1,6 +1,6 @@
 import type { Annotation, AnnotationAnchor, CandidateBulkImportOutcome, CandidateImportResult, CandidateStatus, CodexGoal, CodexGoalRequest, Conversation, ConversationDetail, ConversationScope, ConversationStreamEvent, CodexCapabilities, CodexIntegrations, CodexRunSettings, CodexSkillSelection, CodexToolPreference, Dashboard, DirectIntakeResult, GraphPayload, ImportCandidateOutcome, IntakeSearchResponse, LiteratureSearchDetail, LiteratureSearchRun, MemoryItem, MemoryKind, Paper, PaperAnnotation, PaperDetail, PaperImpact, Project, ProjectCandidate, ProjectGoalSummary, ProjectImpact, ProjectReadme, ProjectReadmeSaveRequest, ResearchMode, SearchResult, StreamEvent, Task } from "./types"
 
-import type { BriefingConfig, BriefingResponse } from "./MorningBriefing"
+import type { Briefing, BriefingConfig, BriefingResponse } from "./MorningBriefing"
 
 export class ApiError extends Error { constructor(public status:number,message:string,public body:Record<string,unknown>={}){super(message)} }
 const TOKEN_KEY = "paper-codex-token"
@@ -22,6 +22,7 @@ export const api = {
   async login(password:string){ const result=await request<{token:string}>("/api/session",{method:"POST",body:JSON.stringify({password})}); session.set(result.token); return result },
   dashboard:()=>request<Dashboard>("/api/dashboard"),
   briefings:()=>request<BriefingResponse>("/api/briefings"),
+  briefing:(id:string)=>request<Briefing>(`/api/briefings/${encodeURIComponent(id)}`),
   saveBriefingConfig:(config:BriefingConfig)=>request<void>("/api/briefings/config",{method:"PUT",body:JSON.stringify(config)}),
   runBriefing:()=>request<{id:string}>("/api/briefings",{method:"POST"}),
   sendBriefing:(id:string)=>request<void>(`/api/briefings/${encodeURIComponent(id)}/send`,{method:"POST"}),
