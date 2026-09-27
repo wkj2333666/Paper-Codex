@@ -283,6 +283,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/briefings/config", put(save_briefing_config))
         .route("/api/briefings/{id}", get(get_briefing))
         .route("/api/briefings/{id}/send", post(send_briefing))
+        .route("/api/briefings/{id}/import", post(import_briefing_paper))
         .route("/api/tasks/{id}", get(get_task).delete(dismiss_task))
         .route("/api/tasks/{id}/cancel", post(cancel_task))
         .route("/api/events", get(events))
@@ -423,12 +424,12 @@ async fn list_briefings(State(state): State<AppState>) -> Result<Json<Value>, Ap
         .briefings
         .as_ref()
         .ok_or_else(|| ApiError::unavailable("晨报服务未启用"))?;
-    let (config, config_error) = match service.config().await {
-        Ok(config) => (Some(config), None),
-        Err(error) => (None, Some(error.to_string())),
+    let (configs, config_error) = match service.settings().await {
+        Ok(settings) => (settings.projects, None),
+        Err(error) => (vec![], Some(error.to_string())),
     };
     Ok(Json(
-        json!({"config":config,"config_error":config_error,"mail_configured":service.mail_configured(),"items":service.list().await?}),
+        json!({"configs":configs,"config_error":config_error,"mail_configured":service.mail_configured(),"items":service.list().await?}),
     ))
 }
 
@@ -460,24 +461,58 @@ async fn get_briefing(
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
     let sources: Vec<Value> = serde_json::from_str(&item.sources_json).unwrap_or_default();
+    let search_plan = serde_json::from_str::<Value>(&item.settings_json).unwrap_or_default()
+        ["search_plan"]
+        .clone();
+    let mut papers = Vec::new();
+    for work in crate::briefing::selected_works(&item.markdown, &sources) {
+        let existing = state
+            .db
+            .find_paper_by_identity(work.doi.as_deref(), work.arxiv_id.as_deref())
+            .await?
+            .filter(|paper| paper.deleted_at.is_none());
+        let memberships = if let Some(paper) = &existing {
+            state.db.paper_project_ids(&paper.id).await?
+        } else {
+            vec![]
+        };
+        papers.push(json!({"key":work.canonical_key,"title":work.title,"authors":work.authors,"source_url":work.source_url,"year":work.year,"paper_id":existing.map(|paper| paper.id),"project_ids":memberships}));
+    }
     item.sources_json = "[]".into();
     item.settings_json = "{}".into();
-    let email_html =
-        crate::briefing_email::render_with_sources(&item.day, &item.markdown, &sources);
+    let project_name = state
+        .db
+        .get_project(&item.project_id)
+        .await?
+        .map(|project| project.name)
+        .unwrap_or_else(|| "已删除项目".into());
+    let email_html = crate::briefing_email::render_with_sources(
+        &format!("{} · {}", item.day, project_name),
+        &item.markdown,
+        &sources,
+    );
     let mut response = json!(item);
     response["email_html"] = json!(email_html);
+    response["papers"] = json!(papers);
+    response["search_plan"] = search_plan;
     Ok(Json(response))
+}
+
+#[derive(Deserialize)]
+struct BriefingProjectRequest {
+    project_id: String,
 }
 
 async fn run_briefing(
     State(state): State<AppState>,
+    Json(request): Json<BriefingProjectRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let service = state
         .briefings
         .as_ref()
         .ok_or_else(|| ApiError::unavailable("晨报服务未启用"))?;
     let id = service
-        .launch(true)
+        .launch(&request.project_id, true)
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     Ok((StatusCode::ACCEPTED, Json(json!({"id":id}))))
@@ -496,7 +531,7 @@ async fn send_briefing(
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
     let config = service
-        .config()
+        .config(&item.project_id)
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     if item.status != "completed"
@@ -514,6 +549,82 @@ async fn send_briefing(
         }
     });
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct BriefingImportRequest {
+    project_id: String,
+    paper_key: String,
+}
+
+async fn import_briefing_paper(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<BriefingImportRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let service = state
+        .briefings
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("晨报服务未启用"))?;
+    state
+        .db
+        .get_project(&request.project_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("目标项目不存在"))?;
+    let item = service
+        .get(&id)
+        .await
+        .map_err(|error| ApiError::not_found(error.to_string()))?;
+    if item.status != "completed" {
+        return Err(ApiError::bad_request("只能从已完成的晨报选择论文"));
+    }
+    let sources: Vec<Value> = serde_json::from_str(&item.sources_json).unwrap_or_default();
+    let metadata = crate::briefing::selected_works(&item.markdown, &sources)
+        .into_iter()
+        .find(|paper| paper.canonical_key == request.paper_key)
+        .ok_or_else(|| ApiError::not_found("论文不在这份晨报中"))?;
+    let research = require_research(&state)?;
+    let work = research
+        .store()
+        .upsert_work(metadata)
+        .await
+        .map_err(map_research_error)?;
+    if let Some(candidate) = research
+        .store()
+        .get_candidate(&request.project_id, &work.id)
+        .await
+        .map_err(map_research_error)?
+    {
+        if candidate.status == CandidateStatus::Importing {
+            if let Some(task_id) = candidate.import_task_id {
+                return Ok(Json(json!({"state":"enqueued","task_id":task_id})));
+            }
+        }
+    }
+    research
+        .save_candidate(
+            &request.project_id,
+            &work.id,
+            &format!("用户从 {} 晨报选择加入项目", item.day),
+            &["晨报".into()],
+            None,
+            None,
+        )
+        .await
+        .map_err(map_research_error)?;
+    match research
+        .import_candidate(&request.project_id, &work.id, state.engine.as_deref())
+        .await
+        .map_err(map_research_error)?
+    {
+        ImportCandidateOutcome::Enqueued { task_id } => {
+            Ok(Json(json!({"state":"enqueued","task_id":task_id})))
+        }
+        ImportCandidateOutcome::AlreadyInProject { paper_id }
+        | ImportCandidateOutcome::LinkedExisting { paper_id } => {
+            Ok(Json(json!({"state":"existing","paper_id":paper_id})))
+        }
+    }
 }
 
 async fn dashboard(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
