@@ -461,7 +461,10 @@ async fn get_briefing(
         .map_err(|e| ApiError::not_found(e.to_string()))?;
     item.sources_json = "[]".into();
     item.settings_json = "{}".into();
-    Ok(Json(json!(item)))
+    let email_html = crate::briefing_email::render(&item.day, &item.markdown);
+    let mut response = json!(item);
+    response["email_html"] = json!(email_html);
+    Ok(Json(response))
 }
 
 async fn run_briefing(

@@ -52,17 +52,25 @@ pub(crate) fn render(day: &str, markdown: &str) -> String {
     });
     let mut body = String::new();
     html::push_html(&mut body, events);
+    // Paper identity stays visible but secondary to the title. These prefixes
+    // can only come from parsed Markdown: raw source HTML was escaped above.
+    for label in ["作者：", "机构：", "资料："] {
+        body = body.replace(
+            &format!("<p><strong>{label}</strong>"),
+            &format!("<p style=\"margin:8px 0 14px;font-size:14px;line-height:1.75;color:#52665c;\"><strong>{label}</strong>"),
+        );
+    }
     // Replacements only affect parser-generated tags. User HTML is escaped above.
     for (tag, styled) in [
         ("<h1>", "<h1 style=\"font-size:26px;line-height:1.4;margin:24px 0 16px;color:#172b26;\">"),
         ("<h2>", "<h2 style=\"font-size:21px;line-height:1.45;margin:30px 0 14px;padding:12px 14px;background-color:#edf5f1;border-left:4px solid #32755c;color:#193e31;\">"),
-        ("<h3>", "<h3 style=\"font-size:18px;line-height:1.5;margin:26px 0 10px;padding-top:18px;border-top:1px solid #dfe8e2;color:#193e31;\">"),
+        ("<h3>", "<h3 style=\"font-size:21px;line-height:1.5;margin:34px 0 12px;padding:18px 0 0;border-top:2px solid #dfe8e2;color:#193e31;\">"),
         ("<h4>", "<h4 style=\"font-size:16px;line-height:1.5;margin:20px 0 8px;color:#193e31;\">"),
         ("<p>", "<p style=\"margin:10px 0 16px;line-height:1.8;\">"),
         ("<ul>", "<ul style=\"margin:10px 0 18px;padding-left:24px;\">"),
         ("<ol>", "<ol style=\"margin:10px 0 18px;padding-left:24px;\">"),
         ("<li>", "<li style=\"margin:7px 0;line-height:1.75;\">"),
-        ("<a href=", "<a style=\"color:#246b53;text-decoration:underline;overflow-wrap:anywhere;\" href="),
+        ("<a href=", "<a target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#246b53;text-decoration:underline;overflow-wrap:anywhere;\" href="),
         ("<blockquote>", "<blockquote style=\"margin:16px 0;padding:4px 16px;border-left:3px solid #b2c9bb;background-color:#f5f8f5;color:#465d52;\">"),
         ("<pre>", "<pre style=\"padding:14px;background-color:#f1f4f2;border:1px solid #dfe8e2;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.6;\">"),
         ("<code>", "<code style=\"font-family:Consolas,monospace;font-size:0.93em;\">"),
@@ -81,8 +89,8 @@ pub(crate) fn render(day: &str, markdown: &str) -> String {
 <div style="padding:26px 22px;background-color:#183e31;color:#ffffff;">
 <div style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:2px;color:#b5d9c5;">PAPER CODEX · DAILY BRIEFING</div>
 <div style="font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:28px;font-weight:bold;line-height:1.5;margin:8px 0;">具身论文晨报</div>
-<div style="font-family:Arial,sans-serif;font-size:14px;color:#d0e4d7;">{day} · 先看要点，再决定今天读什么</div></div>
-<div style="padding:14px 22px;background-color:#edf5f1;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:14px;line-height:1.7;color:#315844;">先读「30 秒速览」，再按需展开重点论文。观点、依据和关键限制放在一起。</div>
+<div style="font-family:Arial,sans-serif;font-size:14px;color:#d0e4d7;">{day} · 看懂新工作，再决定读什么</div></div>
+<div style="padding:14px 22px;background-color:#edf5f1;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:14px;line-height:1.7;color:#315844;">先看今日导读，再读完整介绍：谁做了什么、如何实现、实验说明了什么。阅读判断放在事实之后。</div>
 <div style="padding:8px 22px 24px;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:16px;line-height:1.8;overflow-wrap:anywhere;">{body}</div>
 <div style="padding:18px 22px;background-color:#f6f8f5;border-top:1px solid #dfe8e2;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:12px;line-height:1.7;color:#637469;">由 Paper Codex 根据你的关注方向整理。请以论文原文为准。<br>全文与历史晨报保存在左侧「论文晨报」栏目；发送时间和关注方向可在栏目内的「设置」调整。</div>
 </div></td></tr></table></body></html>"#,
@@ -123,5 +131,17 @@ mod tests {
         assert!(output.contains("&lt;bad&gt;"));
         assert!(output.contains("href=\"https://example.test/figure.png\""));
         assert!(output.contains("图示"));
+    }
+
+    #[test]
+    fn email_preserves_paper_identity_and_styles_metadata_without_raw_markdown() {
+        let output = render("2026-09-27", "## 今日导读\n\n### Example：具体的工作名称\n\n[Example: The Complete Original Title](https://example.test/paper)\n\n**作者：** Alice, Bob\n\n**具体怎么做：** 编码观测，再预测动作。\n\n**资料：** 全文节选\n");
+        assert!(output.contains("Example: The Complete Original Title"));
+        assert!(output.contains("<strong>作者：</strong> Alice, Bob"));
+        assert!(output.contains("color:#52665c"));
+        assert!(output.contains("<strong>具体怎么做：</strong>"));
+        assert!(output.contains("target=\"_blank\" rel=\"noopener noreferrer\""));
+        assert!(!output.contains("**作者"));
+        assert!(!output.contains("## 今日导读"));
     }
 }
