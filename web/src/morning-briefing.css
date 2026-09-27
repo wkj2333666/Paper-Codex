@@ -15,3 +15,8 @@
 .morning-briefing details { margin-top: 18px; }
 .morning-briefing summary { cursor: pointer; color: var(--green); }
 .briefing-content { max-height: 65vh; overflow: auto; overflow-wrap: anywhere; padding: 12px 8px; overscroll-behavior: contain; }
+.morning-briefing .briefing-reading-guide { padding: 12px 14px; border-left: 3px solid var(--green); background: var(--paper); line-height: 1.7; }
+.morning-briefing .briefing-content p, .morning-briefing .briefing-content li { color: var(--ink); line-height: 1.8; }
+.briefing-content h2 { margin-top: 1.6em; padding-bottom: .4em; border-bottom: 1px solid var(--line); }
+.briefing-content h3 { margin-top: 1.3em; line-height: 1.55; }
+.briefing-content strong { color: var(--ink); }
