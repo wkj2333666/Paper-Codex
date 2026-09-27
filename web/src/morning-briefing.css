@@ -1,6 +1,8 @@
 .morning-briefing { margin: 24px 0; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper-raised, var(--paper)); color: var(--ink); }
 .morning-briefing header, .briefing-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-.morning-briefing h2 { margin: 0; font-size: 22px; }
+.morning-briefing h1 { margin: 0; font-size: 30px; }
+.briefing-page .morning-briefing { margin: 0; }
+.briefing-page .briefing-content { max-height: none; overflow: visible; }
 .morning-briefing p { color: var(--muted); }
 .morning-briefing button, .morning-briefing input, .morning-briefing select, .morning-briefing textarea { color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; max-width: 100%; }
 .morning-briefing button { cursor: pointer; }

@@ -4,7 +4,7 @@ export const SELECTION_HISTORY_KEY = "paperCodexSelection"
 
 export type SelectionHistoryState = { [SELECTION_HISTORY_KEY]: CodexSelection }
 
-const SELECTION_KINDS = new Set(["workbench", "inbox", "paper", "project", "search", "graph", "trash"])
+const SELECTION_KINDS = new Set(["workbench", "briefing", "inbox", "paper", "project", "search", "graph", "trash"])
 
 export function selectionHistoryState(selection: CodexSelection): SelectionHistoryState {
   return { [SELECTION_HISTORY_KEY]: selection }

@@ -27,4 +27,9 @@ describe("selection history", () => {
     expect(selectionFromHistoryState({ [SELECTION_HISTORY_KEY]: { kind: "paper" } })).toBeNull()
     expect(selectionFromHistoryState({ other: true })).toBeNull()
   })
+
+  it("restores the dedicated briefing page when navigating back or forward", () => {
+    const selection = { kind: "briefing", projectId: "project-1" } as const
+    expect(selectionFromHistoryState(selectionHistoryState(selection))).toEqual(selection)
+  })
 })

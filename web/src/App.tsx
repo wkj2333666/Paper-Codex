@@ -3,7 +3,7 @@ import type { CSSProperties } from "react"
 import {
   ArchiveRestore, BookOpen, CheckCircle2, ChevronDown, ChevronRight,
   CircleAlert, Database, FileText, Folder, FolderPlus, FolderTree, Inbox, Library,
-  Lightbulb, Link2, LoaderCircle, LogOut, Network, Paperclip, Pencil, Plus, Search,
+  Lightbulb, Link2, LoaderCircle, LogOut, Network, Newspaper, Paperclip, Pencil, Plus, Search,
   Send, Sparkles, Trash2, Upload, X,
 } from "lucide-react"
 import { api, ApiError, session, streamEvents } from "./api"
@@ -215,7 +215,7 @@ function Login({onLogin}:{onLogin:()=>void}){
   return <div className="login-page"><div className="login-card"><div className="mark"><BookOpen/></div><p className="eyebrow">私人论文研究工作区</p><h1>Paper Codex</h1><p className="muted">让论文彼此连接，而不只是堆在文件夹里。</p><form onSubmit={submit}><label>工作区密码</label><input autoFocus type="password" value={password} onChange={event=>setPassword(event.target.value)} placeholder="••••••••"/>{error&&<p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy?<LoaderCircle className="spin" size={17}/>:<Sparkles size={17}/>}进入工作区</button></form></div></div>
 }
 
-function Sidebar({dashboard,selection,select,refresh,logout,drawerOpen,onCollapse,themePreference,resolvedTheme,onCycleTheme}:{dashboard:Dashboard;selection:Selection;select:Select;refresh:()=>Promise<void>;logout:()=>void;drawerOpen:boolean;onCollapse:()=>void;themePreference:ThemePreference;resolvedTheme:ResolvedTheme;onCycleTheme:()=>void}){
+export function Sidebar({dashboard,selection,select,refresh,logout,drawerOpen,onCollapse,themePreference,resolvedTheme,onCycleTheme}:{dashboard:Dashboard;selection:Selection;select:Select;refresh:()=>Promise<void>;logout:()=>void;drawerOpen:boolean;onCollapse:()=>void;themePreference:ThemePreference;resolvedTheme:ResolvedTheme;onCycleTheme:()=>void}){
   const [creating,setCreating]=useState(false);const [name,setName]=useState("");const [purpose,setPurpose]=useState("");const [parentId,setParentId]=useState<string|null>(null);const [projectQuery,setProjectQuery]=useState("")
   const tree=useMemo(()=>buildProjectTree(dashboard.projects,dashboard.project_memberships),[dashboard.projects,dashboard.project_memberships])
   const create=async(event:FormEvent)=>{event.preventDefault();const project=await api.createProject(name,purpose,parentId);setCreating(false);setName("");setPurpose("");setParentId(null);await refresh();select({kind:"project",id:project.id})}
@@ -225,6 +225,7 @@ function Sidebar({dashboard,selection,select,refresh,logout,drawerOpen,onCollaps
   return <aside className={`sidebar workspace-panel${drawerOpen?" drawer-open":""}`} data-panel="sidebar"><div className="brand"><div className="brand-icon"><BookOpen size={19}/></div><div><strong>Paper Codex</strong><span>论文研究记忆</span></div><PanelCollapseButton label="文件树" direction="left" onCollapse={onCollapse}/></div>
     <nav>
       <Nav active={selection.kind==="workbench"} icon={<Sparkles/>} label="工作台" onClick={()=>select({kind:"workbench"})}/>
+      <Nav active={selection.kind==="briefing"} icon={<Newspaper/>} label="论文晨报" onClick={()=>select({kind:"briefing"})}/>
       <Nav active={selection.kind==="inbox"} icon={<Inbox/>} label="收件箱" badge={dashboard.inbox.length} onClick={()=>select({kind:"inbox"})}/>
       <Nav active={selection.kind==="graph"} icon={<Network/>} label="知识图谱" onClick={()=>select({kind:"graph"})}/>
       <Nav active={selection.kind==="search"} icon={<Search/>} label="全文检索" onClick={()=>select({kind:"search"})}/>
@@ -251,13 +252,14 @@ function ProjectTreeRow({node,query,selected,select,move,rename,remove,depth=0}:
   </div>{open&&node.children.map(child=><ProjectTreeRow key={child.id} node={child} query={query} selected={selected} select={select} move={move} rename={rename} remove={remove} depth={depth+1}/>)}</div>
 }
 function treeContains(node:ProjectTreeNode,query:string):boolean{return node.name.toLowerCase().includes(query.trim().toLowerCase())||node.children.some(child=>treeContains(child,query))}
-function Nav({active,icon,label,badge,onClick}:{active:boolean;icon:ReactNode;label:string;badge?:number;onClick:()=>void}){return <button className={active?"nav-row active":"nav-row"} onClick={onClick}>{icon}<span>{label}</span>{badge!==undefined&&<em>{badge}</em>}</button>}
+function Nav({active,icon,label,badge,onClick}:{active:boolean;icon:ReactNode;label:string;badge?:number;onClick:()=>void}){return <button className={active?"nav-row active":"nav-row"} aria-current={active?"page":undefined} onClick={onClick}>{icon}<span>{label}</span>{badge!==undefined&&<em>{badge}</em>}</button>}
 
 function MainView({dashboard,selection,select,refresh,researchRevisions,citationOverlay,citationFocus,candidateFocus,onCandidateFocusHandled,paperGraphOpen,paperGraphWidth,isNarrow,activeDrawer,openPanel,collapsePanel,resizePanel,resetPanel,theme}:{dashboard:Dashboard;selection:Selection;select:Select;refresh:()=>Promise<void>;researchRevisions:Record<string,number>;citationOverlay:MessageCitation[];citationFocus:MessageCitation|null;candidateFocus:CandidateFocus|null;onCandidateFocusHandled:()=>void;paperGraphOpen:boolean;paperGraphWidth:number;isNarrow:boolean;activeDrawer:PanelName|null;openPanel:(panel:PanelName,trigger:HTMLButtonElement)=>void;collapsePanel:(panel:PanelName)=>void;resizePanel:(panel:PanelName,delta:number)=>void;resetPanel:(panel:PanelName)=>void;theme:ResolvedTheme}){
   const paperCitations=useMemo(()=>selection.kind==="paper"&&selection.id?citationsForPaper(citationOverlay,selection.id):[],[citationOverlay,selection.kind,selection.id])
   if(selection.kind==="paper"&&selection.id)return <PaperView id={selection.id} dashboard={dashboard} select={select} refresh={refresh} citations={paperCitations} citationFocus={citationFocus?.paper_id===selection.id?citationFocus:null} paperGraphOpen={paperGraphOpen} paperGraphWidth={paperGraphWidth} isNarrow={isNarrow} drawerOpen={activeDrawer==="paperGraph"} onExpandGraph={trigger=>openPanel("paperGraph",trigger)} onCollapseGraph={()=>collapsePanel("paperGraph")} onResizeGraph={delta=>resizePanel("paperGraph",delta)} onResetGraph={()=>resetPanel("paperGraph")} theme={theme}/>
   if(selection.kind==="project"&&selection.id)return <ProjectView project={dashboard.projects.find(project=>project.id===selection.id)} dashboard={dashboard} select={select} refresh={refresh} researchRevision={researchRevisions[selection.id]??0} candidateFocus={candidateFocus?.projectId===selection.id?candidateFocus:null} onCandidateFocusHandled={onCandidateFocusHandled} theme={theme}/>
   if(selection.kind==="inbox")return <PaperGrid title="收件箱" subtitle="尚未归入研究项目的论文" papers={dashboard.inbox} select={select}/>
+  if(selection.kind==="briefing")return <div className="content-wrap briefing-page"><MorningBriefing projects={dashboard.projects}/></div>
   if(selection.kind==="search")return <SearchView select={select}/>
   if(selection.kind==="graph")return <GraphWorkspace dashboard={dashboard} focusNode={selection.id} select={select} theme={theme}/>
   if(selection.kind==="trash")return <TrashView select={select} refresh={refresh}/>
@@ -280,7 +282,6 @@ export function Workbench({dashboard,select,refresh}:{dashboard:Dashboard;select
   return <div className="content-wrap"><header className="hero"><p className="eyebrow">论文优先的研究工作流</p><h1>今天想读什么？</h1><p>输入论文名称、DOI、arXiv 或链接。Codex 会用中文整理证据，并把方法、概念和发现接入知识图谱。</p></header>
     <form className="intake-card" onSubmit={submit}><div className="intake-line"><Sparkles/><input value={source} onChange={event=>{setSource(event.target.value);setSearchResponse(null);setSearchError("");setImportError("")}} placeholder="粘贴论文名称、链接、DOI 或 arXiv…"/><button disabled={busy||!source.trim()}>{busy?<LoaderCircle className="spin"/>:<Send/>}</button></div><div className="intake-options"><select value={project} onChange={event=>setProject(event.target.value)}><option value="">暂不归类</option>{dashboard.projects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select><input ref={fileRef} hidden type="file" accept="application/pdf" onChange={event=>void upload(event.target.files?.[0])}/><button type="button" className="ghost" onClick={()=>fileRef.current?.click()}><Paperclip/>上传 PDF</button></div>{searchError&&<div className="intake-inline-error"><CircleAlert/>{searchError}</div>}{searchResponse&&<IntakeSearchResults response={searchResponse} importingWorkId={importingWorkId} importError={importError} onImport={workId=>void importCandidate(workId)} onDismiss={()=>{setSearchResponse(null);setImportError("")}}/>}</form>
     <div className="stats"><div><Library/><strong>{dashboard.papers.length}</strong><span>论文</span></div><div><FolderTree/><strong>{dashboard.projects.length}</strong><span>研究项目</span></div><div><Network/><strong>{dashboard.papers.filter(paper=>paper.note_path).length}</strong><span>已结构化</span></div></div>
-    <MorningBriefing projects={dashboard.projects}/>
     {intakeTasks.active.length>0&&<><SectionHead title="正在处理"/><div className="paper-grid intake-task-grid">{intakeTasks.active.map(task=><IntakeTaskCard key={task.id} task={task} onCancel={id=>void cancelTask(id)} onDismiss={id=>void dismissTask(id)}/>)}</div></>}
     {recentFailures.length>0&&<><SectionHead title="最近失败" action="清除失败记录" onClick={()=>void clearFailures()}/><div className="paper-grid intake-task-grid">{recentFailures.map(task=><IntakeTaskCard key={task.id} task={task} onCancel={id=>void cancelTask(id)} onDismiss={id=>void dismissTask(id)}/>)}</div></>}
     <SectionHead title="最近论文" action={dashboard.papers.length>6?"查看全部":undefined} onClick={()=>select({kind:"inbox"})}/>{recent.length?<div className="paper-grid">{recent.map(paper=><PaperCard key={paper.id} paper={paper} onClick={()=>select({kind:"paper",id:paper.id})}/>)}</div>:<Empty icon={<Upload/>} title="论文库还是空的" text="从上方输入一篇论文开始。"/>}
