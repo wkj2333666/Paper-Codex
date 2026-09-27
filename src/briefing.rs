@@ -275,7 +275,7 @@ impl BriefingService {
             let items: Vec<String> = sqlx::query_scalar("SELECT id FROM daily_briefings WHERE status='completed' AND mail_status IN ('pending','failed') AND mail_attempts<3 AND (next_attempt_at IS NULL OR next_attempt_at<=?) ORDER BY day LIMIT 1")
                 .bind(Utc::now().to_rfc3339()).fetch_all(self.db.pool()).await?;
             for id in items {
-                self.deliver(&id, false).await?;
+                self.deliver(&id, false, None).await?;
             }
         }
         Ok(())
@@ -569,9 +569,19 @@ impl BriefingService {
         transaction.commit().await?;
         Ok(())
     }
-    pub async fn deliver(&self, id: &str, manual: bool) -> Result<()> {
+    pub async fn deliver(
+        &self,
+        id: &str,
+        manual: bool,
+        expected_attempt: Option<i64>,
+    ) -> Result<()> {
         let _guard = self.gate.lock().await;
         let item = self.get(id).await?;
+        // Two requests based on the same displayed state must not turn a single
+        // click/retry into a second send after the first attempt returns uncertain.
+        if expected_attempt.is_some_and(|attempt| attempt != item.mail_attempts) {
+            return Ok(());
+        }
         let config = self.config().await?;
         if item.status != "completed" || !config.email_enabled {
             bail!("仅发送已完成的晨报，请先启用邮件");

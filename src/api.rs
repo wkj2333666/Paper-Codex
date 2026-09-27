@@ -504,7 +504,7 @@ async fn send_briefing(
         ));
     }
     tokio::spawn(async move {
-        if let Err(error) = service.deliver(&id, true).await {
+        if let Err(error) = service.deliver(&id, true, Some(item.mail_attempts)).await {
             tracing::warn!(%error, "briefing delivery failed");
         }
     });
