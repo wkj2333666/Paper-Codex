@@ -26,10 +26,11 @@ fn figure<'a>(markdown: &str, source: &'a Value) -> Option<&'a Value> {
     let image_id = image_url.path().strip_prefix("/html/")?.split('/').next()?;
     // arXiv's unversioned HTML may reference images under the resolved vN
     // directory. Explicitly versioned sources must still match exactly.
-    let same_paper = image_id == paper_id
-        || (!paper_id.contains('v')
-            && crate::research::canonical_arxiv_id(image_id)
-                == crate::research::canonical_arxiv_id(paper_id));
+    let canonical_paper = crate::research::canonical_arxiv_id(paper_id);
+    let same_paper = canonical_paper.is_some()
+        && (image_id == paper_id
+            || (!paper_id.contains('v')
+                && crate::research::canonical_arxiv_id(image_id) == canonical_paper));
     (markdown.contains(&format!("]({url})"))
         && allowed(&image_url)
         && allowed(&paper_html)
