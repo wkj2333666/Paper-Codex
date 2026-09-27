@@ -57,6 +57,7 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
     <header><div><h1>论文晨报</h1><p>{data?.config?.enabled ? `每天 ${data.config.time} · 北京时间` : "定时生成未开启"} · {data?.config?.email_enabled ? "邮件已启用" : "站内阅读"}</p></div>
       <div className="briefing-actions"><button disabled={!data?.config || busy} onClick={() => setDraft(draft ? null : data?.config ?? null)}>设置</button><button disabled={busy || !data?.config || data.items.some(item => item.status === "running")} onClick={() => void action(async () => { const result = await api.runBriefing(); setSelected(result.id) }, "已提交；同一天复用已有晨报，生成失败最多尝试 3 次。")}>生成今日晨报</button></div>
     </header>
+    <p className="briefing-reading-guide">30 秒速览 · 1–3 篇重点 · 一个阅读建议。按约 3–5 分钟阅读量整理，优先讲清变化、判断和依据。</p>
     {(error || data?.config_error) && <p role="alert">{error || data?.config_error}</p>}
     {notice && <p role="status">{notice}</p>}
     {draft && <form className="briefing-settings" onSubmit={event => { event.preventDefault(); const fields = new FormData(event.currentTarget); const config = { ...draft, categories: split(String(fields.get("categories") ?? "")), keywords: split(String(fields.get("keywords") ?? "")) }; void action(async () => { await api.saveBriefingConfig(config); setDraft(null) }, "设置已保存，无需重启。") }}>
@@ -64,8 +65,9 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
       <label>北京时间<input type="time" required value={draft.time} onChange={e => update({ time: e.target.value })}/></label>
       <label>arXiv 分类（逗号分隔）<input name="categories" required defaultValue={draft.categories.join(", ")}/></label>
       <label>关注词（逗号分隔）<textarea name="keywords" required defaultValue={draft.keywords.join(", ")}/></label>
-      <label>最多论文数<input type="number" min="1" max="20" value={draft.max_papers} onChange={e => update({ max_papers: Number(e.target.value) })}/></label>
-      <label>重点阅读全文数<input type="number" min="0" max={Math.min(5, draft.max_papers)} value={draft.fulltext_papers} onChange={e => update({ fulltext_papers: Number(e.target.value) })}/></label>
+      <label>最多候选论文数<input type="number" min="1" max="20" value={draft.max_papers} onChange={e => update({ max_papers: Number(e.target.value) })}/></label>
+      <label>深读候选数<input type="number" min="0" max={Math.min(5, draft.max_papers)} value={draft.fulltext_papers} onChange={e => update({ fulltext_papers: Number(e.target.value) })}/></label>
+      <p>候选数是筛选上限，不是必写篇数。正文精选最多 3 篇重点，其余只保留少量短讯；深读会优先提供方法、实验和结论节选，证据不足会明确说明。</p>
       <fieldset><legend>参考项目目标与已保存兴趣</legend>{projects.length ? projects.map(project => <label key={project.id}><input type="checkbox" checked={draft.project_ids.includes(project.id)} onChange={e => update({ project_ids: e.target.checked ? [...draft.project_ids, project.id] : draft.project_ids.filter(id => id !== project.id) })}/>{project.name}</label>) : <span>暂无项目；仍参考全局兴趣。</span>}</fieldset>
       <label><input type="checkbox" checked={draft.email_enabled} disabled={!data?.mail_configured} onChange={e => update({ email_enabled: e.target.checked })}/>邮件投递{!data?.mail_configured && "（服务端尚未设置凭据文件）"}</label>
       <label>收件邮箱<input type="email" required={draft.email_enabled} value={draft.recipient} onChange={e => update({ recipient: e.target.value })}/></label>

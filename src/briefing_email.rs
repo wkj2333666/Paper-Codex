@@ -81,7 +81,8 @@ pub(crate) fn render(day: &str, markdown: &str) -> String {
 <div style="padding:26px 22px;background-color:#183e31;color:#ffffff;">
 <div style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:2px;color:#b5d9c5;">PAPER CODEX · DAILY BRIEFING</div>
 <div style="font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:28px;font-weight:bold;line-height:1.5;margin:8px 0;">具身论文晨报</div>
-<div style="font-family:Arial,sans-serif;font-size:14px;color:#d0e4d7;">{day} · 研究进展与阅读线索</div></div>
+<div style="font-family:Arial,sans-serif;font-size:14px;color:#d0e4d7;">{day} · 先看要点，再决定今天读什么</div></div>
+<div style="padding:14px 22px;background-color:#edf5f1;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:14px;line-height:1.7;color:#315844;">先读「30 秒速览」，再按需展开重点论文。观点、依据和关键限制放在一起。</div>
 <div style="padding:8px 22px 24px;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:16px;line-height:1.8;overflow-wrap:anywhere;">{body}</div>
 <div style="padding:18px 22px;background-color:#f6f8f5;border-top:1px solid #dfe8e2;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:12px;line-height:1.7;color:#637469;">由 Paper Codex 根据你的关注方向整理。请以论文原文为准。<br>全文与历史晨报保存在左侧「论文晨报」栏目；发送时间和关注方向可在栏目内的「设置」调整。</div>
 </div></td></tr></table></body></html>"#,
