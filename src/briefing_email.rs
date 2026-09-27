@@ -19,12 +19,21 @@ fn figure<'a>(markdown: &str, source: &'a Value) -> Option<&'a Value> {
             && url.fragment().is_none()
             && url.path().starts_with("/html/")
     };
+    let paper_id = paper_html
+        .path()
+        .strip_prefix("/html/")?
+        .trim_end_matches('/');
+    let image_id = image_url.path().strip_prefix("/html/")?.split('/').next()?;
+    // arXiv's unversioned HTML may reference images under the resolved vN
+    // directory. Explicitly versioned sources must still match exactly.
+    let same_paper = image_id == paper_id
+        || (!paper_id.contains('v')
+            && crate::research::canonical_arxiv_id(image_id)
+                == crate::research::canonical_arxiv_id(paper_id));
     (markdown.contains(&format!("]({url})"))
         && allowed(&image_url)
         && allowed(&paper_html)
-        && image_url
-            .path()
-            .starts_with(&format!("{}/", paper_html.path().trim_end_matches('/')))
+        && same_paper
         && [".png", ".jpg", ".jpeg"]
             .iter()
             .any(|suffix| image_url.path().to_ascii_lowercase().ends_with(suffix)))
@@ -262,10 +271,17 @@ mod tests {
             mail.find("<img ").unwrap() > mail.find("Example: A Complete Paper Title").unwrap()
         );
         assert!(mail.contains("查看原图"));
+        let mut unversioned_source = sources[0].clone();
+        unversioned_source["presentation"]["source_url"] =
+            json!("https://arxiv.org/html/1234.56789");
+        assert!(
+            render_with_sources("2026-09-27", markdown, &[unversioned_source]).contains("<img ")
+        );
         assert!(!render_with_sources("2026-09-27", "没有选入的论文", &sources).contains("<img "));
         for image_url in [
             "https://tracker.test/figure.png",
             "https://arxiv.org/html/9999.99999v1/figure.png",
+            "https://arxiv.org/html/1234.56789v2/figure.png",
             "https://arxiv.org/html/1234.56789v1/figure.png?tracking=1",
             "javascript:alert(1)",
         ] {

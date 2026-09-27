@@ -55,7 +55,8 @@ pub(crate) async fn metadata(paper: &Value, cache: &Path) -> Result<Value> {
     let versioned = paper["metadata"]["links"].as_array().and_then(|links| {
         links
             .iter()
-            .filter_map(|link| link["href"].as_str())
+            // ArxivLink preserves XML attribute names when serialized.
+            .filter_map(|link| link["@href"].as_str().or_else(|| link["href"].as_str()))
             .find(|href| href.contains("arxiv.org/abs/"))
     });
     let versioned =
