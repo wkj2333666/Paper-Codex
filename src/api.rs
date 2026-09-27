@@ -1,6 +1,7 @@
 use crate::{
     acquisition::{classify_input, IntakeKind},
     auth::{require_auth, Auth},
+    briefing::{BriefingConfig, BriefingService},
     conversation_engine::ConversationEngine,
     conversations::{AnnotationAnchor, ConversationEvent, ConversationScopeInput},
     db::Database,
@@ -48,6 +49,7 @@ pub struct AppState {
     pub engine: Option<Arc<TaskEngine>>,
     pub conversation_engine: Option<Arc<ConversationEngine>>,
     pub research: Option<Arc<ResearchService>>,
+    pub briefings: Option<Arc<BriefingService>>,
     pub search: SearchIndex,
     pub static_dir: PathBuf,
     pub max_upload_bytes: usize,
@@ -72,6 +74,7 @@ impl AppState {
             engine: Some(engine),
             conversation_engine: Some(conversation_engine),
             research: None,
+            briefings: None,
             static_dir,
             max_upload_bytes,
         }
@@ -86,6 +89,7 @@ impl AppState {
             engine: None,
             conversation_engine: None,
             research: None,
+            briefings: None,
             static_dir: PathBuf::new(),
             max_upload_bytes: 10 * 1024 * 1024,
         }
@@ -93,6 +97,11 @@ impl AppState {
 
     pub fn with_conversation_engine(mut self, engine: Arc<ConversationEngine>) -> Self {
         self.conversation_engine = Some(engine);
+        self
+    }
+
+    pub fn with_briefings(mut self, service: Arc<BriefingService>) -> Self {
+        self.briefings = Some(service);
         self
     }
 
@@ -270,6 +279,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/intake/upload", post(upload_pdf))
         .route("/api/tasks", get(list_tasks))
+        .route("/api/briefings", get(list_briefings).post(run_briefing))
+        .route("/api/briefings/config", put(save_briefing_config))
+        .route("/api/briefings/{id}", get(get_briefing))
+        .route("/api/briefings/{id}/send", post(send_briefing))
         .route("/api/tasks/{id}", get(get_task).delete(dismiss_task))
         .route("/api/tasks/{id}/cancel", post(cancel_task))
         .route("/api/events", get(events))
@@ -403,6 +416,99 @@ fn login_client_ip(headers: &HeaderMap) -> IpAddr {
         .and_then(|value| value.split(',').next())
         .and_then(|value| value.trim().parse().ok())
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
+
+async fn list_briefings(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let service = state
+        .briefings
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("晨报服务未启用"))?;
+    let (config, config_error) = match service.config().await {
+        Ok(config) => (Some(config), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    Ok(Json(
+        json!({"config":config,"config_error":config_error,"mail_configured":service.mail_configured(),"items":service.list().await?}),
+    ))
+}
+
+async fn save_briefing_config(
+    State(state): State<AppState>,
+    Json(config): Json<BriefingConfig>,
+) -> Result<StatusCode, ApiError> {
+    let service = state
+        .briefings
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("晨报服务未启用"))?;
+    service
+        .save_config(config)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_briefing(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let service = state
+        .briefings
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("晨报服务未启用"))?;
+    let mut item = service
+        .get(&id)
+        .await
+        .map_err(|e| ApiError::not_found(e.to_string()))?;
+    item.sources_json = "[]".into();
+    item.settings_json = "{}".into();
+    Ok(Json(json!(item)))
+}
+
+async fn run_briefing(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let service = state
+        .briefings
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("晨报服务未启用"))?;
+    let id = service
+        .launch(true)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok((StatusCode::ACCEPTED, Json(json!({"id":id}))))
+}
+
+async fn send_briefing(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let service = state
+        .briefings
+        .clone()
+        .ok_or_else(|| ApiError::unavailable("晨报服务未启用"))?;
+    let item = service
+        .get(&id)
+        .await
+        .map_err(|e| ApiError::not_found(e.to_string()))?;
+    let config = service
+        .config()
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    if item.status != "completed"
+        || !config.email_enabled
+        || !service.mail_configured()
+        || item.mail_attempts >= 3
+    {
+        return Err(ApiError::bad_request(
+            "请启用邮件并检查凭据；仅支持发送已完成晨报，每份最多尝试 3 次",
+        ));
+    }
+    tokio::spawn(async move {
+        if let Err(error) = service.deliver(&id, true, Some(item.mail_attempts)).await {
+            tracing::warn!(%error, "briefing delivery failed");
+        }
+    });
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn dashboard(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {

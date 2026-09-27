@@ -1,6 +1,7 @@
 pub mod acquisition;
 pub mod api;
 pub mod auth;
+pub mod briefing;
 pub mod codex;
 pub mod codex_tools;
 pub mod config;
