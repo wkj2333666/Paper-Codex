@@ -284,9 +284,7 @@ impl BriefingService {
         });
         if let Ok(settings) = service.settings().await {
             if settings.projects.len() == 1 {
-                service
-                    .adopt_legacy(&settings.projects[0].project_id)
-                    .await?;
+                Self::adopt_legacy(&service.db, &settings.projects[0].project_id).await?;
             }
         }
         let worker = service.clone();
@@ -315,16 +313,15 @@ impl BriefingService {
             .find(|config| config.project_id == project_id)
             .context("该项目尚未配置晨报")
     }
-    async fn adopt_legacy(&self, project_id: &str) -> Result<()> {
-        self.db
-            .get_project(project_id)
+    pub async fn adopt_legacy(db: &Database, project_id: &str) -> Result<()> {
+        db.get_project(project_id)
             .await?
             .context("晨报项目不存在")?;
-        let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='briefing_seen_legacy_v1'").fetch_one(self.db.pool()).await?;
+        let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='briefing_seen_legacy_v1'").fetch_one(db.pool()).await?;
         if exists == 0 {
             return Ok(());
         }
-        let mut tx = self.db.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = db.pool().begin_with("BEGIN IMMEDIATE").await?;
         let claimed = sqlx::query(
             "INSERT OR IGNORE INTO briefing_legacy_owner(singleton,project_id) VALUES(1,?)",
         )

@@ -121,6 +121,20 @@ async fn legacy_schema_migration_preserves_body_delivery_and_original_tables() {
         .await
         .unwrap();
     assert_eq!(legacy, 1);
+    let ei = db.create_project("ei", "EI", "").await.unwrap();
+    let other = db.create_project("other", "Other", "").await.unwrap();
+    BriefingService::adopt_legacy(&db, &ei).await.unwrap();
+    BriefingService::adopt_legacy(&db, &other).await.unwrap();
+    let owner: String = sqlx::query_scalar("SELECT project_id FROM daily_briefings WHERE id='old'")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(owner, ei);
+    let seen: (String, String) = sqlx::query_as("SELECT project_id,paper_id FROM briefing_seen")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(seen, (ei, "paper-a".into()));
 }
 
 #[tokio::test]

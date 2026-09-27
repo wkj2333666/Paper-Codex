@@ -4,24 +4,27 @@ use regex::Regex;
 use serde_json::Value;
 use std::{collections::BTreeSet, sync::OnceLock};
 
+fn normalized_terms(value: &str) -> String {
+    value
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub(crate) fn candidates<'a>(
     papers: &'a [WorkMetadata],
     keywords: &[String],
     limit: usize,
 ) -> Vec<&'a WorkMetadata> {
-    let keywords: BTreeSet<_> = keywords
-        .iter()
-        .map(|word| word.trim().to_lowercase())
-        .collect();
+    let keywords: BTreeSet<_> = keywords.iter().map(|word| normalized_terms(word)).collect();
     let mut ranked: Vec<_> = papers
         .iter()
         .filter_map(|paper| {
-            let title = paper.title.to_lowercase();
-            let abstract_text = paper
-                .abstract_text
-                .as_deref()
-                .unwrap_or_default()
-                .to_lowercase();
+            let title = normalized_terms(&paper.title);
+            let abstract_text =
+                normalized_terms(paper.abstract_text.as_deref().unwrap_or_default());
             let score: usize = keywords
                 .iter()
                 .filter(|word| !word.is_empty())
@@ -287,6 +290,21 @@ mod tests {
         );
         assert!(candidates(&papers, &["unmatched".into()], 12).is_empty());
         assert_eq!(candidates(&papers, &words, 1).len(), 1);
+    }
+
+    #[test]
+    fn project_phrase_matching_tolerates_hyphens_and_line_breaks() {
+        let papers = vec![paper(
+            "vla",
+            "Vision-Language-Action",
+            "world\n  model",
+            "2026-09-27",
+        )];
+        assert_eq!(
+            candidates(&papers, &["vision language action".into()], 12).len(),
+            1
+        );
+        assert_eq!(candidates(&papers, &["world model".into()], 12).len(), 1);
     }
 
     #[test]
