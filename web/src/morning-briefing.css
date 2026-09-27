@@ -20,3 +20,4 @@
 .briefing-content h2 { margin-top: 1.6em; padding-bottom: .4em; border-bottom: 1px solid var(--line); }
 .briefing-content h3 { margin-top: 1.3em; line-height: 1.55; }
 .briefing-content strong { color: var(--ink); }
+.briefing-email-preview { display: block; width: 100%; height: 75vh; min-height: 400px; margin-top: 12px; border: 1px solid var(--line); border-radius: 12px; background: #f2f5f1; color-scheme: light; }

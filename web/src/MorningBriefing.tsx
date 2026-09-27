@@ -12,11 +12,16 @@ export interface BriefingConfig {
 export interface Briefing {
   id: string; day: string; status: string; markdown: string; error: string | null
   conversation_id: string | null; mail_status: string; mail_attempts: number; attempts: number; mail_error: string | null
+  email_html?: string
 }
 export interface BriefingResponse { config: BriefingConfig | null; config_error: string | null; mail_configured: boolean; items: Briefing[] }
 const labels: Record<string, string> = { running: "生成中", completed: "已生成", empty: "暂无新论文", failed: "失败", pending: "待发送", sending: "发送中", sent: "已发送", skipped: "未安排发送", uncertain: "发送结果待确认", blocked: "需检查发信配置" }
 const message = (error: unknown) => error instanceof Error ? error.message : "操作失败"
 const split = (value: string) => value.split(/[,，\n]/).map(word => word.trim()).filter(Boolean)
+
+export function BriefingEmailPreview({ html }: { html: string }) {
+  return <iframe className="briefing-email-preview" title="HTML 邮件预览" srcDoc={html} sandbox="allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" loading="lazy"/>
+}
 
 export function MorningBriefing({ projects }: { projects: Project[] }) {
   const [data, setData] = useState<BriefingResponse | null>(null)
@@ -57,7 +62,7 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
     <header><div><h1>论文晨报</h1><p>{data?.config?.enabled ? `每天 ${data.config.time} · 北京时间` : "定时生成未开启"} · {data?.config?.email_enabled ? "邮件已启用" : "站内阅读"}</p></div>
       <div className="briefing-actions"><button disabled={!data?.config || busy} onClick={() => setDraft(draft ? null : data?.config ?? null)}>设置</button><button disabled={busy || !data?.config || data.items.some(item => item.status === "running")} onClick={() => void action(async () => { const result = await api.runBriefing(); setSelected(result.id) }, "已提交；同一天复用已有晨报，生成失败最多尝试 3 次。")}>生成今日晨报</button></div>
     </header>
-    <p className="briefing-reading-guide">30 秒速览 · 1–3 篇重点 · 一个阅读建议。按约 3–5 分钟阅读量整理，优先讲清变化、判断和依据。</p>
+    <p className="briefing-reading-guide">先看今日导读，再读论文介绍：完整名称、作者、解决的问题、具体方法与实验结果，最后给出阅读判断。邮件使用 HTML 排版，并保留纯文本备用版。</p>
     {(error || data?.config_error) && <p role="alert">{error || data?.config_error}</p>}
     {notice && <p role="status">{notice}</p>}
     {draft && <form className="briefing-settings" onSubmit={event => { event.preventDefault(); const fields = new FormData(event.currentTarget); const config = { ...draft, categories: split(String(fields.get("categories") ?? "")), keywords: split(String(fields.get("keywords") ?? "")) }; void action(async () => { await api.saveBriefingConfig(config); setDraft(null) }, "设置已保存，无需重启。") }}>
@@ -78,6 +83,7 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
       {item.status === "completed" && !["sent", "sending"].includes(item.mail_status) && <button disabled={busy || !data?.config?.email_enabled || item.mail_attempts >= 3} onClick={() => { if (item.mail_status === "uncertain" && !window.confirm("上次邮件可能已送达。确认检查邮箱后仍要重发？")) return; void action(() => api.sendBriefing(item.id), "已提交发送请求，请查看发送状态。") }}>发送邮件</button>}</div>
       {item.error && <p role="alert">{item.error}</p>}{item.mail_error && <p role="alert">{item.mail_error}</p>}
       {item.status === "running" && <p role="status">正在检索和整理论文，可离开页面，完成后会保存在这里。</p>}
+      {detail?.id === item.id && detail.markdown && detail.email_html && <details><summary>HTML 邮件预览（与发送模板一致，不发送邮件）</summary><BriefingEmailPreview html={detail.email_html}/></details>}
       {detail?.id === item.id && detail.markdown && <details open><summary>{item.day} 晨报正文</summary><div className="briefing-content chat-markdown"><ChatMarkdown>{detail.markdown}</ChatMarkdown></div></details>}
       {item.conversation_id && <p>可在 Codex 历史对话中打开「{item.day} 论文晨报」继续追问。</p>}
     </> : <p>还没有晨报。设置关注方向后，可手动生成第一份。</p>}
