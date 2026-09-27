@@ -80,7 +80,7 @@ pub(crate) fn render_with_sources(day: &str, markdown: &str, sources: &[Value]) 
         let source_url = source["presentation"]["source_url"]
             .as_str()
             .unwrap_or(paper_url);
-        let block = format!("<div style=\"margin:18px 0 22px;padding:12px;background-color:#ffffff;border:1px solid #dfe8e2;border-radius:8px;\"><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\"><img src=\"{}\" referrerpolicy=\"no-referrer\" alt=\"{}\" width=\"620\" style=\"display:block;max-width:100%;width:100%;height:auto;border:0;\"></a><p style=\"margin:10px 0 0;font-size:13px;line-height:1.65;color:#52665c;\">{} · 原图及图注来自论文：{}<br><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#246b53;\">查看原图</a>（若未显示，请在邮箱中允许加载图片）</p></div>", escape(source_url), escape(src), escape(caption), label, escape(&short_caption), escape(src));
+        let block = format!("<div class=\"briefing-figure\" style=\"margin:18px 0 22px;padding:0;\"><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"display:block;\"><img src=\"{}\" referrerpolicy=\"no-referrer\" alt=\"{}\" width=\"100%\" style=\"display:block;max-width:100%;width:100%;height:auto;border:0;\"></a><p style=\"margin:10px 0 0;font-size:13px;line-height:1.65;color:#52665c;\"><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#246b53;\">{}</a> · {}<br><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#246b53;\">查看原图</a></p></div>", escape(src), escape(src), escape(caption), escape(source_url), label, escape(&short_caption), escape(src));
         output.insert_str(insertion, &block);
     }
     output
@@ -138,30 +138,8 @@ pub(crate) fn render(day: &str, markdown: &str) -> String {
     });
     let mut body = String::new();
     html::push_html(&mut body, events);
-    let mut cards = String::new();
-    let mut card_open = false;
-    for line in body.lines() {
-        if (line.starts_with("<h2>") || line.starts_with("<h3>")) && card_open {
-            cards.push_str("</div>\n");
-            card_open = false;
-        }
-        if line.starts_with("<h3>") {
-            cards.push_str("<div style=\"margin:20px 0;padding:18px;background-color:#f8faf7;border:1px solid #dfe8e2;border-radius:10px;\">\n");
-            card_open = true;
-            cards.push_str(&line.replacen(
-                "<h3>",
-                "<h3 style=\"font-size:20px;line-height:1.5;margin:0 0 14px;color:#193e31;\">",
-                1,
-            ));
-        } else {
-            cards.push_str(line);
-        }
-        cards.push('\n');
-    }
-    if card_open {
-        cards.push_str("</div>\n");
-    }
-    body = cards;
+    // Flat paper sections: headings and separators provide hierarchy without
+    // nested card padding shrinking figures on narrow email clients.
     // Paper identity stays visible but secondary to the title. These prefixes
     // can only come from parsed Markdown: raw source HTML was escaped above.
     for label in ["作者：", "机构：", "资料："] {
@@ -174,7 +152,7 @@ pub(crate) fn render(day: &str, markdown: &str) -> String {
     for (tag, styled) in [
         ("<h1>", "<h1 style=\"font-size:26px;line-height:1.4;margin:24px 0 16px;color:#172b26;\">"),
         ("<h2>", "<h2 style=\"font-size:21px;line-height:1.45;margin:30px 0 14px;padding:12px 14px;background-color:#edf5f1;border-left:4px solid #32755c;color:#193e31;\">"),
-        ("<h3>", "<h3 style=\"font-size:21px;line-height:1.5;margin:34px 0 12px;padding:18px 0 0;border-top:2px solid #dfe8e2;color:#193e31;\">"),
+        ("<h3>", "<h3 style=\"font-size:20px;line-height:1.5;margin:34px 0 14px;padding:18px 0 0;border-top:1px solid #dfe8e2;color:#193e31;\">"),
         ("<h4>", "<h4 style=\"font-size:16px;line-height:1.5;margin:20px 0 8px;color:#193e31;\">"),
         ("<p>", "<p style=\"margin:10px 0 16px;line-height:1.8;\">"),
         ("<ul>", "<ul style=\"margin:10px 0 18px;padding-left:24px;\">"),
@@ -194,15 +172,15 @@ pub(crate) fn render(day: &str, markdown: &str) -> String {
         r#"<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{day} · 具身论文晨报</title></head>
 <body style="margin:0;padding:0;background-color:#f2f5f1;color:#263b31;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f2f5f1;"><tr><td align="center" style="padding:20px 10px;">
-<div style="max-width:720px;margin:0 auto;text-align:left;background-color:#ffffff;border:1px solid #dfe8e2;border-radius:12px;overflow:hidden;">
-<div style="padding:26px 22px;background-color:#183e31;color:#ffffff;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f2f5f1;"><tr><td align="center" style="padding:12px 0;">
+<div style="max-width:720px;margin:0 auto;text-align:left;background-color:#ffffff;">
+<div style="padding:26px 12px;background-color:#183e31;color:#ffffff;">
 <div style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:2px;color:#b5d9c5;">PAPER CODEX · DAILY BRIEFING</div>
 <div style="font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:28px;font-weight:bold;line-height:1.5;margin:8px 0;">具身论文晨报</div>
 <div style="font-family:Arial,sans-serif;font-size:14px;color:#d0e4d7;">{day} · 看懂新工作，再决定读什么</div></div>
-<div style="padding:14px 22px;background-color:#edf5f1;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:14px;line-height:1.7;color:#315844;">先看今日导读，再读完整介绍：谁做了什么、如何实现、实验说明了什么。阅读判断放在事实之后。</div>
-<div style="padding:8px 22px 24px;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:16px;line-height:1.8;overflow-wrap:anywhere;">{body}</div>
-<div style="padding:18px 22px;background-color:#f6f8f5;border-top:1px solid #dfe8e2;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:12px;line-height:1.7;color:#637469;">由 Paper Codex 根据你的关注方向整理。请以论文原文为准。<br>全文与历史晨报保存在左侧「论文晨报」栏目；发送时间和关注方向可在栏目内的「设置」调整。</div>
+<div style="padding:14px 12px;background-color:#edf5f1;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:14px;line-height:1.7;color:#315844;">先看今日导读，再读完整介绍：谁做了什么、如何实现、实验说明了什么。阅读判断放在事实之后。</div>
+<div class="briefing-content" style="padding:8px 12px 24px;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:16px;line-height:1.8;overflow-wrap:anywhere;">{body}</div>
+<div style="padding:18px 12px;background-color:#f6f8f5;border-top:1px solid #dfe8e2;font-family:'PingFang SC','Microsoft YaHei',Arial,sans-serif;font-size:12px;line-height:1.7;color:#637469;">由 Paper Codex 根据你的关注方向整理。请以论文原文为准。<br>图片可点击查看原图；若未显示，请在邮箱中允许加载图片。<br>全文与历史晨报保存在左侧「论文晨报」栏目；发送时间和关注方向可在栏目内的「设置」调整。</div>
 </div></td></tr></table></body></html>"#,
         day = escape(day),
     )
@@ -257,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn separates_paper_cards_and_uses_html_images_without_attachments() {
+    fn separates_flat_paper_sections_and_uses_full_width_html_images() {
         let markdown = "## 今日导读\n\n[原文](https://arxiv.org/abs/1234.56789)\n\n## 顺手扫一眼\n\n### Example：工作一\n\n[Example: A Complete Paper Title](https://arxiv.org/abs/1234.56789)\n\n**作者：** Alice\n\n**机构：** Example University\n\n**做了什么：** 方法介绍。\n\n### Second：工作二\n\n另外一篇。\n\n## 阅读建议\n\n结束。";
         let source = json!({"paper":{"source_url":"https://arxiv.org/abs/1234.56789"}, "presentation":{"source_url":"https://arxiv.org/html/1234.56789v1","figure":{"image_url":"https://arxiv.org/html/1234.56789v1/overview.png","caption":"Overview <unsafe>","kind":"overview"}}});
         let sources = [source];
@@ -267,7 +245,16 @@ mod tests {
         assert!(!mail.contains("data:image/png"));
         assert!(mail.contains("Overview &lt;unsafe&gt;"));
         assert_eq!(mail.matches("<img ").count(), 1);
-        assert_eq!(mail.matches("background-color:#f8faf7").count(), 2);
+        assert_eq!(mail.matches("<h3 style=").count(), 2);
+        assert!(!mail.contains("background-color:#f8faf7"));
+        assert!(!mail.contains("border-radius:"));
+        assert!(mail.contains("<td align=\"center\" style=\"padding:12px 0;\">"));
+        assert!(mail.contains("class=\"briefing-content\" style=\"padding:8px 12px 24px;"));
+        assert!(mail.contains("class=\"briefing-figure\" style=\"margin:18px 0 22px;padding:0;\">"));
+        assert!(mail.contains("width=\"100%\" style=\"display:block;max-width:100%;width:100%;height:auto;border:0;\""));
+        assert!(!mail.contains("width=\"620\""));
+        assert!(mail.contains("href=\"https://arxiv.org/html/1234.56789v1/overview.png\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"display:block;\"><img"));
+        assert_eq!(mail.matches("若未显示，请在邮箱中允许加载图片").count(), 1);
         assert!(
             mail.find("<img ").unwrap() > mail.find("Example: A Complete Paper Title").unwrap()
         );
