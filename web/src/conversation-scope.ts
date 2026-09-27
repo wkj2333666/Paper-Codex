@@ -1,6 +1,6 @@
 import type { ConversationScope } from "./types"
 
-export interface CodexSelection { kind: "workbench"|"inbox"|"paper"|"project"|"search"|"graph"|"trash"; id?: string; projectId?: string }
+export interface CodexSelection { kind: "workbench"|"briefing"|"inbox"|"paper"|"project"|"search"|"graph"|"trash"; id?: string; projectId?: string }
 
 function scopeKey(scope: ConversationScope): string | null {
   if (scope.scope_type === "global") return "global"
