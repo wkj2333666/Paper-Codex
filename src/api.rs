@@ -463,7 +463,7 @@ async fn get_briefing(
     item.sources_json = "[]".into();
     item.settings_json = "{}".into();
     let email_html =
-        crate::briefing_email::render_with_sources(&item.day, &item.markdown, &sources, true);
+        crate::briefing_email::render_with_sources(&item.day, &item.markdown, &sources);
     let mut response = json!(item);
     response["email_html"] = json!(email_html);
     Ok(Json(response))

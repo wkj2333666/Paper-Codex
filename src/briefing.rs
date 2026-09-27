@@ -529,11 +529,6 @@ impl BriefingService {
         if *cancel.borrow() {
             bail!("晨报生成已取消");
         }
-        let _ = tokio::time::timeout(
-            Duration::from_secs(90),
-            crate::briefing_media::attach_figures(&markdown, &mut sources),
-        )
-        .await;
         persist_briefing(
             &self.db,
             id,
@@ -609,7 +604,7 @@ impl BriefingService {
         let env_path = self.mail_env_path.as_ref().context("未配置邮件凭据文件")?;
         sqlx::query("UPDATE daily_briefings SET mail_status='sending',mail_attempts=mail_attempts+1 WHERE id=?").bind(id).execute(self.db.pool()).await?;
         let sources: Vec<Value> = serde_json::from_str(&item.sources_json).unwrap_or_default();
-        let payload = json!({"recipient":config.recipient,"subject":format!("{} · 具身论文晨报",item.day),"body":item.markdown,"html_body":crate::briefing_email::render_with_sources(&item.day, &item.markdown, &sources, false),"inline_images":crate::briefing_email::inline_images(&item.markdown, &sources),"message_id":format!("<briefing-{}@paper-codex.local>",item.id)});
+        let payload = json!({"recipient":config.recipient,"subject":format!("{} · 具身论文晨报",item.day),"body":item.markdown,"html_body":crate::briefing_email::render_with_sources(&item.day, &item.markdown, &sources),"message_id":format!("<briefing-{}@paper-codex.local>",item.id)});
         let result = self.send_mail(env_path, payload).await;
         let (status, error) = match result {
             Ok(0) => ("sent", None),

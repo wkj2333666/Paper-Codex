@@ -54,6 +54,17 @@ class MailTests(unittest.TestCase):
         server.send_message.side_effect = smtplib.SMTPServerDisconnected("connection lost")
         self.assertEqual(self.run_mail(server), 2)
 
+    def test_html_publisher_figures_do_not_create_image_attachments(self):
+        server = MagicMock()
+        html_body = '<html><body><img src="https://arxiv.org/html/2609.29204v1/overview.png" alt="论文总览图"></body></html>'
+        self.assertEqual(self.run_mail(server, html_body), 0)
+        message = server.send_message.call_args.args[0]
+        self.assertEqual([part.get_content_type() for part in message.iter_parts()], ['text/plain', 'text/html'])
+        self.assertEqual(message.get_body().get_content().strip(), html_body)
+        self.assertEqual(list(message.iter_attachments()), [])
+        self.assertNotIn('Content-Disposition:', message.as_string())
+        self.assertNotIn('Content-ID:', message.as_string())
+
     def test_inline_figure_is_related_to_html_not_a_remote_image(self):
         server = MagicMock()
         cid = 'figure-' + 'a' * 64 + '@paper-codex'
