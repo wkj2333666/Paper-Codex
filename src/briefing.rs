@@ -597,7 +597,7 @@ impl BriefingService {
         }
         let env_path = self.mail_env_path.as_ref().context("未配置邮件凭据文件")?;
         sqlx::query("UPDATE daily_briefings SET mail_status='sending',mail_attempts=mail_attempts+1 WHERE id=?").bind(id).execute(self.db.pool()).await?;
-        let payload = json!({"recipient":config.recipient,"subject":format!("{} · 具身论文晨报",item.day),"body":item.markdown,"message_id":format!("<briefing-{}@paper-codex.local>",item.id)});
+        let payload = json!({"recipient":config.recipient,"subject":format!("{} · 具身论文晨报",item.day),"body":item.markdown,"html_body":crate::briefing_email::render(&item.day, &item.markdown),"message_id":format!("<briefing-{}@paper-codex.local>",item.id)});
         let result = self.send_mail(env_path, payload).await;
         let (status, error) = match result {
             Ok(0) => ("sent", None),

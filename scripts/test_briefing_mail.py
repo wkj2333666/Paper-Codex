@@ -1,6 +1,7 @@
 """CI-only SMTP adapter tests. No network or real credentials."""
 import importlib.util
 import io
+import json
 from pathlib import Path
 import smtplib
 import unittest
@@ -12,10 +13,13 @@ spec.loader.exec_module(adapter)
 
 
 class MailTests(unittest.TestCase):
-    def run_mail(self, server):
+    def run_mail(self, server, html_body=None):
+        payload = {"recipient":"reader@example.test", "subject":"晨报", "message_id":"<test@example.test>", "body":"论文内容"}
+        if html_body is not None:
+            payload['html_body'] = html_body
         with patch.object(adapter.Path, "read_text", return_value="MAIL=sender@example.test\nPASSWD='fake-password'"), \
              patch.object(adapter.sys, "argv", ["mail", "/fake/credentials"]), \
-             patch.object(adapter.sys, "stdin", io.StringIO('{"recipient":"reader@example.test","subject":"晨报","message_id":"<test@example.test>","body":"论文内容"}')), \
+             patch.object(adapter.sys, "stdin", io.StringIO(json.dumps(payload))), \
              patch.object(adapter.smtplib, "SMTP", return_value=server):
             return adapter.main()
 
@@ -29,6 +33,18 @@ class MailTests(unittest.TestCase):
         self.assertEqual(message["Message-ID"], "<test@example.test>")
         self.assertNotIn("fake-password", message.as_string())
         server.close.assert_called_once()
+
+    def test_html_is_preferred_with_complete_plain_text_fallback(self):
+        server = MagicMock()
+        html_body = '<html><body><h1>晨报</h1><p>论文内容</p></body></html>'
+        self.assertEqual(self.run_mail(server, html_body), 0)
+        message = server.send_message.call_args.args[0]
+        self.assertEqual(message.get_content_type(), 'multipart/alternative')
+        parts = list(message.iter_parts())
+        self.assertEqual([part.get_content_type() for part in parts], ['text/plain', 'text/html'])
+        self.assertEqual(parts[0].get_content().strip(), '论文内容')
+        self.assertEqual(parts[1].get_content().strip(), html_body)
+        self.assertEqual(message.get_body().get_content_type(), 'text/html')
 
     def test_disconnect_during_data_requires_manual_confirmation(self):
         server = MagicMock()

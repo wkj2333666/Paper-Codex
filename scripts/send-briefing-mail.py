@@ -28,6 +28,9 @@ def main():
     message['Date'] = formatdate(localtime=False)
     message['Message-ID'] = payload['message_id']
     message.set_content(payload['body'])
+    if payload.get('html_body'):
+        # multipart/alternative: full plain text first, HTML preferred by clients.
+        message.add_alternative(payload['html_body'], subtype='html')
     server = smtplib.SMTP(values.get('SMTP_HOST', 'smtp.qq.com'), int(values.get('SMTP_PORT', '587')), timeout=20)
     try:
         server.starttls(context=ssl.create_default_context())
