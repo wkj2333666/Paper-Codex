@@ -459,9 +459,11 @@ async fn get_briefing(
         .get(&id)
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
+    let sources: Vec<Value> = serde_json::from_str(&item.sources_json).unwrap_or_default();
     item.sources_json = "[]".into();
     item.settings_json = "{}".into();
-    let email_html = crate::briefing_email::render(&item.day, &item.markdown);
+    let email_html =
+        crate::briefing_email::render_with_sources(&item.day, &item.markdown, &sources, true);
     let mut response = json!(item);
     response["email_html"] = json!(email_html);
     Ok(Json(response))

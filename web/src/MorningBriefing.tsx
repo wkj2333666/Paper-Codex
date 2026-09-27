@@ -62,7 +62,7 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
     <header><div><h1>论文晨报</h1><p>{data?.config?.enabled ? `每天 ${data.config.time} · 北京时间` : "定时生成未开启"} · {data?.config?.email_enabled ? "邮件已启用" : "站内阅读"}</p></div>
       <div className="briefing-actions"><button disabled={!data?.config || busy} onClick={() => setDraft(draft ? null : data?.config ?? null)}>设置</button><button disabled={busy || !data?.config || data.items.some(item => item.status === "running")} onClick={() => void action(async () => { const result = await api.runBriefing(); setSelected(result.id) }, "已提交；同一天复用已有晨报，生成失败最多尝试 3 次。")}>生成今日晨报</button></div>
     </header>
-    <p className="briefing-reading-guide">先看今日导读，再读论文介绍：完整名称、作者、解决的问题、具体方法与实验结果，最后给出阅读判断。邮件使用 HTML 排版，并保留纯文本备用版。</p>
+    <p className="briefing-reading-guide">先看今日导读，再读论文介绍：完整名称、作者、机构、原论文图示、解决的问题、具体方法与实验结果，最后给出阅读判断。邮件使用 HTML 排版，并保留纯文本备用版。</p>
     {(error || data?.config_error) && <p role="alert">{error || data?.config_error}</p>}
     {notice && <p role="status">{notice}</p>}
     {draft && <form className="briefing-settings" onSubmit={event => { event.preventDefault(); const fields = new FormData(event.currentTarget); const config = { ...draft, categories: split(String(fields.get("categories") ?? "")), keywords: split(String(fields.get("keywords") ?? "")) }; void action(async () => { await api.saveBriefingConfig(config); setDraft(null) }, "设置已保存，无需重启。") }}>

@@ -1,5 +1,86 @@
 //! Email-safe Markdown with inline styles and an unchanged plain-text alternative.
 use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag, TagEnd};
+use serde_json::{json, Value};
+
+fn figure<'a>(markdown: &str, source: &'a Value) -> Option<&'a Value> {
+    let url = source["paper"]["source_url"].as_str()?;
+    let figure = &source["presentation"]["figure"];
+    (markdown.contains(&format!("]({url})"))
+        && figure["data_base64"].as_str().is_some()
+        && figure["cid"].as_str().is_some()
+        && matches!(figure["mime"].as_str(), Some("image/png" | "image/jpeg")))
+    .then_some(figure)
+}
+
+pub(crate) fn inline_images(markdown: &str, sources: &[Value]) -> Vec<Value> {
+    let mut seen = std::collections::BTreeSet::new();
+    sources
+        .iter()
+        .filter_map(|source| {
+            let figure = figure(markdown, source)?;
+            let cid = figure["cid"].as_str()?;
+            seen.insert(cid).then(
+                || json!({"cid":cid,"mime":figure["mime"],"data_base64":figure["data_base64"]}),
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn render_with_sources(
+    day: &str,
+    markdown: &str,
+    sources: &[Value],
+    preview: bool,
+) -> String {
+    let mut output = render(day, markdown);
+    for source in sources {
+        let Some(figure) = figure(markdown, source) else {
+            continue;
+        };
+        let paper_url = source["paper"]["source_url"].as_str().unwrap_or_default();
+        let needle = format!("href=\"{}\">", escape(paper_url));
+        // Skip the brief lead-in's "原文" link. Place the figure only in the
+        // actual paper introduction, after its title/identity paragraph.
+        let insertion = output.match_indices(&needle).find_map(|(start, _)| {
+            let label_start = start + needle.len();
+            let label_end = label_start + output[label_start..].find("</a>")?;
+            if output[label_start..label_end].chars().count() < 16 {
+                return None;
+            }
+            Some(label_end + output[label_end..].find("</p>")? + 4)
+        });
+        let Some(insertion) = insertion else {
+            continue;
+        };
+        let src = if preview {
+            format!(
+                "data:{};base64,{}",
+                figure["mime"].as_str().unwrap_or_default(),
+                figure["data_base64"].as_str().unwrap_or_default()
+            )
+        } else {
+            format!("cid:{}", figure["cid"].as_str().unwrap_or_default())
+        };
+        let label = match figure["kind"].as_str() {
+            Some("teaser") => "论文 teaser",
+            Some("overview") => "论文总览图",
+            _ => "论文图示（未标注为 teaser）",
+        };
+        let caption = figure["caption"].as_str().unwrap_or_default();
+        let short_caption: String = caption.chars().take(160).collect();
+        let short_caption = if caption.chars().count() > 160 {
+            format!("{short_caption}…（完整图注见原文）")
+        } else {
+            short_caption
+        };
+        let source_url = source["presentation"]["source_url"]
+            .as_str()
+            .unwrap_or(paper_url);
+        let block = format!("<div style=\"margin:18px 0 22px;padding:12px;background-color:#ffffff;border:1px solid #dfe8e2;border-radius:8px;\"><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\"><img src=\"{}\" alt=\"{}\" width=\"620\" style=\"display:block;max-width:100%;width:100%;height:auto;border:0;\"></a><p style=\"margin:10px 0 0;font-size:13px;line-height:1.65;color:#52665c;\">{} · 原图及图注来自论文：{}</p></div>", escape(source_url), escape(&src), escape(caption), label, escape(&short_caption));
+        output.insert_str(insertion, &block);
+    }
+    output
+}
 
 fn safe_destination(destination: CowStr<'_>) -> CowStr<'_> {
     match url::Url::parse(&destination) {
@@ -52,6 +133,30 @@ pub(crate) fn render(day: &str, markdown: &str) -> String {
     });
     let mut body = String::new();
     html::push_html(&mut body, events);
+    let mut cards = String::new();
+    let mut card_open = false;
+    for line in body.lines() {
+        if (line.starts_with("<h2>") || line.starts_with("<h3>")) && card_open {
+            cards.push_str("</div>\n");
+            card_open = false;
+        }
+        if line.starts_with("<h3>") {
+            cards.push_str("<div style=\"margin:20px 0;padding:18px;background-color:#f8faf7;border:1px solid #dfe8e2;border-radius:10px;\">\n");
+            card_open = true;
+            cards.push_str(&line.replacen(
+                "<h3>",
+                "<h3 style=\"font-size:20px;line-height:1.5;margin:0 0 14px;color:#193e31;\">",
+                1,
+            ));
+        } else {
+            cards.push_str(line);
+        }
+        cards.push('\n');
+    }
+    if card_open {
+        cards.push_str("</div>\n");
+    }
+    body = cards;
     // Paper identity stays visible but secondary to the title. These prefixes
     // can only come from parsed Markdown: raw source HTML was escaped above.
     for label in ["作者：", "机构：", "资料："] {
@@ -100,7 +205,7 @@ pub(crate) fn render(day: &str, markdown: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::*;
 
     #[test]
     fn renders_headings_lists_tables_and_links_without_losing_content() {
@@ -143,5 +248,28 @@ mod tests {
         assert!(output.contains("target=\"_blank\" rel=\"noopener noreferrer\""));
         assert!(!output.contains("**作者"));
         assert!(!output.contains("## 今日导读"));
+    }
+
+    #[test]
+    fn separates_paper_cards_and_embeds_only_acquired_figures() {
+        let markdown = "## 今日导读\n\n[原文](https://arxiv.org/abs/1234.56789)\n\n## 顺手扫一眼\n\n### Example：工作一\n\n[Example: A Complete Paper Title](https://arxiv.org/abs/1234.56789)\n\n**作者：** Alice\n\n**机构：** Example University\n\n**做了什么：** 方法介绍。\n\n### Second：工作二\n\n另外一篇。\n\n## 阅读建议\n\n结束。";
+        let source = json!({"paper":{"source_url":"https://arxiv.org/abs/1234.56789"}, "presentation":{"source_url":"https://arxiv.org/html/1234.56789v1","figure":{"cid":"figure-test@paper-codex","mime":"image/png","data_base64":"test-bytes","caption":"Overview <unsafe>","kind":"overview"}}});
+        let sources = [source];
+        let mail = render_with_sources("2026-09-27", markdown, &sources, false);
+        assert!(mail.contains("src=\"cid:figure-test@paper-codex\""));
+        assert!(!mail.contains("data:image/png"));
+        assert!(mail.contains("Overview &lt;unsafe&gt;"));
+        assert_eq!(mail.matches("<img ").count(), 1);
+        assert_eq!(mail.matches("background-color:#f8faf7").count(), 2);
+        assert!(
+            mail.find("<img ").unwrap() > mail.find("Example: A Complete Paper Title").unwrap()
+        );
+        let preview = render_with_sources("2026-09-27", markdown, &sources, true);
+        assert!(preview.contains("src=\"data:image/png;base64,test-bytes\""));
+        assert_eq!(inline_images(markdown, &sources).len(), 1);
+        assert!(inline_images("没有选入的论文", &sources).is_empty());
+        assert!(
+            !render_with_sources("2026-09-27", "没有选入的论文", &sources, true).contains("<img ")
+        );
     }
 }
