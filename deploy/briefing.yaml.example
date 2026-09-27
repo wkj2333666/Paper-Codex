@@ -1,12 +1,16 @@
-# Reloaded automatically before each scheduled/manual run (no restart/build).
-enabled: false
-time: '09:30'
-timezone: Asia/Shanghai
-categories: [cs.RO, cs.CV, cs.AI]
-keywords: [vision-language-action, world model, robot, embodied, action token, long-horizon, manipulation, humanoid]
-project_ids: []
-max_papers: 12
-fulltext_papers: 4
-timeout_minutes: 15
-email_enabled: false
-recipient: ''
+# Reloaded every minute and before manual runs; no restart/build required.
+# Each briefing requires exactly one existing project ID, not its display name.
+# Start with projects: [] if not configuring a briefing yet.
+projects:
+  - project_id: REPLACE_WITH_PROJECT_ID
+    enabled: false
+    time: '08:00'
+    timezone: Asia/Shanghai
+    categories: [cs.RO, cs.CV, cs.AI]
+    # Optional additions; search primarily follows project purpose/README/goals/tree.
+    keywords: []
+    max_papers: 12
+    fulltext_papers: 4
+    timeout_minutes: 15
+    email_enabled: false
+    recipient: ''
