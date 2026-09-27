@@ -609,6 +609,13 @@ impl BriefingService {
                 "blocked",
                 Some("发信配置或授权被拒绝，请检查本地凭据后手动重发".to_string()),
             ),
+            Ok(4) => (
+                "blocked",
+                Some(
+                    "SMTP 服务明确拒收邮件正文（5xx），未投递；请检查发信规则后手动重发"
+                        .to_string(),
+                ),
+            ),
             _ => (
                 "uncertain",
                 Some("邮件发送结果不确定，请检查邮箱后决定是否重发".to_string()),

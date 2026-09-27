@@ -42,6 +42,23 @@ class MailTests(unittest.TestCase):
             self.run_mail(server)
         server.send_message.assert_not_called()
 
+    def test_definitive_data_rejection_is_not_uncertain(self):
+        server = MagicMock()
+        server.send_message.side_effect = smtplib.SMTPDataError(550, b"rejected")
+        self.assertEqual(self.run_mail(server), 4)
+
+    def test_temporary_data_rejection_is_retryable(self):
+        server = MagicMock()
+        server.send_message.side_effect = smtplib.SMTPDataError(451, b"try later")
+        self.assertEqual(self.run_mail(server), 1)
+
+    def test_recipient_rejection_is_not_uncertain(self):
+        for status, expected in ((550, 3), (450, 1)):
+            with self.subTest(status=status):
+                server = MagicMock()
+                server.send_message.side_effect = smtplib.SMTPRecipientsRefused({'reader@example.test': (status, b'rejected')})
+                self.assertEqual(self.run_mail(server), expected)
+
 
 if __name__ == "__main__":
     unittest.main()
