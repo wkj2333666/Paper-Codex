@@ -78,3 +78,6 @@ jobs:
 
       - name: Run all Rust tests
         run: cargo test --all-targets --locked
+
+      - name: Verify SMTP adapter without network or credentials
+        run: python3 -m unittest discover -s scripts -p 'test_briefing_mail.py'

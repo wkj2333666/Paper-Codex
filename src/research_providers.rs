@@ -274,6 +274,7 @@ pub fn parse_arxiv_search(body: &str) -> Result<Vec<WorkMetadata>> {
             };
             let metadata = json!({
                 "provider": "arxiv",
+                "published": item.published,
                 "updated": item.updated,
                 "links": item.links,
             });

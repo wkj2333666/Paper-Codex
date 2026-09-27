@@ -61,6 +61,8 @@ fn arxiv_versions_normalize_to_one_identifier() {
     assert_eq!(works.len(), 2);
     assert_eq!(works[0].arxiv_id.as_deref(), Some("2401.01234"));
     assert_eq!(works[0].canonical_key, "arxiv:2401.01234");
+    assert_eq!(works[0].metadata["published"], "2024-01-02T00:00:00Z");
+    assert_eq!(works[0].metadata["updated"], "2024-01-05T00:00:00Z");
     assert_eq!(works[1].arxiv_id.as_deref(), Some("cs/9901001"));
 }
 

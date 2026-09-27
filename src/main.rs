@@ -3,6 +3,7 @@ use paper_codex::{
     acquisition::Acquirer,
     api::{build_router, AppState},
     auth::Auth,
+    briefing::BriefingService,
     codex::{CodexCommand, CodexRuntime},
     config::Config,
     conversation_engine::ConversationEngine,
@@ -75,6 +76,7 @@ async fn main() -> Result<()> {
     // resume queued work. Otherwise a recovered task can race this transaction
     // during startup and abort the whole service with SQLITE_BUSY.
     ConversationEngine::recover_states(&db).await?;
+    BriefingService::recover_states(&db).await?;
     let codex = CodexRuntime::spawn(CodexCommand::app_server(
         config.codex_bin.clone(),
         config.codex_home.clone(),
@@ -92,9 +94,23 @@ async fn main() -> Result<()> {
     let conversation_engine = ConversationEngine::start_with_services_after_recovery(
         db.clone(),
         workspace.clone(),
-        codex,
+        codex.clone(),
         Some(research.clone()),
         Some(engine.clone()),
+    )
+    .await?;
+    let briefing_path = std::env::var_os("PAPER_CODEX_BRIEFING_CONFIG")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(".runtime/briefing.yaml"));
+    let mail_path = std::env::var_os("PAPER_CODEX_BRIEFING_MAIL_ENV").map(std::path::PathBuf::from);
+    let briefings = BriefingService::start(
+        db.clone(),
+        workspace.clone(),
+        codex,
+        conversation_engine.clone(),
+        research.clone(),
+        briefing_path,
+        mail_path,
     )
     .await?;
     let state = AppState::new(
@@ -106,7 +122,8 @@ async fn main() -> Result<()> {
         config.static_dir.clone(),
         config.max_upload_bytes,
     )
-    .with_research_service(research);
+    .with_research_service(research)
+    .with_briefings(briefings);
     let index = config.static_dir.join("index.html");
     let static_files = ServeDir::new(&config.static_dir).not_found_service(ServeFile::new(index));
     let app = build_router(state)
