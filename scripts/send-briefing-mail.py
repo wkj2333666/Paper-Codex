@@ -45,7 +45,7 @@ def main():
             seen.add(cid)
             raw = base64.b64decode(image['data_base64'], validate=True)
             total += len(raw)
-            if len(raw) > 1024 * 1024 or total > 5 * 1024 * 1024:
+            if len(raw) > 2 * 1024 * 1024 or total > 5 * 1024 * 1024:
                 raise ValueError('Inline image budget exceeded')
             expected = b'\x89PNG\r\n\x1a\n' if mime == 'image/png' else b'\xff\xd8\xff'
             if not raw.startswith(expected):

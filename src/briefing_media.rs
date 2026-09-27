@@ -51,6 +51,29 @@ async fn download(client: &Client, url: Url, limit: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+async fn download_figure(client: &Client, url: Url, limit: usize) -> Result<Vec<u8>> {
+    match download(client, url.clone(), limit).await {
+        Ok(bytes) => Ok(bytes),
+        Err(error) => {
+            // One bounded retry for transport/server failures, never for size
+            // rejection, 4xx or invalid sources. The whole image stage also
+            // has a hard deadline in BriefingService.
+            let transient = error.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+                error.is_timeout()
+                    || error.is_connect()
+                    || error
+                        .status()
+                        .is_some_and(|status| status.is_server_error())
+            });
+            if !transient {
+                return Err(error);
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            download(client, url, limit).await
+        }
+    }
+}
+
 pub(crate) async fn metadata(paper: &Value, cache: &Path) -> Result<Value> {
     // Prefer the versioned PDF URL, so figures match the edition being read.
     let versioned = paper["metadata"]["links"].as_array().and_then(|links| {
@@ -158,7 +181,9 @@ pub(crate) async fn attach_figures(markdown: &str, sources: &mut [Value]) {
         if budget == 0 {
             break;
         }
-        let Ok(bytes) = download(&client, url, budget.min(1024 * 1024)).await else {
+        let Ok(bytes) = download_figure(&client, url, budget.min(2 * 1024 * 1024)).await else {
+            source["presentation"]["figure"]["acquisition_status"] =
+                json!("unavailable_or_over_budget");
             continue;
         };
         let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -173,6 +198,7 @@ pub(crate) async fn attach_figures(markdown: &str, sources: &mut [Value]) {
         source["presentation"]["figure"]["mime"] = json!(mime);
         source["presentation"]["figure"]["cid"] = json!(cid);
         source["presentation"]["figure"]["data_base64"] = json!(STANDARD.encode(bytes));
+        source["presentation"]["figure"]["acquisition_status"] = json!("acquired");
     }
 }
 
