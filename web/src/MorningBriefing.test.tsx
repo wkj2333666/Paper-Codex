@@ -1,10 +1,24 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
-import { BriefingEmailPreview, MorningBriefing, newBriefingConfig } from "./MorningBriefing"
+import { BriefingEmailPreview, BriefingSearchDiagnostics, MorningBriefing, canNotifyBriefing, newBriefingConfig } from "./MorningBriefing"
+import type { Briefing } from "./MorningBriefing"
 import { BriefingPaperPicker, projectLabel } from "./BriefingPaperPicker"
 import type { Project } from "./types"
 
 describe("MorningBriefing", () => {
+  it("shows retrieval counts and incomplete coverage instead of pretending there are no papers", () => {
+    const html = renderToStaticMarkup(<BriefingSearchDiagnostics diagnostics={{stage: "failed", primary: {received: 200, within_window: 2, before_window: 198, pages: 1, complete: true, limit_reached: false, latest_updated: null}, primary_selection: {retrieved: 2, unseen: 2, candidates: 0}, fallback: {received: 2000, within_window: 2000, before_window: 0, pages: 10, complete: false, limit_reached: true, latest_updated: null}}}/> )
+    expect(html).toContain("未完成，不能视作无新增")
+    expect(html).toContain("去重后 2 篇")
+    expect(html).toContain("达到上限，未完整覆盖")
+  })
+  it("permits empty and final failure notices without mailing every retry", () => {
+    expect(canNotifyBriefing({status: "empty"} as Briefing)).toBe(true)
+    expect(canNotifyBriefing({status: "failed", attempts: 1, next_attempt_at: "2099-01-01"} as Briefing)).toBe(false)
+    expect(canNotifyBriefing({status: "failed", attempts: 3, next_attempt_at: "2099-01-01"} as Briefing)).toBe(true)
+    expect(canNotifyBriefing({status: "failed", attempts: 1, next_attempt_at: null} as Briefing)).toBe(true)
+    expect(canNotifyBriefing({status: "running"} as Briefing)).toBe(false)
+  })
   const projects: Project[] = [{ id: "ei", name: "EI", parent_id: null }, { id: "vla", name: "VLA", parent_id: "ei" }].map(project => ({ ...project, slug: project.id, purpose: "", created_at: "", updated_at: "" }))
   it("requires an explicit project without enabling schedules or mail implicitly", () => {
     expect(newBriefingConfig("vla")).toMatchObject({ project_id: "vla", enabled: false, email_enabled: false, keywords: [] })

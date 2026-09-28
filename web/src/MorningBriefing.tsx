@@ -14,9 +14,22 @@ export interface Briefing {
   id: string; project_id: string; day: string; status: string; markdown: string; error: string | null
   conversation_id: string | null; mail_status: string; mail_attempts: number; attempts: number; mail_error: string | null
   email_html?: string
+  next_attempt_at?: string | null
+  search_diagnostics?: BriefingDiagnostics | null
   papers?: BriefingPaper[]
   search_plan?: { terms: string[]; rationale: string; query: string } | null
 }
+interface RetrievalAudit { received: number; within_window: number; before_window: number; pages: number; complete: boolean; limit_reached: boolean; latest_updated: string | null }
+interface SelectionAudit { retrieved: number; unseen: number; candidates: number }
+export interface BriefingDiagnostics { stage?: string; since?: string; primary?: RetrievalAudit; fallback?: RetrievalAudit; primary_selection?: SelectionAudit; fallback_selection?: SelectionAudit; selected_candidates?: number; empty_reviewed?: boolean }
+export function BriefingSearchDiagnostics({ diagnostics }: { diagnostics: BriefingDiagnostics }) {
+  const stages: Record<string,string> = { planning: "规划检索", retrieving: "项目检索", empty_review: "复查空结果", collecting_evidence: "读取论文证据", writing: "撰写晨报", verified_empty: "复查后无新增", completed: "已完成", failed: "未完成，不能视作无新增" }
+  return <details open><summary>检索记录</summary><p>阶段：{stages[diagnostics.stage ?? ""] ?? "未知"}{diagnostics.since && ` · 窗口起点：${new Date(diagnostics.since).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}（北京时间）`}</p>{(["primary", "fallback"] as const).map(key => {
+    const audit = diagnostics[key], selection = diagnostics[key === "primary" ? "primary_selection" : "fallback_selection"]
+    return audit && <p key={key}>{key === "primary" ? "项目主题检索" : "分类范围复查"}：收到 {audit.received} 篇 · 窗口内 {audit.within_window} 篇{selection && ` · 去重后 ${selection.unseen} 篇 · 候选 ${selection.candidates} 篇`} · {audit.complete ? "覆盖已确认" : audit.limit_reached ? "达到上限，未完整覆盖" : "尚未完成"}{audit.latest_updated && ` · 最新返回记录：${new Date(audit.latest_updated).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`}</p>
+  })}{diagnostics.empty_reviewed && <p>已执行独立分类检索复查；无新增只表示当前窗口内未选出未介绍的相关论文，不表示没有论文发表。</p>}</details>
+}
+export const canNotifyBriefing = (item: Briefing) => ["completed", "empty"].includes(item.status) || (item.status === "failed" && (item.attempts >= 3 || !item.next_attempt_at))
 export interface BriefingPaper { key: string; title: string; authors: string[]; source_url: string; year: number | null; paper_id: string | null; project_ids: string[] }
 export interface BriefingResponse { configs: BriefingConfig[]; config_error: string | null; mail_configured: boolean; items: Briefing[] }
 export const newBriefingConfig = (projectId: string): BriefingConfig => ({ project_id: projectId, enabled: false, time: "08:00", timezone: "Asia/Shanghai", categories: ["cs.RO", "cs.CV", "cs.AI"], keywords: [], max_papers: 12, fulltext_papers: 4, timeout_minutes: 15, email_enabled: false, recipient: "" })
@@ -41,14 +54,15 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
   const config = data?.configs.find(config => config.project_id === projectId)
   const items = data?.items.filter(entry => entry.project_id === projectId) ?? []
   const item = items.find(entry => entry.id === selected) ?? items[0]
+  const progressRefresh = item?.status === "running" ? data : null
   useEffect(() => {
     let active = true
     setDetail(null)
-    if (item && ["completed", "empty"].includes(item.status)) {
+    if (item) {
       void api.briefing(item.id).then(value => { if (active) setDetail(value) }).catch(error => { if (active) setError(message(error)) })
     }
     return () => { active = false }
-  }, [item?.id, item?.status])
+  }, [item?.id, item?.status, item?.attempts, item?.error, progressRefresh])
   useEffect(() => {
     let active = true
     let timer: ReturnType<typeof setTimeout>
@@ -69,7 +83,7 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
   const update = (value: Partial<BriefingConfig>) => setDraft(current => current ? { ...current, ...value } : current)
   return <section className="morning-briefing" aria-label="论文晨报">
     <header><div><h1>论文晨报</h1><p>{config?.enabled ? `每天 ${config.time} · 北京时间` : "定时生成未开启"} · {config?.email_enabled ? "邮件已启用" : "站内阅读"}</p></div>
-      <div className="briefing-actions"><button disabled={!data || !projectId || busy} onClick={() => setDraft(draft ? null : config ?? newBriefingConfig(projectId))}>{config ? "设置" : "配置这个项目的晨报"}</button><button disabled={busy || !config || data?.items.some(item => item.status === "running")} onClick={() => void action(async () => { const result = await api.runBriefing(projectId); setSelected(result.id) }, "已提交；同一项目同一天复用已有晨报，生成失败最多尝试 3 次。")}>生成今日晨报</button></div>
+      <div className="briefing-actions"><button disabled={!data || !projectId || busy} onClick={() => setDraft(draft ? null : config ?? newBriefingConfig(projectId))}>{config ? "设置" : "配置这个项目的晨报"}</button><button disabled={busy || !config || data?.items.some(item => item.status === "running")} onClick={() => void action(async () => { const result = await api.runBriefing(projectId); setSelected(result.id) }, "已提交；已完成内容不重复生成，尚未投递的空结果可手动复查，每天最多尝试 3 次。")}>{item?.status === "empty" && item.mail_attempts === 0 ? "重新检索今日晨报" : "生成今日晨报"}</button></div>
     </header>
     <label className="briefing-project-selector">所属项目 <select aria-label="晨报所属项目" value={projectId} disabled={busy} onChange={event => { setChosenProject(event.target.value); setDraft(null); setSelected(""); setDetail(null); setNotice("") }}>{!projects.length && <option value="">请先创建项目</option>}{projects.map(project => <option key={project.id} value={project.id}>{projectLabel(projects, project.id)}{data?.configs.some(config => config.project_id === project.id) ? " · 已配置" : ""}</option>)}</select></label>
     <p>每份晨报只属于一个项目。检索依据该项目的目的、README、研究目标与子项目结构；子项目可以另行配置独立晨报。</p>
@@ -87,15 +101,18 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
       <p>所属项目：{projectLabel(projects, draft.project_id)}。无需重复填写项目已有的研究方向；项目资料变化后会重新规划检索词。</p>
       <label><input type="checkbox" checked={draft.email_enabled} disabled={!data?.mail_configured} onChange={e => update({ email_enabled: e.target.checked })}/>邮件投递{!data?.mail_configured && "（服务端尚未设置凭据文件）"}</label>
       <label>收件邮箱<input type="email" required={draft.email_enabled} value={draft.recipient} onChange={e => update({ recipient: e.target.value })}/></label>
-      <p>无需保持网页开启。没有新论文不发邮件；邮件失败不会重新生成晨报。晨报也会进入所属项目的对话历史。SMTP 密码仅从服务器本地文件读取。</p>
+      <p>无需保持网页开启。启用邮件后，无新增也会发送状态简报；最终检索或生成失败会发送异常通知，不静默跳过。邮件失败不会重新生成晨报。SMTP 密码仅从服务器本地文件读取。</p>
       <button disabled={busy} type="submit">保存设置</button>
     </form>}
     {item ? <><div className="briefing-actions"><select aria-label="晨报日期" value={item.id} onChange={e => setSelected(e.target.value)}>{items.map(entry => <option key={entry.id} value={entry.id}>{entry.day} · {labels[entry.status] ?? entry.status}</option>)}</select><span>生成：{labels[item.status] ?? item.status} · 邮件：{labels[item.mail_status] ?? item.mail_status}</span>
-      {item.status === "completed" && !["sent", "sending"].includes(item.mail_status) && <button disabled={busy || !config?.email_enabled || item.mail_attempts >= 3} onClick={() => { if (item.mail_status === "uncertain" && !window.confirm("上次邮件可能已送达。确认检查邮箱后仍要重发？")) return; void action(() => api.sendBriefing(item.id), "已提交发送请求，请查看发送状态。") }}>发送邮件</button>}</div>
+      {canNotifyBriefing(item) && !["sent", "sending"].includes(item.mail_status) && <button disabled={busy || !config?.email_enabled || item.mail_attempts >= 3} onClick={() => { if (item.mail_status === "uncertain" && !window.confirm("上次邮件可能已送达。确认检查邮箱后仍要重发？")) return; void action(() => api.sendBriefing(item.id), "已提交发送请求，请查看发送状态。") }}>发送{item.status === "completed" ? "邮件" : "状态通知"}</button>}</div>
       {item.error && <p role="alert">{item.error}</p>}{item.mail_error && <p role="alert">{item.mail_error}</p>}
+      {item.status === "failed" && !canNotifyBriefing(item) && <p role="status">已安排自动重试；重试结束仍失败会发送异常通知，不会记为“无新增”。</p>}
       {item.status === "running" && <p role="status">正在检索和整理论文，可离开页面，完成后会保存在这里。</p>}
       {detail?.id === item.id && detail.search_plan && <details><summary>本期项目检索方向</summary><p>{detail.search_plan.rationale}</p><p>{detail.search_plan.terms.join(" · ")}</p><code className="briefing-query">{detail.search_plan.query}</code></details>}
-      {detail?.id === item.id && detail.markdown && detail.email_html && <details><summary>HTML 邮件预览（与发送模板一致，不发送邮件）</summary><BriefingEmailPreview html={detail.email_html}/></details>}
+      {detail?.id === item.id && detail.search_diagnostics && <BriefingSearchDiagnostics diagnostics={detail.search_diagnostics}/>}
+      {detail?.id === item.id && item.status === "empty" && !detail.search_diagnostics && <p role="alert">这是旧版留下的空结果，未保存检索明细，无法核验是否完整检索；尚未投递时可点击“重新检索今日晨报”。</p>}
+      {detail?.id === item.id && canNotifyBriefing(item) && detail.email_html && <details><summary>HTML 邮件预览（与发送模板一致，不发送邮件）</summary><BriefingEmailPreview html={detail.email_html}/></details>}
       {detail?.id === item.id && detail.markdown && <details open><summary>{item.day} 晨报正文</summary><div className="briefing-content chat-markdown"><ChatMarkdown>{detail.markdown}</ChatMarkdown></div></details>}
       {detail?.id === item.id && detail.papers && item.status === "completed" && <BriefingPaperPicker key={item.id} briefingId={item.id} ownerId={item.project_id} papers={detail.papers} projects={projects}/>}
       {item.conversation_id && <p>可在 Codex 历史对话中打开「{item.day} 论文晨报」继续追问。</p>}

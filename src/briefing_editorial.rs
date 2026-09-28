@@ -13,6 +13,28 @@ fn normalized_terms(value: &str) -> String {
         .join(" ")
 }
 
+fn comparable_word(word: &str) -> String {
+    if let Some(stem) = word.strip_suffix("ies") {
+        return format!("{stem}y");
+    }
+    if word.len() > 4 {
+        word.strip_suffix('s').unwrap_or(word).to_owned()
+    } else {
+        word.to_owned()
+    }
+}
+
+fn contains_topic(text: &str, term: &str) -> bool {
+    let tokens = crate::briefing_project::search_words(term);
+    if tokens.is_empty() {
+        return false;
+    }
+    let words: BTreeSet<_> = text.split_whitespace().map(comparable_word).collect();
+    tokens
+        .iter()
+        .all(|token| words.contains(&comparable_word(token)))
+}
+
 pub(crate) fn candidates<'a>(
     papers: &'a [WorkMetadata],
     keywords: &[String],
@@ -44,8 +66,11 @@ pub(crate) fn candidates<'a>(
                         4
                     };
                     weight
-                        * (usize::from(title.contains(word.as_str())) * 3
-                            + usize::from(abstract_text.contains(word.as_str())))
+                        * (usize::from(contains_topic(&title, word)) * 3
+                            + usize::from(contains_topic(
+                                &format!("{title} {abstract_text}"),
+                                word,
+                            )))
                 })
                 .sum();
             (score > 0).then_some((score, paper))
@@ -305,6 +330,28 @@ mod tests {
             1
         );
         assert_eq!(candidates(&papers, &["world model".into()], 12).len(), 1);
+    }
+
+    #[test]
+    fn search_matches_reordered_topics_and_plural_words_without_loose_substrings() {
+        let papers = vec![
+            paper(
+                "wam",
+                "A world-action model",
+                "Multiple world models enable robotic manipulation.",
+                "2026-09-25",
+            ),
+            paper(
+                "unrelated",
+                "Museum modelling",
+                "Model railway",
+                "2026-09-25",
+            ),
+        ];
+        let chosen = candidates(&papers, &["world model for manipulation".into()], 12);
+        assert_eq!(chosen.len(), 1);
+        assert_eq!(chosen[0].canonical_key, "wam");
+        assert!(candidates(&papers, &["humanoid".into()], 12).is_empty());
     }
 
     #[test]

@@ -121,6 +121,12 @@ async fn legacy_schema_migration_preserves_body_delivery_and_original_tables() {
         .await
         .unwrap();
     assert_eq!(legacy, 1);
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('daily_briefings')")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    assert!(columns.iter().any(|name| name == "mail_next_attempt_at"));
     let ei = db.create_project("ei", "EI", "").await.unwrap();
     let other = db.create_project("other", "Other", "").await.unwrap();
     BriefingService::adopt_legacy(&db, &ei).await.unwrap();
