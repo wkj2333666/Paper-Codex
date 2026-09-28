@@ -6,6 +6,13 @@ import { BriefingPaperPicker, projectLabel } from "./BriefingPaperPicker"
 import type { Project } from "./types"
 
 describe("MorningBriefing", () => {
+  it("shows a timeout and fallback separately from empty search results",()=>{
+    const html=renderToStaticMarkup(<BriefingSearchDiagnostics diagnostics={{stage:"fallback_retrieval",primary:{received:0,within_window:0,before_window:0,pages:0,complete:false,limit_reached:false,latest_updated:null,error_kind:"timeout",last_request_ms:60001}}}/> )
+    expect(html).toContain("主题请求失败，改用分类检索")
+    expect(html).toContain("请求超时")
+    expect(html).toContain("60.0")
+    expect(html).not.toContain("复查后无新增")
+  })
   it("shows retrieval counts and incomplete coverage instead of pretending there are no papers", () => {
     const html = renderToStaticMarkup(<BriefingSearchDiagnostics diagnostics={{stage: "failed", primary: {received: 200, within_window: 2, before_window: 198, pages: 1, complete: true, limit_reached: false, latest_updated: null}, primary_selection: {retrieved: 2, unseen: 2, candidates: 0}, fallback: {received: 2000, within_window: 2000, before_window: 0, pages: 10, complete: false, limit_reached: true, latest_updated: null}}}/> )
     expect(html).toContain("未完成，不能视作无新增")
