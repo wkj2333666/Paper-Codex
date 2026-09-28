@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS revisions (
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, purpose TEXT NOT NULL DEFAULT '',
   parent_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS project_papers (
@@ -310,6 +311,11 @@ impl Database {
     }
 
     async fn migrate_legacy_schema(pool: &SqlitePool) -> Result<()> {
+        if !has_column(pool, "projects", "sort_order").await? {
+            sqlx::query("ALTER TABLE projects ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+                .execute(pool)
+                .await?;
+        }
         if !has_column(pool, "projects", "parent_id").await? {
             sqlx::query(
                 "ALTER TABLE projects ADD COLUMN parent_id TEXT REFERENCES projects(id) ON DELETE SET NULL",
@@ -531,15 +537,76 @@ impl Database {
         parent_id: Option<&str>,
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO projects(id,slug,name,purpose,parent_id) VALUES(?,?,?,?,?)")
+        sqlx::query("INSERT INTO projects(id,slug,name,purpose,parent_id,sort_order) VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM projects WHERE parent_id IS ?))")
             .bind(&id)
             .bind(slug)
             .bind(name)
             .bind(purpose)
             .bind(parent_id)
+            .bind(parent_id)
             .execute(&self.pool)
             .await?;
         Ok(id)
+    }
+
+    /// Move and reorder atomically. The client supplies the complete destination
+    /// sibling order so legacy locale-based ordering is preserved on the first move.
+    pub async fn move_project(
+        &self,
+        id: &str,
+        parent_id: Option<&str>,
+        ordered_ids: &[String],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        // Acquire the SQLite writer lock before reading the tree (avoid a WAL
+        // read-to-write upgrade racing another move or project creation).
+        let changed = sqlx::query("UPDATE projects SET sort_order=sort_order WHERE id=?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        if changed == 0 {
+            bail!("project does not exist");
+        }
+        let projects: Vec<Project> = sqlx::query_as("SELECT * FROM projects")
+            .fetch_all(&mut *tx)
+            .await?;
+        let mut ancestor = parent_id;
+        let mut visited = HashSet::new();
+        while let Some(parent) = ancestor {
+            if parent == id || !visited.insert(parent) {
+                bail!("moving project would create a cycle");
+            }
+            ancestor = projects
+                .iter()
+                .find(|project| project.id == parent)
+                .context("parent project does not exist")?
+                .parent_id
+                .as_deref();
+        }
+        let expected: HashSet<&str> = projects
+            .iter()
+            .filter(|project| project.parent_id.as_deref() == parent_id || project.id == id)
+            .map(|project| project.id.as_str())
+            .collect();
+        let requested: HashSet<&str> = ordered_ids.iter().map(String::as_str).collect();
+        if requested != expected || requested.len() != ordered_ids.len() {
+            bail!("项目列表已变化，请刷新后重新拖动");
+        }
+        sqlx::query("UPDATE projects SET parent_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+            .bind(parent_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        for (position, sibling) in ordered_ids.iter().enumerate() {
+            sqlx::query("UPDATE projects SET sort_order=? WHERE id=?")
+                .bind(position as i64)
+                .bind(sibling)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     pub async fn update_project(
@@ -748,9 +815,11 @@ impl Database {
     }
 
     pub async fn list_projects(&self) -> Result<Vec<Project>> {
-        Ok(sqlx::query_as("SELECT * FROM projects ORDER BY name")
-            .fetch_all(&self.pool)
-            .await?)
+        Ok(
+            sqlx::query_as("SELECT * FROM projects ORDER BY sort_order,name,id")
+                .fetch_all(&self.pool)
+                .await?,
+        )
     }
 
     pub async fn list_trashed_papers(&self) -> Result<Vec<Paper>> {

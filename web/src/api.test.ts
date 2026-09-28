@@ -91,6 +91,13 @@ test("project README reads and saves with an expected revision", async()=>{
   })
 })
 
+test("project moves persist parent and complete sibling order together",async()=>{
+  await api.moveProject("project/one",{parent_id:null,ordered_ids:["two","project/one"]})
+  expect(capturedRequests[0].url).toBe("/api/projects/project%2Fone/move")
+  expect(capturedRequests[0].method).toBe("POST")
+  expect(JSON.parse(String(capturedRequests[0].body))).toEqual({parent_id:null,ordered_ids:["two","project/one"]})
+})
+
 test("task cancellation and dismissal use separate encoded endpoints", async()=>{
   await api.cancelTask("task/one")
   await api.dismissTask("task/one")

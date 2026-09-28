@@ -6,7 +6,26 @@ export interface ProjectTreeNode extends Project {
   paperCount: number
 }
 
-const compareProjects=(left:Project,right:Project)=>left.name.localeCompare(right.name,"zh-CN")
+const compareProjects=(left:Project,right:Project)=>(left.sort_order??0)-(right.sort_order??0)||left.name.localeCompare(right.name,"zh-CN")||left.id.localeCompare(right.id)
+
+export type ProjectDropPosition="before"|"inside"|"after"
+
+export function projectDropPosition(y:number,top:number,height:number):ProjectDropPosition {
+  const fraction=(y-top)/Math.max(height,1)
+  return fraction<0.25?"before":fraction>0.75?"after":"inside"
+}
+
+export function planProjectMove(projects:Project[],sourceId:string,targetId:string|null,position:ProjectDropPosition) {
+  const source=projects.find(project=>project.id===sourceId)
+  const target=projects.find(project=>project.id===targetId)
+  if(!source||sourceId===targetId||(targetId!==null&&!target))return null
+  const parent_id=target?(position==="inside"?target.id:target.parent_id):null
+  if(parent_id===sourceId||descendantIds(projects,sourceId).has(parent_id??""))return null
+  const ordered_ids=projects.filter(project=>project.parent_id===parent_id&&project.id!==sourceId).sort(compareProjects).map(project=>project.id)
+  const index=target&&position!=="inside"?ordered_ids.indexOf(target.id)+(position==="after"?1:0):ordered_ids.length
+  ordered_ids.splice(index,0,sourceId)
+  return {parent_id,ordered_ids}
+}
 
 export function buildProjectTree(
   projects:Project[],

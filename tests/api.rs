@@ -1275,6 +1275,54 @@ async fn paper_detail_returns_structured_analysis_without_raw_markdown_frontmatt
 }
 
 #[tokio::test]
+async fn project_move_api_saves_order_and_rejects_incomplete_sibling_lists() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let a = db.create_project("a", "A", "").await.unwrap();
+    let b = db.create_project("b", "B", "").await.unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = Workspace::initialize(temp.path()).await.unwrap();
+    let app = build_router(AppState::for_test(
+        db.clone(),
+        workspace,
+        Auth::new(
+            bcrypt::hash("paper-secret", 4).unwrap(),
+            "test-jwt-secret".into(),
+        ),
+    ));
+    let token = login_token(&app).await;
+    for (order, expected_status) in [
+        (vec![b.clone(), a.clone()], StatusCode::OK),
+        (vec![b.clone()], StatusCode::BAD_REQUEST),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/projects/{b}/move"))
+                    .header("content-type", "application/json")
+                    .header("x-paper-codex-token", &token)
+                    .body(Body::from(
+                        serde_json::json!({"parent_id":null,"ordered_ids":order}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected_status);
+    }
+    assert_eq!(
+        db.list_projects()
+            .await
+            .unwrap()
+            .iter()
+            .map(|project| project.id.clone())
+            .collect::<Vec<_>>(),
+        vec![b, a]
+    );
+}
+
+#[tokio::test]
 async fn project_tree_membership_and_paper_trash_are_manageable_through_the_api() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.insert_paper("paper:one", "第一篇论文").await.unwrap();

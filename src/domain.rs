@@ -176,6 +176,8 @@ pub struct Project {
     pub name: String,
     pub purpose: String,
     pub parent_id: Option<String>,
+    #[serde(default)]
+    pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
 }

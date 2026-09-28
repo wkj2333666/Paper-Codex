@@ -225,6 +225,7 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(delete_project),
         )
         .route("/api/projects/{id}/impact", get(project_impact))
+        .route("/api/projects/{id}/move", post(move_project))
         .route(
             "/api/projects/{id}/readme",
             get(get_project_readme).put(update_project_readme),
@@ -807,6 +808,25 @@ struct UpdateProjectRequest {
     name: String,
     purpose: String,
     parent_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MoveProjectRequest {
+    parent_id: Option<String>,
+    ordered_ids: Vec<String>,
+}
+
+async fn move_project(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<MoveProjectRequest>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .db
+        .move_project(&id, request.parent_id.as_deref(), &request.ordered_ids)
+        .await
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    get_project(State(state), Path(id)).await
 }
 
 async fn update_project(
