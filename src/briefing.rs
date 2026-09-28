@@ -501,7 +501,7 @@ impl BriefingService {
                 let retry =
                     retryable.then(|| (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339());
                 let _ = sqlx::query("UPDATE daily_briefings SET status='failed',error=?,next_attempt_at=?,mail_status=CASE WHEN mail_status IN ('sent','uncertain','sending') THEN mail_status ELSE 'pending' END WHERE id=? AND status='running'").bind(error).bind(retry).bind(&run_id).execute(worker.db.pool()).await;
-                let _ = worker.diagnostic(&run_id, "stage", json!("failed")).await;
+                let _ = sqlx::query("UPDATE daily_briefings SET settings_json=json_set(settings_json,'$.search_diagnostics.failure_stage',json_extract(settings_json,'$.search_diagnostics.stage'),'$.search_diagnostics.stage','failed') WHERE id=?").bind(&run_id).execute(worker.db.pool()).await;
             }
         });
         Ok(id)
@@ -886,7 +886,16 @@ pub(crate) fn delivery_body(item: &Briefing) -> String {
     if item.status == "failed" {
         // Provider errors can include sensitive request details. Keep the email
         // notification factual and direct the owner to the authenticated UI.
-        format!("## 今日晨报未能完成\n\n本次检索或生成失败，已结束自动重试或遇到不可自动重试的错误（已尝试 {} 次）。\n\n**这不是“没有新增论文”。** 本邮件仅通知任务异常，没有生成正常论文晨报。\n\n请打开 Paper Codex 的「论文晨报」栏目查看失败原因和检索记录，再决定是否手动重试。", item.attempts)
+        let settings = serde_json::from_str::<Value>(&item.settings_json).unwrap_or_default();
+        let phase = match settings["search_diagnostics"]["failure_stage"].as_str() {
+            Some("planning") => "检索规划",
+            Some("retrieving") => "项目检索",
+            Some("empty_review") => "空结果复查",
+            Some("collecting_evidence") => "证据收集",
+            Some("writing") => "晨报撰写",
+            _ => "检索或生成",
+        };
+        format!("## 今日晨报未能完成\n\n出错阶段：{phase}。已结束自动重试或遇到不可自动重试的错误（已尝试 {} 次）。\n\n**这不是“没有新增论文”。** 本邮件仅通知任务异常，没有生成正常论文晨报。\n\n请打开 Paper Codex 的「论文晨报」栏目查看失败原因和检索记录，再决定是否手动重试。", item.attempts)
     } else if item.status == "empty"
         && serde_json::from_str::<Value>(&item.settings_json).unwrap_or_default()
             ["search_diagnostics"]["empty_reviewed"]

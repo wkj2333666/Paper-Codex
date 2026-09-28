@@ -63,7 +63,7 @@ pub(crate) fn candidates<'a>(
                     ) {
                         1
                     } else {
-                        4
+                        4 * crate::briefing_project::search_words(word).len().max(1)
                     };
                     weight
                         * (usize::from(contains_topic(&title, word)) * 3
