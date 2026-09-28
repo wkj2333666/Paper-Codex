@@ -4,6 +4,34 @@ use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
+pub(crate) const REQUEST_TIMEOUT_SECONDS: u64 = 60;
+
+pub(crate) fn fallback_eligible(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+        error.is_timeout()
+            || error.is_connect()
+            || error
+                .status()
+                .is_some_and(|status| status.is_server_error())
+    })
+}
+
+pub(crate) fn error_kind(error: &anyhow::Error) -> &'static str {
+    match error.downcast_ref::<reqwest::Error>() {
+        Some(error) if error.is_timeout() => "timeout",
+        Some(error) if error.is_connect() => "connection",
+        Some(error)
+            if error
+                .status()
+                .is_some_and(|status| status.is_server_error()) =>
+        {
+            "upstream_5xx"
+        }
+        Some(error) if error.status().is_some() => "http_rejected",
+        _ => "invalid_response",
+    }
+}
+
 pub(crate) fn since(previous: Option<&str>, now: DateTime<Utc>) -> DateTime<Utc> {
     let previous = previous
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
@@ -36,6 +64,9 @@ pub(crate) struct FetchAudit {
     pub oldest_updated: Option<String>,
     pub complete: bool,
     pub limit_reached: bool,
+    pub request_timeout_seconds: u64,
+    pub last_request_ms: u64,
+    pub error_kind: Option<String>,
     #[serde(skip)]
     last_date: Option<DateTime<Utc>>,
 }
@@ -43,6 +74,7 @@ impl FetchAudit {
     pub fn new(query: &str) -> Self {
         Self {
             query: query.into(),
+            request_timeout_seconds: REQUEST_TIMEOUT_SECONDS,
             ..Default::default()
         }
     }
@@ -96,6 +128,55 @@ impl FetchAudit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn server_errors_can_fallback_but_rejections_and_invalid_data_cannot() {
+        for (status, expected) in [
+            (503, true),
+            (504, true),
+            (429, false),
+            (401, false),
+            (403, false),
+            (400, false),
+        ] {
+            let response = reqwest::Response::from(
+                axum::http::Response::builder()
+                    .status(status)
+                    .body("")
+                    .unwrap(),
+            );
+            let error: anyhow::Error = response.error_for_status().unwrap_err().into();
+            assert_eq!(fallback_eligible(&error), expected);
+        }
+        assert!(!fallback_eligible(&anyhow::anyhow!("invalid feed")));
+        assert_eq!(
+            error_kind(&anyhow::anyhow!("invalid feed")),
+            "invalid_response"
+        );
+        assert_eq!(FetchAudit::new("query").request_timeout_seconds, 60);
+    }
+
+    #[tokio::test]
+    async fn request_timeout_is_auditable_and_can_trigger_one_fallback() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        });
+        let error: anyhow::Error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/"))
+            .timeout(std::time::Duration::from_millis(30))
+            .send()
+            .await
+            .unwrap_err()
+            .into();
+        assert!(fallback_eligible(&error));
+        assert_eq!(error_kind(&error), "timeout");
+        server.abort();
+    }
     #[test]
     fn parses_prefixed_total_and_rejects_false_empty_pages() {
         assert_eq!(total_results(r#"<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"><opensearch:totalResults>42</opensearch:totalResults></feed>"#).unwrap(), Some(42));

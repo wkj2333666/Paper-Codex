@@ -448,15 +448,7 @@ impl BriefingService {
                 .fetch_optional(self.db.pool())
                 .await?;
         if let Some(ref item) = old {
-            let recheck_empty = manual && item.status == "empty" && item.mail_attempts == 0;
-            if (item.status != "failed" && !recheck_empty)
-                || item.attempts >= 3
-                || (!manual
-                    && item
-                        .next_attempt_at
-                        .as_ref()
-                        .is_some_and(|v| v > &Utc::now().to_rfc3339()))
-            {
+            if !retry_allowed(item, manual, &Utc::now().to_rfc3339()) {
                 return Ok(item.id.clone());
             }
             if matches!(item.mail_status.as_str(), "sending" | "uncertain") {
@@ -477,11 +469,13 @@ impl BriefingService {
         if busy > 0 {
             bail!("已有晨报正在生成");
         }
+        let settings = attempt_settings(&config, old.as_ref())?;
+        let attempt = old.as_ref().map_or(1, |item| item.attempts + 1);
         let id = old
             .map(|v| v.id)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        sqlx::query("INSERT INTO daily_briefings(id,project_id,day,status,started_at,settings_json,attempts) VALUES(?,?,?,'running',?,?,1) ON CONFLICT(project_id,day) DO UPDATE SET status='running',error=NULL,started_at=excluded.started_at,settings_json=excluded.settings_json,attempts=daily_briefings.attempts+1")
-            .bind(&id).bind(project_id).bind(day).bind(Utc::now().to_rfc3339()).bind(serde_json::to_string(&config)?).execute(self.db.pool()).await?;
+        sqlx::query("INSERT INTO daily_briefings(id,project_id,day,status,started_at,settings_json,attempts) VALUES(?,?,?,'running',?,?,1) ON CONFLICT(project_id,day) DO UPDATE SET status='running',error=NULL,completed_at=NULL,next_attempt_at=NULL,mail_next_attempt_at=NULL,mail_error=NULL,mail_attempts=0,mail_status='pending',started_at=excluded.started_at,settings_json=excluded.settings_json,attempts=daily_briefings.attempts+1")
+            .bind(&id).bind(project_id).bind(day).bind(Utc::now().to_rfc3339()).bind(settings.to_string()).execute(self.db.pool()).await?;
         let worker = self.clone();
         let run_id = id.clone();
         tokio::spawn(async move {
@@ -498,9 +492,9 @@ impl BriefingService {
                 }
             };
             if let Some((error, retryable)) = error {
-                let retry =
-                    retryable.then(|| (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339());
-                let _ = sqlx::query("UPDATE daily_briefings SET status='failed',error=?,next_attempt_at=?,mail_status=CASE WHEN mail_status IN ('sent','uncertain','sending') THEN mail_status ELSE 'pending' END WHERE id=? AND status='running'").bind(error).bind(retry).bind(&run_id).execute(worker.db.pool()).await;
+                let retry = (retryable && attempt < 3)
+                    .then(|| (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339());
+                let _ = sqlx::query("UPDATE daily_briefings SET status='failed',error=?,next_attempt_at=?,completed_at=?,mail_status=CASE WHEN mail_status IN ('sent','uncertain','sending') THEN mail_status ELSE 'pending' END WHERE id=? AND status='running'").bind(error).bind(retry).bind(Utc::now().to_rfc3339()).bind(&run_id).execute(worker.db.pool()).await;
                 let _ = sqlx::query("UPDATE daily_briefings SET settings_json=json_set(settings_json,'$.search_diagnostics.failure_stage',json_extract(settings_json,'$.search_diagnostics.stage'),'$.search_diagnostics.stage','failed') WHERE id=?").bind(&run_id).execute(worker.db.pool()).await;
             }
         });
@@ -532,19 +526,35 @@ impl BriefingService {
             if page > 0 {
                 tokio::time::sleep(Duration::from_secs(3)).await;
             }
-            let response = client
-                .get("https://export.arxiv.org/api/query")
-                .query(&[
-                    ("search_query", query.to_owned()),
-                    ("sortBy", "lastUpdatedDate".into()),
-                    ("sortOrder", "descending".into()),
-                    ("start", audit.received.to_string()),
-                    ("max_results", "200".into()),
-                ])
-                .send()
-                .await?
-                .error_for_status()?;
-            let body = response.text().await?;
+            let started = std::time::Instant::now();
+            let page_result: Result<String> = async {
+                let response = client
+                    .get("https://export.arxiv.org/api/query")
+                    .timeout(Duration::from_secs(
+                        crate::briefing_retrieval::REQUEST_TIMEOUT_SECONDS,
+                    ))
+                    .query(&[
+                        ("search_query", query.to_owned()),
+                        ("sortBy", "lastUpdatedDate".into()),
+                        ("sortOrder", "descending".into()),
+                        ("start", audit.received.to_string()),
+                        ("max_results", "200".into()),
+                    ])
+                    .send()
+                    .await?
+                    .error_for_status()?;
+                Ok(response.text().await?)
+            }
+            .await;
+            audit.last_request_ms = started.elapsed().as_millis() as u64;
+            let body = match page_result {
+                Ok(body) => body,
+                Err(error) => {
+                    audit.error_kind = Some(crate::briefing_retrieval::error_kind(&error).into());
+                    self.diagnostic(id, phase, json!(&audit)).await?;
+                    return Err(error);
+                }
+            };
             let entries = parse_arxiv_search(&body)?;
             let accepted = audit.page(
                 entries,
@@ -612,14 +622,35 @@ impl BriefingService {
             .execute(self.db.pool())
             .await?;
         self.diagnostic(id, "stage", json!("retrieving")).await?;
-        let papers = self.fetch(id, "primary", since, &query).await?;
+        let (papers, primary_failed) = match self.fetch(id, "primary", since, &query).await {
+            Ok(papers) => (papers, false),
+            Err(error) if crate::briefing_retrieval::fallback_eligible(&error) => {
+                self.diagnostic(
+                    id,
+                    "fallback_reason",
+                    json!(crate::briefing_retrieval::error_kind(&error)),
+                )
+                .await?;
+                (Vec::new(), true)
+            }
+            Err(error) => return Err(error),
+        };
         let primary_count = papers.len();
         let mut unseen = self.unseen(&config.project_id, papers).await?;
         self.diagnostic(id, "primary_selection", json!({"retrieved":primary_count,"unseen":unseen.len(),"candidates":crate::briefing_editorial::candidates(&unseen, &plan.terms, config.max_papers).len()})).await?;
         let mut reviewed_empty = false;
         if crate::briefing_editorial::candidates(&unseen, &plan.terms, config.max_papers).is_empty()
         {
-            self.diagnostic(id, "stage", json!("empty_review")).await?;
+            self.diagnostic(
+                id,
+                "stage",
+                json!(if primary_failed {
+                    "fallback_retrieval"
+                } else {
+                    "empty_review"
+                }),
+            )
+            .await?;
             // One bounded, independent category scan catches over-specific
             // project queries. Retain project-topic ranking after retrieval.
             tokio::time::sleep(Duration::from_secs(3)).await;
@@ -877,6 +908,36 @@ impl BriefingService {
     }
 }
 
+fn retry_allowed(item: &Briefing, manual: bool, now: &str) -> bool {
+    let recheck_empty = manual && item.status == "empty" && item.mail_attempts == 0;
+    (item.status == "failed" || recheck_empty)
+        && (manual
+            || (item.attempts < 3
+                && item
+                    .next_attempt_at
+                    .as_deref()
+                    .is_some_and(|date| date <= now)))
+}
+
+fn attempt_settings(config: &BriefingConfig, previous: Option<&Briefing>) -> Result<Value> {
+    let mut settings = serde_json::to_value(config)?;
+    if let Some(previous) = previous {
+        let old = serde_json::from_str::<Value>(&previous.settings_json).unwrap_or_default();
+        let mut history = old["attempt_history"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        history.push(json!({
+            "attempt": previous.attempts, "status": previous.status,
+            "started_at": previous.started_at, "completed_at": previous.completed_at,
+            "error": previous.error, "search_diagnostics": old["search_diagnostics"],
+            "mail_status": previous.mail_status, "mail_attempts": previous.mail_attempts,
+        }));
+        settings["attempt_history"] = json!(history);
+    }
+    Ok(settings)
+}
+
 pub(crate) fn can_deliver(item: &Briefing) -> bool {
     matches!(item.status.as_str(), "completed" | "empty")
         || (item.status == "failed" && (item.attempts >= 3 || item.next_attempt_at.is_none()))
@@ -891,6 +952,7 @@ pub(crate) fn delivery_body(item: &Briefing) -> String {
             Some("planning") => "检索规划",
             Some("retrieving") => "项目检索",
             Some("empty_review") => "空结果复查",
+            Some("fallback_retrieval") => "分类降级检索",
             Some("collecting_evidence") => "证据收集",
             Some("writing") => "晨报撰写",
             _ => "检索或生成",
@@ -1042,6 +1104,22 @@ mod tests {
         assert!(!can_deliver(&item));
         item.attempts = 3;
         assert!(can_deliver(&item));
+        assert!(!retry_allowed(&item, false, "2100-01-01"));
+        assert!(retry_allowed(&item, true, "2100-01-01"));
+        item.mail_status = "sent".into();
+        item.mail_attempts = 1;
+        let settings = attempt_settings(&BriefingConfig::default(), Some(&item)).unwrap();
+        assert_eq!(settings["attempt_history"][0]["attempt"], 3);
+        assert_eq!(settings["attempt_history"][0]["mail_status"], "sent");
+        assert_eq!(settings["attempt_history"][0]["mail_attempts"], 1);
+        item.settings_json = settings.to_string();
+        item.attempts = 4;
+        assert!(!retry_allowed(&item, false, "2100-01-01"));
+        let settings = attempt_settings(&BriefingConfig::default(), Some(&item)).unwrap();
+        assert_eq!(settings["attempt_history"].as_array().unwrap().len(), 2);
+        item.status = "completed".into();
+        assert!(!retry_allowed(&item, true, "2100-01-01"));
+        item.status = "failed".into();
         item.error = Some("sensitive-provider-detail".into());
         assert!(!delivery_body(&item).contains("sensitive-provider-detail"));
         item.attempts = 1;
