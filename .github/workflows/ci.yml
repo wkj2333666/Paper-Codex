@@ -79,5 +79,11 @@ jobs:
       - name: Run all Rust tests
         run: cargo test --all-targets --locked
 
+      - name: Validate bundled morning briefing skill
+        run: |
+          python3 -m venv "$RUNNER_TEMP/skill-validator"
+          "$RUNNER_TEMP/skill-validator/bin/pip" install PyYAML==6.0.2
+          "$RUNNER_TEMP/skill-validator/bin/python" scripts/quick_validate_skill.py workspace-template/.codex/skills/project-morning-briefing
+
       - name: Verify SMTP adapter without network or credentials
         run: python3 -m unittest discover -s scripts -p 'test_briefing_mail.py'

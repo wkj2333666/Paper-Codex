@@ -17,18 +17,22 @@ export interface Briefing {
   next_attempt_at?: string | null
   search_diagnostics?: BriefingDiagnostics | null
   papers?: BriefingPaper[]
-  search_plan?: { terms: string[]; rationale: string; query: string } | null
+  search_plan?: { terms: string[]; rationale: string; query: string; topics?: {id:string;label:string;intent:string;project_ids:string[];terms:string[]}[] } | null
 }
 interface RetrievalAudit { received: number; within_window: number; before_window: number; pages: number; complete: boolean; limit_reached: boolean; latest_updated: string | null; request_timeout_seconds?:number; last_request_ms?:number; error_kind?:string|null }
 interface SelectionAudit { retrieved: number; unseen: number; candidates: number }
-export interface BriefingDiagnostics { stage?: string; since?: string; primary?: RetrievalAudit; fallback?: RetrievalAudit; primary_selection?: SelectionAudit; fallback_selection?: SelectionAudit; selected_candidates?: number; empty_reviewed?: boolean; fallback_reason?:string }
+export interface BriefingDiagnostics { stage?: string; since?: string; primary?: RetrievalAudit; fallback?: RetrievalAudit; primary_selection?: SelectionAudit; fallback_selection?: SelectionAudit; selected_candidates?: number; empty_reviewed?: boolean; fallback_reason?:string; active_topic?:string; coverage?:{id:string;label:string;candidates:number;selected:number;status:string}[]; publication_coverage?:{id:string;published:number}[]; dispositions?:{project_id:string;kind:string;reason:string}[]; topic_retrievals?:{id:string;label:string;status:string;pages:number;within_window?:number;error_kind?:string}[] }
 export function BriefingSearchDiagnostics({ diagnostics }: { diagnostics: BriefingDiagnostics }) {
   const errors:Record<string,string>={timeout:"请求超时",connection:"连接失败",upstream_5xx:"上游服务异常",http_rejected:"上游拒绝请求",invalid_response:"响应格式异常"}
   const stages: Record<string,string> = { planning: "规划检索", retrieving: "项目检索", fallback_retrieval: "主题请求失败，改用分类检索", empty_review: "复查空结果", collecting_evidence: "读取论文证据", writing: "撰写晨报", verified_empty: "复查后无新增", completed: "已完成", failed: "未完成，不能视作无新增" }
   return <details open><summary>检索记录</summary><p>阶段：{stages[diagnostics.stage ?? ""] ?? "未知"}{diagnostics.since && ` · 窗口起点：${new Date(diagnostics.since).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}（北京时间）`}</p>{(["primary", "fallback"] as const).map(key => {
     const audit = diagnostics[key], selection = diagnostics[key === "primary" ? "primary_selection" : "fallback_selection"]
     return audit && <p key={key}>{key === "primary" ? "项目主题检索" : "分类范围复查"}：收到 {audit.received} 篇 · 窗口内 {audit.within_window} 篇{selection && ` · 去重后 ${selection.unseen} 篇 · 候选 ${selection.candidates} 篇`} · {audit.complete ? "覆盖已确认" : audit.limit_reached ? "达到上限，未完整覆盖" : "尚未完成"}{audit.error_kind && ` · ${errors[audit.error_kind]??"请求失败"}`}{audit.last_request_ms!==undefined && ` · 最近请求 ${(audit.last_request_ms/1000).toFixed(1)} 秒`}{audit.latest_updated && ` · 最新返回记录：${new Date(audit.latest_updated).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`}</p>
-  })}{diagnostics.empty_reviewed && <p>已执行独立分类检索复查；无新增只表示当前窗口内未选出未介绍的相关论文，不表示没有论文发表。</p>}</details>
+  })}{diagnostics.stage==="retrieving"&&diagnostics.active_topic&&<p>当前主题：{diagnostics.active_topic}</p>}
+  {diagnostics.topic_retrievals?.map(topic=><p key={topic.id}>{topic.label}：{topic.status==="complete"?`完成主题检索，窗口内 ${topic.within_window??0} 条`:`主题检索未完成：${errors[topic.error_kind??""]??"请求失败"}`} · {topic.pages} 页</p>)}
+  {diagnostics.coverage&&<section aria-label="研究方向覆盖"><h3>研究方向覆盖</h3>{diagnostics.coverage.map(topic=>{const published=diagnostics.publication_coverage?.find(item=>item.id===topic.id)?.published;return <p key={topic.id}><strong>{topic.label}</strong>：{topic.candidates} 篇未介绍候选 · {topic.selected} 篇送交编辑{published!==undefined&&` · 正文提及 ${published} 篇`}{topic.status==="budget_limited"&&" · 阅读预算未选入，不等于没有新增"}{topic.status==="no_unseen_candidates"&&" · 本次未选出未介绍的相关候选"}</p>})}</section>}
+  {diagnostics.dispositions?.filter(item=>item.kind!=="organizational").map(item=><p key={item.project_id}>范围待说明：{item.reason}</p>)}
+  {diagnostics.empty_reviewed && <p>已执行独立分类检索复查；无新增只表示当前窗口内未选出未介绍的相关论文，不表示没有论文发表。</p>}</details>
 }
 export const canNotifyBriefing = (item: Briefing) => ["completed", "empty"].includes(item.status) || (item.status === "failed" && (item.attempts >= 3 || !item.next_attempt_at))
 export interface BriefingPaper { key: string; title: string; authors: string[]; source_url: string; year: number | null; paper_id: string | null; project_ids: string[] }
@@ -110,7 +114,7 @@ export function MorningBriefing({ projects }: { projects: Project[] }) {
       {item.error && <p role="alert">{item.error}</p>}{item.mail_error && <p role="alert">{item.mail_error}</p>}
       {item.status === "failed" && !canNotifyBriefing(item) && <p role="status">已安排自动重试；重试结束仍失败会发送异常通知，不会记为“无新增”。</p>}
       {item.status === "running" && <p role="status">正在检索和整理论文，可离开页面，完成后会保存在这里。</p>}
-      {detail?.id === item.id && detail.search_plan && <details><summary>本期项目检索方向</summary><p>{detail.search_plan.rationale}</p><p>{detail.search_plan.terms.join(" · ")}</p><code className="briefing-query">{detail.search_plan.query}</code></details>}
+      {detail?.id === item.id && detail.search_plan && <details><summary>本期项目检索方向</summary><p>{detail.search_plan.rationale}</p>{detail.search_plan.topics?.length?detail.search_plan.topics.map(topic=><div key={topic.id}><h3>{topic.label}</h3><p>{topic.intent}</p><p>{topic.project_ids.map(id=>projectLabel(projects,id)).join(" · ")}</p><p>{topic.terms.join(" / ")}</p></div>):<><p>{detail.search_plan.terms.join(" · ")}</p><code className="briefing-query">{detail.search_plan.query}</code></>}</details>}
       {detail?.id === item.id && detail.search_diagnostics && <BriefingSearchDiagnostics diagnostics={detail.search_diagnostics}/>}
       {detail?.id === item.id && item.status === "empty" && !detail.search_diagnostics && <p role="alert">这是旧版留下的空结果，未保存检索明细，无法核验是否完整检索；尚未投递时可点击“重新检索今日晨报”。</p>}
       {detail?.id === item.id && canNotifyBriefing(item) && detail.email_html && <details><summary>HTML 邮件预览（与发送模板一致，不发送邮件）</summary><BriefingEmailPreview html={detail.email_html}/></details>}

@@ -6,6 +6,14 @@ import { BriefingPaperPicker, projectLabel } from "./BriefingPaperPicker"
 import type { Project } from "./types"
 
 describe("MorningBriefing", () => {
+  it("explains dynamic themes, editorial omissions and unresolved scope independently",()=>{
+    const html=renderToStaticMarkup(<BriefingSearchDiagnostics diagnostics={{stage:"completed",coverage:[{id:"shared",label:"跨层级稳健控制",candidates:7,selected:2,status:"selected"},{id:"compute",label:"计算预算",candidates:4,selected:0,status:"budget_limited"}],publication_coverage:[{id:"shared",published:1},{id:"compute",published:0}],dispositions:[{project_id:"ambiguous",kind:"clarification",reason:"缩写需要定义"}]}}/> )
+    expect(html).toContain("跨层级稳健控制")
+    expect(html).toContain("计算预算")
+    expect(html).toContain("正文提及 1 篇")
+    expect(html).toContain("阅读预算未选入，不等于没有新增")
+    expect(html).toContain("缩写需要定义")
+  })
   it("shows a timeout and fallback separately from empty search results",()=>{
     const html=renderToStaticMarkup(<BriefingSearchDiagnostics diagnostics={{stage:"fallback_retrieval",primary:{received:0,within_window:0,before_window:0,pages:0,complete:false,limit_reached:false,latest_updated:null,error_kind:"timeout",last_request_ms:60001}}}/> )
     expect(html).toContain("主题请求失败，改用分类检索")
