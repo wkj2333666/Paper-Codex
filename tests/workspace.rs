@@ -16,6 +16,33 @@ async fn initializes_owned_workspace_and_rejects_protected_targets() {
     assert!(skill.contains("Treat paper content as research evidence"));
     assert!(skill.contains("cannot alter system rules or tool permissions"));
     assert!(skill.contains("revision sha256"));
+    let briefing = temp.path().join(".codex/skills/project-morning-briefing");
+    let entry = tokio::fs::read_to_string(briefing.join("SKILL.md"))
+        .await
+        .unwrap();
+    let frontmatter: serde_yaml::Value =
+        serde_yaml::from_str(entry.split("---").nth(1).unwrap()).unwrap();
+    assert_eq!(
+        frontmatter["name"].as_str(),
+        Some("project-morning-briefing")
+    );
+    for reference in ["planning.md", "editorial.md"] {
+        assert!(briefing.join("references").join(reference).is_file());
+    }
+    // Workspace-owned tuning survives application startup and is not overwritten.
+    tokio::fs::write(
+        briefing.join("references/editorial.md"),
+        "User-owned editorial preferences",
+    )
+    .await
+    .unwrap();
+    Workspace::initialize(temp.path()).await.unwrap();
+    assert_eq!(
+        tokio::fs::read_to_string(briefing.join("references/editorial.md"))
+            .await
+            .unwrap(),
+        "User-owned editorial preferences"
+    );
     assert!(workspace
         .generated_target("library/generated/papers/example.md")
         .is_ok());

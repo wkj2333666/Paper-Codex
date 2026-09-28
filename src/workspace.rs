@@ -71,6 +71,18 @@ impl Workspace {
         }
         for (relative, contents) in [
             (
+                ".codex/skills/project-morning-briefing/SKILL.md",
+                crate::briefing_skill::ENTRY,
+            ),
+            (
+                ".codex/skills/project-morning-briefing/references/planning.md",
+                crate::briefing_skill::PLANNING,
+            ),
+            (
+                ".codex/skills/project-morning-briefing/references/editorial.md",
+                crate::briefing_skill::EDITORIAL,
+            ),
+            (
                 ".codex/skills/paper-research/SKILL.md",
                 PAPER_RESEARCH_SKILL,
             ),

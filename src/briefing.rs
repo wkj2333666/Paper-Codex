@@ -517,12 +517,17 @@ impl BriefingService {
         phase: &str,
         since: DateTime<Utc>,
         query: &str,
+        remaining_pages: &mut usize,
     ) -> Result<Vec<WorkMetadata>> {
         let client = research_http_client()?;
         let mut all = Vec::new();
         let mut audit = crate::briefing_retrieval::FetchAudit::new(query);
         self.diagnostic(id, phase, json!(&audit)).await?;
         for page in 0..10 {
+            if *remaining_pages == 0 {
+                bail!("晨报共享检索预算已用完，未确认所有主题覆盖；不视作无新增");
+            }
+            *remaining_pages -= 1;
             if page > 0 {
                 tokio::time::sleep(Duration::from_secs(3)).await;
             }
@@ -608,38 +613,70 @@ impl BriefingService {
         self.diagnostic(id, "since", json!(since.to_rfc3339()))
             .await?;
         self.diagnostic(id, "stage", json!("planning")).await?;
-        let context =
+        let mut context =
             crate::briefing_project::context(&self.db, &self.workspace, &config.project_id).await?;
         let plan = crate::briefing_project::plan(&self.codex, &self.workspace, &context, &config.keywords, cancel.clone()).await.map_err(|error| {
             tracing::warn!(%error,"project briefing search planning failed; no automatic model retries");
             ModelRejected
-        })?.with_interests(&config.keywords);
+        })?.normalized();
         let query = plan.query(&config.categories);
-        let search_plan = json!({"terms":plan.terms,"rationale":plan.rationale,"query":query,"project_name":context["project"]["name"]});
+        let search_plan = json!({"terms":plan.terms,"topics":plan.topics,"dispositions":plan.dispositions,"rationale":plan.rationale,"query":query,"project_name":context["project"]["name"]});
         sqlx::query("UPDATE daily_briefings SET settings_json=json_set(settings_json,'$.search_plan',json(?)) WHERE id=?")
             .bind(serde_json::to_string(&search_plan)?)
             .bind(id)
             .execute(self.db.pool())
             .await?;
         self.diagnostic(id, "stage", json!("retrieving")).await?;
-        let (papers, primary_failed) = match self.fetch(id, "primary", since, &query).await {
-            Ok(papers) => (papers, false),
-            Err(error) if crate::briefing_retrieval::fallback_eligible(&error) => {
-                self.diagnostic(
-                    id,
-                    "fallback_reason",
-                    json!(crate::briefing_retrieval::error_kind(&error)),
-                )
-                .await?;
-                (Vec::new(), true)
+        let mut remaining_pages = 24usize;
+        let mut papers = Vec::new();
+        let mut primary_failed = false;
+        let mut retrievals = Vec::new();
+        for (index, topic) in plan.topics.iter().enumerate() {
+            if index > 0 {
+                tokio::time::sleep(Duration::from_secs(3)).await;
             }
-            Err(error) => return Err(error),
-        };
+            self.diagnostic(id, "active_topic", json!(topic.label))
+                .await?;
+            let topic_query =
+                crate::briefing_project::SearchPlan::query_terms(&config.categories, &topic.terms);
+            let before = remaining_pages;
+            let result = self
+                .fetch(
+                    id,
+                    &format!("topic_{index}"),
+                    since,
+                    &topic_query,
+                    &mut remaining_pages,
+                )
+                .await;
+            match result {
+                Ok(found) => {
+                    retrievals.push(json!({"id":topic.id,"label":topic.label,"status":"complete","within_window":found.len(),"pages":before-remaining_pages}));
+                    papers.extend(found);
+                }
+                Err(error) => {
+                    retrievals.push(json!({"id":topic.id,"label":topic.label,"status":"failed","error_kind":crate::briefing_retrieval::error_kind(&error),"pages":before-remaining_pages}));
+                    self.diagnostic(id, "topic_retrievals", json!(&retrievals))
+                        .await?;
+                    if !crate::briefing_retrieval::fallback_eligible(&error) {
+                        return Err(error);
+                    }
+                    primary_failed = true;
+                }
+            }
+            self.diagnostic(id, "topic_retrievals", json!(&retrievals))
+                .await?;
+        }
         let primary_count = papers.len();
         let mut unseen = self.unseen(&config.project_id, papers).await?;
-        self.diagnostic(id, "primary_selection", json!({"retrieved":primary_count,"unseen":unseen.len(),"candidates":crate::briefing_editorial::candidates(&unseen, &plan.terms, config.max_papers).len()})).await?;
+        self.diagnostic(id, "primary_selection", json!({"retrieved":primary_count,"unseen":unseen.len(),"candidates":crate::briefing_editorial::select(&unseen, &plan, config.max_papers).len()})).await?;
         let mut reviewed_empty = false;
-        if crate::briefing_editorial::candidates(&unseen, &plan.terms, config.max_papers).is_empty()
+        // A shared category review is bounded and runs at most once, even when
+        // several themes have no unseen matches or suffered transient failure.
+        if primary_failed
+            || plan.topics.iter().any(|topic| {
+                crate::briefing_editorial::candidates(&unseen, &topic.terms, 1).is_empty()
+            })
         {
             self.diagnostic(
                 id,
@@ -651,8 +688,6 @@ impl BriefingService {
                 }),
             )
             .await?;
-            // One bounded, independent category scan catches over-specific
-            // project queries. Retain project-topic ranking after retrieval.
             tokio::time::sleep(Duration::from_secs(3)).await;
             let fallback_query = config
                 .categories
@@ -660,14 +695,26 @@ impl BriefingService {
                 .map(|category| format!("cat:{category}"))
                 .collect::<Vec<_>>()
                 .join(" OR ");
-            let fallback = self.fetch(id, "fallback", since, &fallback_query).await?;
+            let fallback = self
+                .fetch(id, "fallback", since, &fallback_query, &mut remaining_pages)
+                .await?;
             let fallback_count = fallback.len();
-            unseen = self.unseen(&config.project_id, fallback).await?;
-            self.diagnostic(id, "fallback_selection", json!({"retrieved":fallback_count,"unseen":unseen.len(),"candidates":crate::briefing_editorial::candidates(&unseen, &plan.terms, config.max_papers).len()})).await?;
+            unseen.extend(fallback);
+            unseen = self.unseen(&config.project_id, unseen).await?;
+            self.diagnostic(id, "fallback_selection", json!({"retrieved":fallback_count,"unseen":unseen.len(),"candidates":crate::briefing_editorial::select(&unseen, &plan, config.max_papers).len()})).await?;
             reviewed_empty = true;
         }
-        let candidates =
-            crate::briefing_editorial::candidates(&unseen, &plan.terms, config.max_papers);
+        let candidates = crate::briefing_editorial::select(&unseen, &plan, config.max_papers);
+        let coverage = crate::briefing_editorial::coverage(&unseen, &candidates, &plan);
+        self.diagnostic(id, "coverage", coverage.clone()).await?;
+        self.diagnostic(id, "dispositions", json!(plan.dispositions))
+            .await?;
+        self.diagnostic(id, "request_pages_used", json!(24 - remaining_pages))
+            .await?;
+        context["briefing_coverage"] = coverage;
+        context["briefing_search_plan"] = json!(plan);
+        context["briefing_editorial_skill"] =
+            json!(crate::briefing_skill::instructions(&self.workspace, false).await?);
         self.diagnostic(id, "empty_reviewed", json!(reviewed_empty))
             .await?;
         self.diagnostic(id, "selected_candidates", json!(candidates.len()))
@@ -685,6 +732,7 @@ impl BriefingService {
         let mut sources = Vec::new();
         for (index, paper) in candidates.iter().enumerate() {
             let mut entry = json!({"paper":paper,"evidence":"abstract","fulltext":null});
+            entry["research_topics"] = json!(plan.topics.iter().filter(|topic| crate::briefing_editorial::topic_score(paper, &topic.terms)>0).map(|topic| json!({"id":topic.id,"label":topic.label,"project_ids":topic.project_ids})).collect::<Vec<_>>());
             if index < config.fulltext_papers {
                 let work = self.research.store().upsert_work((*paper).clone()).await?;
                 if let Ok(Ok(inspected)) = tokio::time::timeout(
@@ -720,7 +768,7 @@ impl BriefingService {
             }
         })
         .await;
-        let markdown = if sources.is_empty() {
+        let mut markdown = if sources.is_empty() {
             format!("## 今日晨报：暂无新增\n\n已完成项目主题检索及分类范围复查，本次未选出符合项目方向、且尚未介绍的论文。**这不表示今天没有论文发表。**\n\n检索窗口起点：{}（UTC）。已核对窗口、去重和主题筛选；具体检索数量与条件可在网页「检索记录」查看。\n\narXiv 索引可能延迟；后续晨报保留 7 天重叠窗口复查。今天仍发送本状态简报，不静默跳过。", since.format("%Y-%m-%d %H:%M"))
         } else {
             self.diagnostic(id, "stage", json!("writing")).await?;
@@ -744,7 +792,7 @@ impl BriefingService {
                         thread_id: None,
                         cwd,
                         prompt,
-                        skill: None,
+                        skill: Some(crate::briefing_skill::selection(&self.workspace)),
                         tool_preferences: vec![],
                         output_schema: None,
                         settings: self.codex.research_conversation_settings(),
@@ -760,6 +808,38 @@ impl BriefingService {
             }
             outcome.final_text
         };
+        // Keep omissions observable without throwing away a useful answer or
+        // initiating extra model retries merely to satisfy a layout template.
+        let published = selected_works(&markdown, &sources);
+        let publication: Vec<_> = plan.topics.iter().map(|topic| {
+            let count = published.iter().filter(|paper| crate::briefing_editorial::topic_score(paper, &topic.terms)>0).count();
+            let available = unseen.iter().filter(|paper| crate::briefing_editorial::topic_score(paper, &topic.terms)>0).count();
+            if available > 0 && count == 0 {
+                markdown.push_str(&format!("\n\n覆盖提醒：{} 检索到 {} 篇未介绍的相关候选，本期正文未展开；不能据此视为该方向没有新增。", topic.label, available));
+            }
+            json!({"id":topic.id,"label":topic.label,"published":count})
+        }).collect();
+        for disposition in plan
+            .dispositions
+            .iter()
+            .filter(|item| item.kind != "organizational")
+        {
+            let label = context["structure"]
+                .as_array()
+                .and_then(|nodes| {
+                    nodes
+                        .iter()
+                        .find(|node| node["id"] == disposition.project_id)
+                })
+                .and_then(|node| node["name"].as_str())
+                .unwrap_or(&disposition.project_id);
+            markdown.push_str(&format!(
+                "\n\n范围说明：{label} — {}。本次未据此宣称完成该方向检索。",
+                disposition.reason
+            ));
+        }
+        self.diagnostic(id, "publication_coverage", json!(publication))
+            .await?;
         if *cancel.borrow() {
             bail!("晨报生成已取消");
         }
