@@ -1,0 +1,21 @@
+.project-row { position: relative; }
+.project-row.project-drop-before::before,
+.project-row.project-drop-after::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--green);
+  pointer-events: none;
+  z-index: 1;
+}
+.project-row.project-drop-before::before { top: 0; }
+.project-row.project-drop-after::after { bottom: 0; }
+.project-row.project-drop-inside {
+  outline: 2px solid var(--green);
+  outline-offset: -2px;
+  background: var(--green-soft);
+}
+.project-list[aria-busy="true"] { opacity: .7; }

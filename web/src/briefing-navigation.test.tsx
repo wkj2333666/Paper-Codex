@@ -6,6 +6,17 @@ import type { Dashboard } from "./types"
 const dashboard: Dashboard = { papers: [], projects: [], tasks: [], inbox: [], trash_count: 0, project_memberships: {} }
 
 describe("dedicated briefing navigation", () => {
+  it("renders persisted project order and explains the drag targets",()=>{
+    const projects=[
+      {id:"a",slug:"a",name:"AAA project",purpose:"",parent_id:null,sort_order:1,created_at:"",updated_at:""},
+      {id:"z",slug:"z",name:"ZZZ project",purpose:"",parent_id:null,sort_order:0,created_at:"",updated_at:""},
+    ]
+    const html=renderToStaticMarkup(<Sidebar dashboard={{...dashboard,projects}} selection={{kind:"workbench"}} select={()=>{}} refresh={async()=>{}} logout={()=>{}} drawerOpen={false} onCollapse={()=>{}} themePreference="light" resolvedTheme="light" onCycleTheme={()=>{}}/>)
+    expect(html.indexOf("ZZZ project")).toBeLessThan(html.indexOf("AAA project"))
+    expect(html).toContain("拖到上/下沿调整顺序，拖到中间移入项目")
+    expect(html).toContain('draggable="true"')
+  })
+
   it("shows an active top-level briefing entry in the shared sidebar", () => {
     const html = renderToStaticMarkup(<Sidebar dashboard={dashboard} selection={{kind:"briefing"}} select={()=>{}} refresh={async()=>{}} logout={()=>{}} drawerOpen={false} onCollapse={()=>{}} themePreference="light" resolvedTheme="light" onCycleTheme={()=>{}}/>)
     const active = html.match(/<button class="nav-row active" aria-current="page"[^>]*>([\s\S]*?)<\/button>/)?.[1]

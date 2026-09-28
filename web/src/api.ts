@@ -38,6 +38,7 @@ export const api = {
   upload(file:File,project_id?:string){const body=new FormData();body.append("file",file);if(project_id)body.append("project_id",project_id);return request<{task_id:string}>("/api/intake/upload",{method:"POST",body})},
   createProject:(name:string,purpose:string,parent_id?:string|null)=>request<Project>("/api/projects",{method:"POST",body:JSON.stringify({name,purpose,parent_id:parent_id??null})}),
   updateProject:(id:string,value:{name:string;purpose:string;parent_id:string|null})=>request<Project>(`/api/projects/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify(value)}),
+  moveProject:(id:string,value:{parent_id:string|null;ordered_ids:string[]})=>request<Project>(`/api/projects/${encodeURIComponent(id)}/move`,{method:"POST",body:JSON.stringify(value)}),
   deleteProject:(id:string,subtree=false)=>request<void>(`/api/projects/${encodeURIComponent(id)}${subtree?"?mode=subtree":""}`,{method:"DELETE"}),
   projectImpact:(id:string)=>request<ProjectImpact>(`/api/projects/${encodeURIComponent(id)}/impact`),
   projectReadme:(id:string)=>request<ProjectReadme>(`/api/projects/${encodeURIComponent(id)}/readme`),

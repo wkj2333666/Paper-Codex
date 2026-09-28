@@ -1,5 +1,6 @@
 import { Component, FormEvent, lazy, ReactNode, Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
 import type { CSSProperties } from "react"
+import "./project-drag.css"
 import {
   ArchiveRestore, BookOpen, CheckCircle2, ChevronDown, ChevronRight,
   CircleAlert, Database, FileText, Folder, FolderPlus, FolderTree, Inbox, Library,
@@ -8,7 +9,7 @@ import {
 } from "lucide-react"
 import { api, ApiError, session, streamEvents } from "./api"
 import { loginErrorMessage } from "./login"
-import { buildProjectTree, descendantIds, type ProjectTreeNode } from "./project-tree"
+import { buildProjectTree, planProjectMove, projectDropPosition, type ProjectDropPosition, type ProjectTreeNode } from "./project-tree"
 import { projectBreadcrumb } from "./project-context"
 import { briefFromAnalysis, describePaperImpact } from "./reading"
 import { initialState, projectPaperCount, reduceEvent } from "./state"
@@ -217,9 +218,18 @@ function Login({onLogin}:{onLogin:()=>void}){
 
 export function Sidebar({dashboard,selection,select,refresh,logout,drawerOpen,onCollapse,themePreference,resolvedTheme,onCycleTheme}:{dashboard:Dashboard;selection:Selection;select:Select;refresh:()=>Promise<void>;logout:()=>void;drawerOpen:boolean;onCollapse:()=>void;themePreference:ThemePreference;resolvedTheme:ResolvedTheme;onCycleTheme:()=>void}){
   const [creating,setCreating]=useState(false);const [name,setName]=useState("");const [purpose,setPurpose]=useState("");const [parentId,setParentId]=useState<string|null>(null);const [projectQuery,setProjectQuery]=useState("")
+  const [draggedId,setDraggedId]=useState<string|null>(null);const [moveError,setMoveError]=useState("");const [moving,setMoving]=useState(false);const movePending=useRef(false)
   const tree=useMemo(()=>buildProjectTree(dashboard.projects,dashboard.project_memberships),[dashboard.projects,dashboard.project_memberships])
   const create=async(event:FormEvent)=>{event.preventDefault();const project=await api.createProject(name,purpose,parentId);setCreating(false);setName("");setPurpose("");setParentId(null);await refresh();select({kind:"project",id:project.id})}
-  const move=async(sourceId:string,parent_id:string|null)=>{const source=dashboard.projects.find(project=>project.id===sourceId);if(!source||source.id===parent_id||descendantIds(dashboard.projects,source.id).has(parent_id??""))return;await api.updateProject(source.id,{name:source.name,purpose:source.purpose,parent_id});await refresh()}
+  const move=async(sourceId:string,targetId:string|null,position:ProjectDropPosition)=>{
+    if(movePending.current)return
+    const plan=planProjectMove(dashboard.projects,sourceId,targetId,position)
+    if(!plan)return
+    movePending.current=true;setMoving(true);setMoveError("")
+    try{await api.moveProject(sourceId,plan);await refresh()}
+    catch(error){setMoveError(`项目移动未完成：${error instanceof Error?error.message:String(error)}`);try{await refresh()}catch{/* Keep the move error visible. */}}
+    finally{movePending.current=false;setMoving(false)}
+  }
   const rename=async(project:Project)=>{const next=window.prompt("新的项目名称",project.name)?.trim();if(!next)return;await api.updateProject(project.id,{name:next,purpose:project.purpose,parent_id:project.parent_id});await refresh()}
   const remove=async(project:Project)=>{const impact=await api.projectImpact(project.id);if(!window.confirm(`删除“${project.name}”？\n${impact.direct_papers} 篇直接论文将回到收件箱，${impact.descendant_projects} 个子项目会上移。论文不会被删除。`))return;await api.deleteProject(project.id);await refresh();select({kind:"workbench"})}
   return <aside className={`sidebar workspace-panel${drawerOpen?" drawer-open":""}`} data-panel="sidebar"><div className="brand"><div className="brand-icon"><BookOpen size={19}/></div><div><strong>Paper Codex</strong><span>论文研究记忆</span></div><PanelCollapseButton label="文件树" direction="left" onCollapse={onCollapse}/></div>
@@ -234,22 +244,39 @@ export function Sidebar({dashboard,selection,select,refresh,logout,drawerOpen,on
     <div className="section-title"><span>研究项目</span><button onClick={()=>setCreating(value=>!value)} title="新建项目"><FolderPlus size={15}/></button></div>
     <div className="project-search"><Search/><input value={projectQuery} onChange={event=>setProjectQuery(event.target.value)} placeholder="查找项目"/></div>
     {creating&&<form className="new-project" onSubmit={create}><input autoFocus value={name} onChange={event=>setName(event.target.value)} placeholder="项目名称" required/><textarea value={purpose} onChange={event=>setPurpose(event.target.value)} placeholder="研究目标（可选）"/><select value={parentId??""} onChange={event=>setParentId(event.target.value||null)}><option value="">顶层项目</option>{dashboard.projects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="small-primary">创建项目</button></form>}
-    <div className="project-list" onDragOver={event=>event.preventDefault()} onDrop={event=>{event.preventDefault();const id=event.dataTransfer.getData("text/project-id");if(id)void move(id,null)}}>
-      {tree.length?tree.map(node=><ProjectTreeRow key={node.id} node={node} query={projectQuery} selected={selection.kind==="project"?selection.id:undefined} select={select} move={move} rename={rename} remove={remove}/>):<div className="empty-small">还没有项目</div>}
+    {moveError&&<div className="form-error" role="alert">{moveError}</div>}
+    {moving&&<div className="empty-small" role="status">正在保存项目顺序…</div>}
+    <div className="project-list" aria-busy={moving} onDragOver={event=>{if(draggedId&&!moving){event.preventDefault();event.dataTransfer.dropEffect="move"}}} onDrop={event=>{event.preventDefault();const id=event.dataTransfer.getData("text/project-id");setDraggedId(null);if(id)void move(id,null,"inside")}}>
+      {tree.length?tree.map(node=><ProjectTreeRow key={node.id} node={node} projects={dashboard.projects} draggedId={draggedId} onDragging={setDraggedId} moving={moving} query={projectQuery} selected={selection.kind==="project"?selection.id:undefined} select={select} move={move} rename={rename} remove={remove}/>):<div className="empty-small">还没有项目</div>}
     </div>
     <div className="sidebar-foot"><span>{dashboard.papers.length} 篇论文</span><div className="sidebar-actions"><ThemeToggle preference={themePreference} resolvedTheme={resolvedTheme} onCycle={onCycleTheme}/><button onClick={logout}><LogOut size={14}/>退出</button></div></div>
   </aside>
 }
 
-function ProjectTreeRow({node,query,selected,select,move,rename,remove,depth=0}:{node:ProjectTreeNode;query:string;selected?:string;select:Select;move:(source:string,parent:string|null)=>Promise<void>;rename:(project:Project)=>Promise<void>;remove:(project:Project)=>Promise<void>;depth?:number}){
+export function ProjectTreeRow({node,projects,draggedId,onDragging,moving,query,selected,select,move,rename,remove,depth=0}:{node:ProjectTreeNode;projects:Project[];draggedId:string|null;onDragging:(id:string|null)=>void;moving:boolean;query:string;selected?:string;select:Select;move:(source:string,target:string|null,position:ProjectDropPosition)=>Promise<void>;rename:(project:Project)=>Promise<void>;remove:(project:Project)=>Promise<void>;depth?:number}){
   const [open,setOpen]=useState(true)
+  const [dropPosition,setDropPosition]=useState<ProjectDropPosition|null>(null)
+  useEffect(()=>{setDropPosition(null)},[draggedId])
   const matches=!query.trim()||node.name.toLowerCase().includes(query.trim().toLowerCase())||node.children.some(child=>treeContains(child,query))
   if(!matches)return null
-  return <div className="tree-node"><div className={selected===node.id?"project-row active":"project-row"} style={{paddingLeft:8+depth*15}} draggable onDragStart={event=>event.dataTransfer.setData("text/project-id",node.id)} onDragOver={event=>event.preventDefault()} onDrop={event=>{event.preventDefault();event.stopPropagation();const source=event.dataTransfer.getData("text/project-id");if(source)void move(source,node.id)}}>
+  return <div className="tree-node"><div className={`project-row${selected===node.id?" active":""}${dropPosition?` project-drop-${dropPosition}`:""}`} style={{paddingLeft:8+depth*15}} draggable={!moving} title="拖到上/下沿调整顺序，拖到中间移入项目" onDragStart={event=>{event.dataTransfer.setData("text/project-id",node.id);event.dataTransfer.effectAllowed="move";onDragging(node.id)}} onDragEnd={()=>{setDropPosition(null);onDragging(null)}} onDragOver={event=>{
+    event.stopPropagation()
+    const rect=event.currentTarget.getBoundingClientRect()
+    const position=projectDropPosition(event.clientY,rect.top,rect.height)
+    if(!moving&&draggedId&&planProjectMove(projects,draggedId,node.id,position)){event.preventDefault();event.dataTransfer.dropEffect="move";setDropPosition(position)}
+    else{event.dataTransfer.dropEffect="none";setDropPosition(null)}
+  }} onDragLeave={event=>{if(!(event.relatedTarget instanceof Node)||!event.currentTarget.contains(event.relatedTarget))setDropPosition(null)}} onDrop={event=>{
+    event.preventDefault();event.stopPropagation()
+    const source=event.dataTransfer.getData("text/project-id")
+    const rect=event.currentTarget.getBoundingClientRect()
+    const position=projectDropPosition(event.clientY,rect.top,rect.height)
+    setDropPosition(null);onDragging(null)
+    if(source&&!moving)void move(source,node.id,position)
+  }}>
     <button className="tree-toggle" onClick={()=>setOpen(value=>!value)} disabled={!node.children.length}>{node.children.length?(open?<ChevronDown/>:<ChevronRight/>):<span/>}</button>
     <button className="tree-main" onClick={()=>select({kind:"project",id:node.id})}><Folder/><span>{node.name}</span><em>{node.paperCount}</em></button>
     <div className="tree-actions"><button title="重命名" onClick={()=>void rename(node)}><Pencil/></button><button title="删除项目" onClick={()=>void remove(node)}><Trash2/></button></div>
-  </div>{open&&node.children.map(child=><ProjectTreeRow key={child.id} node={child} query={query} selected={selected} select={select} move={move} rename={rename} remove={remove} depth={depth+1}/>)}</div>
+  </div>{open&&node.children.map(child=><ProjectTreeRow key={child.id} node={child} projects={projects} draggedId={draggedId} onDragging={onDragging} moving={moving} query={query} selected={selected} select={select} move={move} rename={rename} remove={remove} depth={depth+1}/>)}</div>
 }
 function treeContains(node:ProjectTreeNode,query:string):boolean{return node.name.toLowerCase().includes(query.trim().toLowerCase())||node.children.some(child=>treeContains(child,query))}
 function Nav({active,icon,label,badge,onClick}:{active:boolean;icon:ReactNode;label:string;badge?:number;onClick:()=>void}){return <button className={active?"nav-row active":"nav-row"} aria-current={active?"page":undefined} onClick={onClick}>{icon}<span>{label}</span>{badge!==undefined&&<em>{badge}</em>}</button>}
