@@ -26,6 +26,7 @@ impl SearchPlan {
             || self.terms.iter().any(|term| {
                 term.trim().len() < 3
                     || term.len() > 100
+                    || search_words(term).is_empty()
                     || !term
                         .chars()
                         .all(|c| c.is_ascii_alphanumeric() || " -_.".contains(c))
@@ -44,11 +45,52 @@ impl SearchPlan {
         let terms = self
             .terms
             .iter()
-            .map(|term| format!("(ti:\"{term}\" OR abs:\"{term}\")"))
+            .map(|term| {
+                let words = search_words(term)
+                    .into_iter()
+                    .map(|word| format!("(ti:{word} OR abs:{word})"))
+                    .collect::<Vec<_>>()
+                    .join(" AND ");
+                format!("({words})")
+            })
             .collect::<Vec<_>>()
             .join(" OR ");
         format!("({categories}) AND ({terms})")
     }
+
+    pub fn with_interests(mut self, keywords: &[String]) -> Self {
+        // Explicit, specific user interests must not disappear when the model
+        // paraphrases them into a longer and narrower phrase.
+        for keyword in keywords {
+            let words = search_words(keyword);
+            if words.len() < 2 || !keyword.is_ascii() || self.terms.len() >= 20 {
+                continue;
+            }
+            let term = words.join(" ");
+            if !self
+                .terms
+                .iter()
+                .any(|old| search_words(old).join(" ") == term)
+            {
+                self.terms.push(term);
+            }
+        }
+        self
+    }
+}
+
+pub(crate) fn search_words(term: &str) -> Vec<String> {
+    term.to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| {
+            !word.is_empty()
+                && !matches!(
+                    *word,
+                    "a" | "an" | "the" | "for" | "of" | "in" | "and" | "with" | "to"
+                )
+        })
+        .map(str::to_owned)
+        .collect()
 }
 
 pub(crate) async fn context(
@@ -235,8 +277,20 @@ mod tests {
             rationale: "项目目的和子方向".into(),
         };
         plan.validate().unwrap();
-        assert_eq!(plan.query(&["cs.RO".into()]), "(cat:cs.RO) AND ((ti:\"point cloud\" OR abs:\"point cloud\") OR (ti:\"vision-language-action\" OR abs:\"vision-language-action\"))");
-        for term in ["x\" OR all:*", "", "机器人", "\nrobot"] {
+        let query = plan.query(&["cs.RO".into()]);
+        assert!(query.starts_with("(cat:cs.RO) AND"));
+        assert!(query.contains("(ti:point OR abs:point) AND (ti:cloud OR abs:cloud)"));
+        assert!(query.contains("(ti:vision OR abs:vision) AND (ti:language OR abs:language) AND (ti:action OR abs:action)"));
+        assert!(!query.contains('"'));
+        let expanded = plan.with_interests(&[
+            "world model".into(),
+            "robot".into(),
+            "world model".into(),
+            "世界模型".into(),
+        ]);
+        assert_eq!(expanded.terms.len(), 3);
+        assert!(expanded.terms.contains(&"world model".into()));
+        for term in ["x\" OR all:*", "", "机器人", "\nrobot", "for the"] {
             assert!(SearchPlan {
                 terms: vec![term.into()],
                 rationale: String::new()

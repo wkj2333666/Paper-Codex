@@ -461,9 +461,9 @@ async fn get_briefing(
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
     let sources: Vec<Value> = serde_json::from_str(&item.sources_json).unwrap_or_default();
-    let search_plan = serde_json::from_str::<Value>(&item.settings_json).unwrap_or_default()
-        ["search_plan"]
-        .clone();
+    let settings = serde_json::from_str::<Value>(&item.settings_json).unwrap_or_default();
+    let search_plan = settings["search_plan"].clone();
+    let diagnostics = settings["search_diagnostics"].clone();
     let mut papers = Vec::new();
     for work in crate::briefing::selected_works(&item.markdown, &sources) {
         let existing = state
@@ -478,6 +478,7 @@ async fn get_briefing(
         };
         papers.push(json!({"key":work.canonical_key,"title":work.title,"authors":work.authors,"source_url":work.source_url,"year":work.year,"paper_id":existing.map(|paper| paper.id),"project_ids":memberships}));
     }
+    let mail_body = crate::briefing::delivery_body(&item);
     item.sources_json = "[]".into();
     item.settings_json = "{}".into();
     let project_name = state
@@ -488,13 +489,14 @@ async fn get_briefing(
         .unwrap_or_else(|| "已删除项目".into());
     let email_html = crate::briefing_email::render_with_sources(
         &format!("{} · {}", item.day, project_name),
-        &item.markdown,
+        &mail_body,
         &sources,
     );
     let mut response = json!(item);
     response["email_html"] = json!(email_html);
     response["papers"] = json!(papers);
     response["search_plan"] = search_plan;
+    response["search_diagnostics"] = diagnostics;
     Ok(Json(response))
 }
 
@@ -534,13 +536,13 @@ async fn send_briefing(
         .config(&item.project_id)
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    if item.status != "completed"
+    if !crate::briefing::can_deliver(&item)
         || !config.email_enabled
         || !service.mail_configured()
         || item.mail_attempts >= 3
     {
         return Err(ApiError::bad_request(
-            "请启用邮件并检查凭据；仅支持发送已完成晨报，每份最多尝试 3 次",
+            "请启用邮件并检查凭据；支持晨报、无新增状态和最终失败通知，每份最多尝试 3 次",
         ));
     }
     tokio::spawn(async move {

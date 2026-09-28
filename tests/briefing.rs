@@ -121,6 +121,12 @@ async fn legacy_schema_migration_preserves_body_delivery_and_original_tables() {
         .await
         .unwrap();
     assert_eq!(legacy, 1);
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('daily_briefings')")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    assert!(columns.iter().any(|name| name == "mail_next_attempt_at"));
     let ei = db.create_project("ei", "EI", "").await.unwrap();
     let other = db.create_project("other", "Other", "").await.unwrap();
     BriefingService::adopt_legacy(&db, &ei).await.unwrap();
@@ -183,4 +189,27 @@ async fn restart_preserves_completed_text_and_does_not_blindly_resend() {
         .await
         .unwrap();
     assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn adds_independent_mail_clock_to_existing_project_schema_without_changing_generation() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    BriefingService::recover_states(&db).await.unwrap();
+    sqlx::query("ALTER TABLE daily_briefings DROP COLUMN mail_next_attempt_at")
+        .execute(db.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO daily_briefings(id,project_id,day,status,markdown,started_at,settings_json,mail_status,next_attempt_at) VALUES('old','ei','2026-09-28','completed','unchanged','2026-09-28','{}','failed','2099-01-01')").execute(db.pool()).await.unwrap();
+    BriefingService::recover_states(&db).await.unwrap();
+    BriefingService::recover_states(&db).await.unwrap();
+    let row: (String, String, String, String) = sqlx::query_as("SELECT markdown,mail_status,next_attempt_at,mail_next_attempt_at FROM daily_briefings WHERE id='old'").fetch_one(db.pool()).await.unwrap();
+    assert_eq!(
+        row,
+        (
+            "unchanged".into(),
+            "failed".into(),
+            "2099-01-01".into(),
+            "2099-01-01".into()
+        )
+    );
 }
