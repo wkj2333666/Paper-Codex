@@ -6,6 +6,11 @@ import { BriefingPaperPicker, projectLabel } from "./BriefingPaperPicker"
 import type { Project } from "./types"
 
 describe("MorningBriefing", () => {
+  it("shows rate limits, server cooldown and cached pages without claiming empty results",()=>{
+    const html=renderToStaticMarkup(<BriefingSearchDiagnostics diagnostics={{stage:"failed",last_response:{http_status:429,error_kind:"rate_limited",retry_after_seconds:7200,retry_at:"2026-10-01T02:00:00Z",cooldown_blocked:true,server:"Google Frontend",cache_status:"MISS",body_kind:"rate_exceeded"},topic_retrievals:[{id:"topic",label:"世界模型",status:"complete",within_window:12,pages:0,cached_pages:2}]}}/> )
+    for(const text of ["arXiv 限流（429）","HTTP 429","7200 秒","最早可重试","本次未联网","Google Frontend","复用本期已验证页面 2 页"]) expect(html).toContain(text)
+    expect(html).not.toContain("复查后无新增")
+  })
   it("explains dynamic themes, editorial omissions and unresolved scope independently",()=>{
     const html=renderToStaticMarkup(<BriefingSearchDiagnostics diagnostics={{stage:"completed",coverage:[{id:"shared",label:"跨层级稳健控制",candidates:7,selected:2,status:"selected"},{id:"compute",label:"计算预算",candidates:4,selected:0,status:"budget_limited"}],publication_coverage:[{id:"shared",published:1},{id:"compute",published:0}],dispositions:[{project_id:"ambiguous",kind:"clarification",reason:"缩写需要定义"}]}}/> )
     expect(html).toContain("跨层级稳健控制")

@@ -3,10 +3,91 @@ use crate::research::WorkMetadata;
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+// Only validated pages from this exact issue/query/window are reusable. Do not
+// cache errors, empty malformed feeds, or pretend old pages were fetched now.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct CachedPage {
+    pub fetched_at: DateTime<Utc>,
+    pub entries: Vec<WorkMetadata>,
+    pub total: Option<usize>,
+    pub diagnostic: crate::arxiv_http::Diagnostic,
+}
+pub(crate) fn cache_path(
+    workspace: &crate::workspace::Workspace,
+    id: &str,
+    query: &str,
+    start: usize,
+    since: DateTime<Utc>,
+) -> std::path::PathBuf {
+    let key = hex::encode(Sha256::digest(format!(
+        "arxiv-page-v1:{id}:{query}:{start}:{since}:200"
+    )));
+    workspace
+        .state_dir()
+        .join("briefing-fetch")
+        .join(format!("{key}.json"))
+}
+pub(crate) async fn cached_page(path: &std::path::Path, now: DateTime<Utc>) -> Option<CachedPage> {
+    let page: CachedPage = serde_json::from_slice(&tokio::fs::read(path).await.ok()?).ok()?;
+    let age = now.signed_duration_since(page.fetched_at);
+    (age >= Duration::zero() && age < Duration::minutes(90)).then_some(page)
+}
+
+pub(crate) fn issue_start(settings: &serde_json::Value, started_at: &str) -> DateTime<Utc> {
+    // Freeze a first-ever project's window across retries as well; otherwise
+    // `since(None, now)` changes every attempt and defeats exact-page caching.
+    settings["attempt_history"][0]["started_at"]
+        .as_str()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .or_else(|| DateTime::parse_from_rfc3339(started_at).ok())
+        .map(|value| value.with_timezone(&Utc))
+        .unwrap_or_else(Utc::now)
+}
+
+pub(crate) async fn prune_cache(workspace: &crate::workspace::Workspace) -> Result<()> {
+    let directory = workspace.state_dir().join("briefing-fetch");
+    let mut entries = match tokio::fs::read_dir(directory).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(hash) = name.strip_suffix(".json") else {
+            continue;
+        };
+        if hash.len() != 64
+            || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !entry.file_type().await?.is_file()
+        {
+            continue;
+        }
+        let expired = entry
+            .metadata()
+            .await?
+            .modified()?
+            .elapsed()
+            .is_ok_and(|age| age > std::time::Duration::from_secs(7 * 24 * 60 * 60));
+        if expired {
+            tokio::fs::remove_file(entry.path()).await?;
+        }
+    }
+    Ok(())
+}
 
 pub(crate) const REQUEST_TIMEOUT_SECONDS: u64 = 60;
 
 pub(crate) fn fallback_eligible(error: &anyhow::Error) -> bool {
+    if let Some(error) = error.downcast_ref::<crate::arxiv_http::ArxivError>() {
+        return error.0.retry_at.is_none()
+            && matches!(
+                error.0.error_kind.as_deref(),
+                Some("timeout" | "connection" | "upstream_5xx")
+            );
+    }
     error.downcast_ref::<reqwest::Error>().is_some_and(|error| {
         error.is_timeout()
             || error.is_connect()
@@ -17,6 +98,15 @@ pub(crate) fn fallback_eligible(error: &anyhow::Error) -> bool {
 }
 
 pub(crate) fn error_kind(error: &anyhow::Error) -> &'static str {
+    if let Some(error) = error.downcast_ref::<crate::arxiv_http::ArxivError>() {
+        return match error.0.error_kind.as_deref() {
+            Some("rate_limited") => "rate_limited",
+            Some("timeout") => "timeout",
+            Some("connection") => "connection",
+            Some("upstream_5xx") => "upstream_5xx",
+            _ => "http_rejected",
+        };
+    }
     match error.downcast_ref::<reqwest::Error>() {
         Some(error) if error.is_timeout() => "timeout",
         Some(error) if error.is_connect() => "connection",
@@ -67,6 +157,9 @@ pub(crate) struct FetchAudit {
     pub request_timeout_seconds: u64,
     pub last_request_ms: u64,
     pub error_kind: Option<String>,
+    pub response: Option<crate::arxiv_http::Diagnostic>,
+    pub cached_pages: usize,
+    pub last_fetched_at: Option<DateTime<Utc>>,
     #[serde(skip)]
     last_date: Option<DateTime<Utc>>,
 }
@@ -128,6 +221,103 @@ impl FetchAudit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retries_keep_the_original_issue_window() {
+        let history =
+            serde_json::json!({"attempt_history":[{"started_at":"2026-10-01T00:00:00Z"}]});
+        let first = issue_start(&serde_json::json!({}), "2026-10-01T00:00:00Z");
+        assert_eq!(first, issue_start(&history, "2026-10-01T01:00:00Z"));
+        assert_eq!(
+            since(None, first),
+            since(None, issue_start(&history, "2026-10-01T01:00:00Z"))
+        );
+    }
+    #[tokio::test]
+    async fn cache_cleanup_preserves_recent_pages_and_unrelated_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::Workspace::initialize(dir.path())
+            .await
+            .unwrap();
+        let cache = workspace.state_dir().join("briefing-fetch");
+        let old = cache.join(format!("{}.json", "a".repeat(64)));
+        let recent = cache.join(format!("{}.json", "b".repeat(64)));
+        let user_file = cache.join("notes.json");
+        for path in [&old, &recent, &user_file] {
+            crate::workspace::atomic_write(path, b"{}").await.unwrap();
+        }
+        for path in [&old, &user_file] {
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(
+                    std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60),
+                ))
+                .unwrap();
+        }
+        prune_cache(&workspace).await.unwrap();
+        assert!(!old.exists());
+        assert!(recent.exists());
+        assert!(user_file.exists());
+    }
+    #[tokio::test]
+    async fn validated_page_cache_is_issue_query_window_specific_and_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::Workspace::initialize(dir.path())
+            .await
+            .unwrap();
+        let now = Utc::now();
+        let path = cache_path(&workspace, "issue", "cat:cs.RO", 0, now);
+        assert_ne!(path, cache_path(&workspace, "other", "cat:cs.RO", 0, now));
+        assert_ne!(path, cache_path(&workspace, "issue", "cat:cs.AI", 0, now));
+        assert_ne!(path, cache_path(&workspace, "issue", "cat:cs.RO", 200, now));
+        assert_ne!(
+            path,
+            cache_path(&workspace, "issue", "cat:cs.RO", 0, now - Duration::days(1))
+        );
+        let page = CachedPage {
+            fetched_at: now,
+            entries: vec![],
+            total: Some(0),
+            diagnostic: Default::default(),
+        };
+        crate::workspace::atomic_write(&path, &serde_json::to_vec(&page).unwrap())
+            .await
+            .unwrap();
+        assert!(cached_page(&path, now + Duration::minutes(30))
+            .await
+            .is_some());
+        assert!(cached_page(&path, now + Duration::minutes(91))
+            .await
+            .is_none());
+        assert!(cached_page(&path, now - Duration::seconds(1))
+            .await
+            .is_none());
+        crate::workspace::atomic_write(&path, b"invalid")
+            .await
+            .unwrap();
+        assert!(cached_page(&path, now).await.is_none());
+    }
+    #[test]
+    fn cooldown_must_not_trigger_an_alternate_query() {
+        let error: anyhow::Error = crate::arxiv_http::ArxivError(crate::arxiv_http::Diagnostic {
+            http_status: Some(429),
+            error_kind: Some("rate_limited".into()),
+            retry_at: Some(Utc::now() + Duration::minutes(15)),
+            ..Default::default()
+        })
+        .into();
+        assert!(!fallback_eligible(&error));
+        assert_eq!(error_kind(&error), "rate_limited");
+        let error: anyhow::Error = crate::arxiv_http::ArxivError(crate::arxiv_http::Diagnostic {
+            http_status: Some(503),
+            error_kind: Some("upstream_5xx".into()),
+            retry_at: Some(Utc::now() + Duration::minutes(15)),
+            ..Default::default()
+        })
+        .into();
+        assert!(!fallback_eligible(&error));
+    }
     #[test]
     fn server_errors_can_fallback_but_rejections_and_invalid_data_cannot() {
         for (status, expected) in [

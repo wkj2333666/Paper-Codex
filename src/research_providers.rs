@@ -120,7 +120,8 @@ impl ResearchProvider for ArxivProvider {
             parameters.append_pair("max_results", &query.limit.to_string());
             parameters.append_pair("sortBy", "relevance");
         }
-        let body = request_text(&self.client, url).await?;
+        let (body, _) =
+            crate::arxiv_http::request(&self.client, url, Duration::from_secs(60)).await?;
         parse_arxiv_search(&body)
     }
 }

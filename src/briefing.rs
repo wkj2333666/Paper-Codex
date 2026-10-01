@@ -40,9 +40,25 @@ struct ModelRejected;
 fn permanent_failure(error: &anyhow::Error) -> bool {
     error.downcast_ref::<ModelRejected>().is_some()
         || error
+            .downcast_ref::<crate::arxiv_http::ArxivError>()
+            .is_some_and(|error| {
+                error
+                    .0
+                    .http_status
+                    .is_some_and(|status| (400..500).contains(&status) && status != 429)
+            })
+        || error
             .downcast_ref::<reqwest::Error>()
             .and_then(|e| e.status())
             .is_some_and(|status| status.is_client_error() && status.as_u16() != 429)
+}
+
+fn retry_time(error: &anyhow::Error, attempt: i64, now: DateTime<Utc>) -> DateTime<Utc> {
+    let base = now + chrono::Duration::minutes(10 * (1i64 << attempt.saturating_sub(1).min(3)));
+    error
+        .downcast_ref::<crate::arxiv_http::ArxivError>()
+        .and_then(|error| error.0.retry_at)
+        .map_or(base, |until| base.max(until))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -455,6 +471,12 @@ impl BriefingService {
                 bail!("请先确认上次邮件的投递结果，再重新生成");
             }
         }
+        if let Some(until) = crate::arxiv_http::cooling_until().await {
+            bail!(
+                "arXiv 正在冷却至 {}；未发起检索，也未增加尝试次数",
+                until.to_rfc3339()
+            );
+        }
         if !manual
             && old
                 .as_ref()
@@ -483,17 +505,19 @@ impl BriefingService {
             let generation = worker.generate(&run_id, &config, cancel_rx);
             tokio::pin!(generation);
             let error = tokio::select! {
-                result = &mut generation => result.err().map(|error| (format!("{error:#}"), !permanent_failure(&error))),
+                result = &mut generation => result.err().map(|error| {
+                    let retry = retry_time(&error, attempt, Utc::now());
+                    (format!("{error:#}"), !permanent_failure(&error), retry)
+                }),
                 _ = tokio::time::sleep(Duration::from_secs(config.timeout_minutes * 60)) => {
                     let _ = cancel_tx.send(true);
                     // Let the runtime interrupt and clean up the active turn before releasing it.
                     let _ = tokio::time::timeout(Duration::from_secs(30), &mut generation).await;
-                    Some(("晨报生成超时；已请求停止本次执行".into(), true))
+                    Some(("晨报生成超时；已请求停止本次执行".into(), true, Utc::now()+chrono::Duration::minutes(10 * (1i64 << attempt.saturating_sub(1).min(3)))))
                 }
             };
-            if let Some((error, retryable)) = error {
-                let retry = (retryable && attempt < 3)
-                    .then(|| (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339());
+            if let Some((error, retryable, retry_at)) = error {
+                let retry = (retryable && attempt < 3).then(|| retry_at.to_rfc3339());
                 let _ = sqlx::query("UPDATE daily_briefings SET status='failed',error=?,next_attempt_at=?,completed_at=?,mail_status=CASE WHEN mail_status IN ('sent','uncertain','sending') THEN mail_status ELSE 'pending' END WHERE id=? AND status='running'").bind(error).bind(retry).bind(Utc::now().to_rfc3339()).bind(&run_id).execute(worker.db.pool()).await;
                 let _ = sqlx::query("UPDATE daily_briefings SET settings_json=json_set(settings_json,'$.search_diagnostics.failure_stage',json_extract(settings_json,'$.search_diagnostics.stage'),'$.search_diagnostics.stage','failed') WHERE id=?").bind(&run_id).execute(worker.db.pool()).await;
             }
@@ -518,58 +542,86 @@ impl BriefingService {
         since: DateTime<Utc>,
         query: &str,
         remaining_pages: &mut usize,
-    ) -> Result<Vec<WorkMetadata>> {
+    ) -> Result<(Vec<WorkMetadata>, usize)> {
         let client = research_http_client()?;
         let mut all = Vec::new();
         let mut audit = crate::briefing_retrieval::FetchAudit::new(query);
         self.diagnostic(id, phase, json!(&audit)).await?;
-        for page in 0..10 {
-            if *remaining_pages == 0 {
-                bail!("晨报共享检索预算已用完，未确认所有主题覆盖；不视作无新增");
-            }
-            *remaining_pages -= 1;
-            if page > 0 {
-                tokio::time::sleep(Duration::from_secs(3)).await;
-            }
-            let started = std::time::Instant::now();
-            let page_result: Result<String> = async {
-                let response = client
-                    .get("https://export.arxiv.org/api/query")
-                    .timeout(Duration::from_secs(
-                        crate::briefing_retrieval::REQUEST_TIMEOUT_SECONDS,
-                    ))
-                    .query(&[
-                        ("search_query", query.to_owned()),
-                        ("sortBy", "lastUpdatedDate".into()),
-                        ("sortOrder", "descending".into()),
-                        ("start", audit.received.to_string()),
-                        ("max_results", "200".into()),
-                    ])
-                    .send()
-                    .await?
-                    .error_for_status()?;
-                Ok(response.text().await?)
-            }
-            .await;
-            audit.last_request_ms = started.elapsed().as_millis() as u64;
-            let body = match page_result {
-                Ok(body) => body,
-                Err(error) => {
-                    audit.error_kind = Some(crate::briefing_retrieval::error_kind(&error).into());
-                    self.diagnostic(id, phase, json!(&audit)).await?;
-                    return Err(error);
-                }
-            };
-            let entries = parse_arxiv_search(&body)?;
-            let accepted = audit.page(
-                entries,
-                crate::briefing_retrieval::total_results(&body)?,
+        for _ in 0..10 {
+            let cache = crate::briefing_retrieval::cache_path(
+                &self.workspace,
+                id,
+                query,
+                audit.received,
                 since,
             );
+            let started = std::time::Instant::now();
+            let page = if let Some(page) =
+                crate::briefing_retrieval::cached_page(&cache, Utc::now()).await
+            {
+                audit.cached_pages += 1;
+                audit.last_request_ms = 0;
+                page
+            } else {
+                if *remaining_pages == 0 {
+                    bail!("晨报共享检索预算已用完，未确认所有主题覆盖；不视作无新增");
+                }
+                *remaining_pages -= 1;
+                let mut url = url::Url::parse("https://export.arxiv.org/api/query")?;
+                url.query_pairs_mut().extend_pairs([
+                    ("search_query", query.to_owned()),
+                    ("sortBy", "lastUpdatedDate".into()),
+                    ("sortOrder", "descending".into()),
+                    ("start", audit.received.to_string()),
+                    ("max_results", "200".into()),
+                ]);
+                let response = crate::arxiv_http::request(
+                    &client,
+                    url,
+                    Duration::from_secs(crate::briefing_retrieval::REQUEST_TIMEOUT_SECONDS),
+                )
+                .await;
+                audit.last_request_ms = started.elapsed().as_millis() as u64;
+                let (body, diagnostic) = match response {
+                    Ok(result) => result,
+                    Err(error) => {
+                        audit.error_kind =
+                            Some(crate::briefing_retrieval::error_kind(&error).into());
+                        audit.response = error
+                            .downcast_ref::<crate::arxiv_http::ArxivError>()
+                            .map(|error| error.0.clone());
+                        if audit
+                            .response
+                            .as_ref()
+                            .is_some_and(|response| response.cooldown_blocked)
+                        {
+                            *remaining_pages += 1;
+                        }
+                        self.diagnostic(id, phase, json!(&audit)).await?;
+                        self.diagnostic(id, "last_response", json!(&audit.response))
+                            .await?;
+                        return Err(error);
+                    }
+                };
+                crate::briefing_retrieval::CachedPage {
+                    fetched_at: Utc::now(),
+                    entries: parse_arxiv_search(&body)?,
+                    total: crate::briefing_retrieval::total_results(&body)?,
+                    diagnostic,
+                }
+            };
+            audit.response = Some(page.diagnostic.clone());
+            audit.last_fetched_at = Some(page.fetched_at);
+            let accepted = audit.page(page.entries.clone(), page.total, since);
             self.diagnostic(id, phase, json!(&audit)).await?;
             all.extend(accepted?);
+            // Retain verified pages across scheduled retries; malformed/failed
+            // responses never enter this cache. No change to the seen cursor.
+            if let Err(error) = atomic_write(&cache, &serde_json::to_vec(&page)?).await {
+                tracing::warn!(%error,"could not cache validated briefing page");
+            }
             if audit.complete {
-                return Ok(all);
+                return Ok((all, audit.cached_pages));
             }
         }
         audit.limit_reached = true;
@@ -602,14 +654,22 @@ impl BriefingService {
         config: &BriefingConfig,
         cancel: watch::Receiver<bool>,
     ) -> Result<()> {
-        let day = self.get(id).await?.day;
+        let item = self.get(id).await?;
+        let day = item.day;
+        let issue_start = crate::briefing_retrieval::issue_start(
+            &serde_json::from_str::<Value>(&item.settings_json)?,
+            &item.started_at,
+        );
+        if let Err(error) = crate::briefing_retrieval::prune_cache(&self.workspace).await {
+            tracing::warn!(%error,"could not prune expired briefing pages");
+        }
         let previous: Option<String> = sqlx::query_scalar(
             "SELECT max(started_at) FROM daily_briefings WHERE project_id=? AND status IN ('completed','empty')",
         )
         .bind(&config.project_id)
         .fetch_one(self.db.pool())
         .await?;
-        let since = crate::briefing_retrieval::since(previous.as_deref(), Utc::now());
+        let since = crate::briefing_retrieval::since(previous.as_deref(), issue_start);
         self.diagnostic(id, "since", json!(since.to_rfc3339()))
             .await?;
         self.diagnostic(id, "stage", json!("planning")).await?;
@@ -650,8 +710,8 @@ impl BriefingService {
                 )
                 .await;
             match result {
-                Ok(found) => {
-                    retrievals.push(json!({"id":topic.id,"label":topic.label,"status":"complete","within_window":found.len(),"pages":before-remaining_pages}));
+                Ok((found, cached_pages)) => {
+                    retrievals.push(json!({"id":topic.id,"label":topic.label,"status":"complete","within_window":found.len(),"pages":before-remaining_pages,"cached_pages":cached_pages}));
                     papers.extend(found);
                 }
                 Err(error) => {
@@ -695,7 +755,7 @@ impl BriefingService {
                 .map(|category| format!("cat:{category}"))
                 .collect::<Vec<_>>()
                 .join(" OR ");
-            let fallback = self
+            let (fallback, _) = self
                 .fetch(id, "fallback", since, &fallback_query, &mut remaining_pages)
                 .await?;
             let fallback_count = fallback.len();
@@ -1092,6 +1152,39 @@ async fn persist_briefing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retry_scheduler_never_shortens_server_cooldown_and_keeps_permanent_errors_terminal() {
+        let now = Utc::now();
+        let limited: anyhow::Error = crate::arxiv_http::ArxivError(crate::arxiv_http::Diagnostic {
+            http_status: Some(429),
+            error_kind: Some("rate_limited".into()),
+            retry_at: Some(now + chrono::Duration::hours(8)),
+            ..Default::default()
+        })
+        .into();
+        assert!(!permanent_failure(&limited));
+        assert_eq!(
+            retry_time(&limited, 1, now),
+            now + chrono::Duration::hours(8)
+        );
+        let transient = anyhow::anyhow!("timeout");
+        assert_eq!(
+            retry_time(&transient, 1, now),
+            now + chrono::Duration::minutes(10)
+        );
+        assert_eq!(
+            retry_time(&transient, 2, now),
+            now + chrono::Duration::minutes(20)
+        );
+        let forbidden: anyhow::Error =
+            crate::arxiv_http::ArxivError(crate::arxiv_http::Diagnostic {
+                http_status: Some(403),
+                error_kind: Some("http_rejected".into()),
+                ..Default::default()
+            })
+            .into();
+        assert!(permanent_failure(&forbidden));
+    }
 
     #[test]
     fn importable_papers_are_only_linked_works_in_the_actual_briefing() {
