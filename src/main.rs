@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
         .init();
     let config = Config::from_env()?;
     let workspace = Workspace::initialize(&config.workspace).await?;
+    paper_codex::arxiv_http::initialize(workspace.state_dir().join("arxiv-cooldown.json")).await?;
     let db = Database::connect(&config.database_url).await?;
     let auth = Auth::new(config.password_hash.clone(), config.jwt_secret.clone());
     let acquirer = Acquirer::new(config.max_upload_bytes)?;

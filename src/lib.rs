@@ -1,5 +1,6 @@
 pub mod acquisition;
 pub mod api;
+pub mod arxiv_http;
 pub mod auth;
 pub mod briefing;
 mod briefing_editorial;

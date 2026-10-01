@@ -3,10 +3,48 @@ use crate::research::WorkMetadata;
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+// Only validated pages from this exact issue/query/window are reusable. Do not
+// cache errors, empty malformed feeds, or pretend old pages were fetched now.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct CachedPage {
+    pub fetched_at: DateTime<Utc>,
+    pub entries: Vec<WorkMetadata>,
+    pub total: Option<usize>,
+    pub diagnostic: crate::arxiv_http::Diagnostic,
+}
+pub(crate) fn cache_path(
+    workspace: &crate::workspace::Workspace,
+    id: &str,
+    query: &str,
+    start: usize,
+    since: DateTime<Utc>,
+) -> std::path::PathBuf {
+    let key = hex::encode(Sha256::digest(format!(
+        "arxiv-page-v1:{id}:{query}:{start}:{since}:200"
+    )));
+    workspace
+        .state_dir()
+        .join("briefing-fetch")
+        .join(format!("{key}.json"))
+}
+pub(crate) async fn cached_page(path: &std::path::Path, now: DateTime<Utc>) -> Option<CachedPage> {
+    let page: CachedPage = serde_json::from_slice(&tokio::fs::read(path).await.ok()?).ok()?;
+    let age = now.signed_duration_since(page.fetched_at);
+    (age >= Duration::zero() && age < Duration::minutes(90)).then_some(page)
+}
 
 pub(crate) const REQUEST_TIMEOUT_SECONDS: u64 = 60;
 
 pub(crate) fn fallback_eligible(error: &anyhow::Error) -> bool {
+    if let Some(error) = error.downcast_ref::<crate::arxiv_http::ArxivError>() {
+        return error.0.retry_at.is_none()
+            && matches!(
+                error.0.error_kind.as_deref(),
+                Some("timeout" | "connection" | "upstream_5xx")
+            );
+    }
     error.downcast_ref::<reqwest::Error>().is_some_and(|error| {
         error.is_timeout()
             || error.is_connect()
@@ -17,6 +55,15 @@ pub(crate) fn fallback_eligible(error: &anyhow::Error) -> bool {
 }
 
 pub(crate) fn error_kind(error: &anyhow::Error) -> &'static str {
+    if let Some(error) = error.downcast_ref::<crate::arxiv_http::ArxivError>() {
+        return match error.0.error_kind.as_deref() {
+            Some("rate_limited") => "rate_limited",
+            Some("timeout") => "timeout",
+            Some("connection") => "connection",
+            Some("upstream_5xx") => "upstream_5xx",
+            _ => "http_rejected",
+        };
+    }
     match error.downcast_ref::<reqwest::Error>() {
         Some(error) if error.is_timeout() => "timeout",
         Some(error) if error.is_connect() => "connection",
@@ -67,6 +114,9 @@ pub(crate) struct FetchAudit {
     pub request_timeout_seconds: u64,
     pub last_request_ms: u64,
     pub error_kind: Option<String>,
+    pub response: Option<crate::arxiv_http::Diagnostic>,
+    pub cached_pages: usize,
+    pub last_fetched_at: Option<DateTime<Utc>>,
     #[serde(skip)]
     last_date: Option<DateTime<Utc>>,
 }
@@ -128,6 +178,64 @@ impl FetchAudit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn validated_page_cache_is_issue_query_window_specific_and_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::Workspace::initialize(dir.path())
+            .await
+            .unwrap();
+        let now = Utc::now();
+        let path = cache_path(&workspace, "issue", "cat:cs.RO", 0, now);
+        assert_ne!(path, cache_path(&workspace, "other", "cat:cs.RO", 0, now));
+        assert_ne!(path, cache_path(&workspace, "issue", "cat:cs.AI", 0, now));
+        assert_ne!(path, cache_path(&workspace, "issue", "cat:cs.RO", 200, now));
+        assert_ne!(
+            path,
+            cache_path(&workspace, "issue", "cat:cs.RO", 0, now - Duration::days(1))
+        );
+        let page = CachedPage {
+            fetched_at: now,
+            entries: vec![],
+            total: Some(0),
+            diagnostic: Default::default(),
+        };
+        crate::workspace::atomic_write(&path, &serde_json::to_vec(&page).unwrap())
+            .await
+            .unwrap();
+        assert!(cached_page(&path, now + Duration::minutes(30))
+            .await
+            .is_some());
+        assert!(cached_page(&path, now + Duration::minutes(91))
+            .await
+            .is_none());
+        assert!(cached_page(&path, now - Duration::seconds(1))
+            .await
+            .is_none());
+        crate::workspace::atomic_write(&path, b"invalid")
+            .await
+            .unwrap();
+        assert!(cached_page(&path, now).await.is_none());
+    }
+    #[test]
+    fn cooldown_must_not_trigger_an_alternate_query() {
+        let error: anyhow::Error = crate::arxiv_http::ArxivError(crate::arxiv_http::Diagnostic {
+            http_status: Some(429),
+            error_kind: Some("rate_limited".into()),
+            retry_at: Some(Utc::now() + Duration::minutes(15)),
+            ..Default::default()
+        })
+        .into();
+        assert!(!fallback_eligible(&error));
+        assert_eq!(error_kind(&error), "rate_limited");
+        let error: anyhow::Error = crate::arxiv_http::ArxivError(crate::arxiv_http::Diagnostic {
+            http_status: Some(503),
+            error_kind: Some("upstream_5xx".into()),
+            retry_at: Some(Utc::now() + Duration::minutes(15)),
+            ..Default::default()
+        })
+        .into();
+        assert!(!fallback_eligible(&error));
+    }
     #[test]
     fn server_errors_can_fallback_but_rejections_and_invalid_data_cannot() {
         for (status, expected) in [
