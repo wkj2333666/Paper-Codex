@@ -654,14 +654,22 @@ impl BriefingService {
         config: &BriefingConfig,
         cancel: watch::Receiver<bool>,
     ) -> Result<()> {
-        let day = self.get(id).await?.day;
+        let item = self.get(id).await?;
+        let day = item.day;
+        let issue_start = crate::briefing_retrieval::issue_start(
+            &serde_json::from_str::<Value>(&item.settings_json)?,
+            &item.started_at,
+        );
+        if let Err(error) = crate::briefing_retrieval::prune_cache(&self.workspace).await {
+            tracing::warn!(%error,"could not prune expired briefing pages");
+        }
         let previous: Option<String> = sqlx::query_scalar(
             "SELECT max(started_at) FROM daily_briefings WHERE project_id=? AND status IN ('completed','empty')",
         )
         .bind(&config.project_id)
         .fetch_one(self.db.pool())
         .await?;
-        let since = crate::briefing_retrieval::since(previous.as_deref(), Utc::now());
+        let since = crate::briefing_retrieval::since(previous.as_deref(), issue_start);
         self.diagnostic(id, "since", json!(since.to_rfc3339()))
             .await?;
         self.diagnostic(id, "stage", json!("planning")).await?;
