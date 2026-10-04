@@ -30,3 +30,5 @@
 .briefing-paper-picker li input { margin-top: 6px; flex-shrink: 0; }
 .briefing-paper-picker small { display: block; color: var(--muted); }
 .briefing-paper-picker a { color: var(--ink); overflow-wrap: anywhere; }
+.briefing-paper-picker .briefing-paper-target { margin: 12px 0 8px; flex-wrap: wrap; align-items: center; }
+.briefing-paper-target select { max-width: 100%; min-width: 0; }

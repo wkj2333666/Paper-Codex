@@ -84,8 +84,10 @@ pub(crate) async fn metadata(paper: &Value, cache: &Path) -> Result<Value> {
     }
     let url = Url::parse(&format!("https://arxiv.org/html/{id}"))?;
     let key = hex::encode(Sha256::digest(format!(
-        "{}:{}",
-        url, paper["metadata"]["updated"]
+        "{}:{}:{}",
+        url,
+        paper["metadata"]["updated"],
+        include_str!("../scripts/briefing-html-metadata.py")
     )));
     let path = cache.join(format!("{key}.json"));
     if let Ok(bytes) = tokio::fs::read(&path).await {

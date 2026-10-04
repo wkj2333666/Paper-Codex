@@ -2,7 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { BriefingEmailPreview, BriefingSearchDiagnostics, MorningBriefing, canNotifyBriefing, newBriefingConfig } from "./MorningBriefing"
 import type { Briefing } from "./MorningBriefing"
-import { BriefingPaperPicker, projectLabel } from "./BriefingPaperPicker"
+import { BriefingPaperPicker, projectLabel, suggestedTarget, analysisLabel } from "./BriefingPaperPicker"
+import type { BriefingPaper } from "./MorningBriefing"
 import type { Project } from "./types"
 
 describe("MorningBriefing", () => {
@@ -40,6 +41,24 @@ describe("MorningBriefing", () => {
     expect(canNotifyBriefing({status: "running"} as Briefing)).toBe(false)
   })
   const projects: Project[] = [{ id: "ei", name: "EI", parent_id: null }, { id: "vla", name: "VLA", parent_id: "ei" }].map(project => ({ ...project, slug: project.id, purpose: "", created_at: "", updated_at: "" }))
+  const work: BriefingPaper = {key:"work",title:"Paper",authors:[],source_url:"https://arxiv.org/abs/1234.56789",year:2026,paper_id:"paper",project_ids:["ei"]}
+  it("recommends each paper independently and requires a choice for ambiguous or legacy reports", () => {
+    expect(suggestedTarget(work,"ei",projects)).toBe("")
+    expect(suggestedTarget({...work,suggested_projects:[{project_id:"vla",score:16,reason:"VLA"} ]},"ei",projects)).toBe("vla")
+    expect(suggestedTarget({...work,suggested_projects:[{project_id:"ei",score:4,reason:"general"},{project_id:"vla",score:4,reason:"VLA"}]},"ei",projects)).toBe("")
+    expect(suggestedTarget({...work,suggested_projects:[{project_id:"deleted",score:16,reason:"old"}]},"ei",projects)).toBe("")
+    expect(suggestedTarget(work,"vla",projects)).toBe("vla")
+  })
+  it("never hides failed analysis behind existing project membership", () => {
+    const paper: BriefingPaper = {...work,analysis:{state:"failed",has_description:false,error:"403 This account only allows Codex official clients"}}
+    const html=renderToStaticMarkup(<BriefingPaperPicker briefingId="briefing" ownerId="ei" projects={projects} papers={[paper]}/> )
+    expect(html).toContain("已加入")
+    expect(html).toContain("Codex 描述生成失败")
+    expect(html).toContain("模型服务拒绝此客户端（403）")
+    expect(html).toContain("重新分析")
+    expect(analysisLabel({...work,analysis:{state:"failed",has_description:true,error:"error"}})).toContain("保留已有描述")
+    expect(analysisLabel({...work,analysis:{state:"running",has_description:false}})).toContain("正在生成")
+  })
   it("requires an explicit project without enabling schedules or mail implicitly", () => {
     expect(newBriefingConfig("vla")).toMatchObject({ project_id: "vla", enabled: false, email_enabled: false, keywords: [] })
     expect(projectLabel(projects, "vla")).toBe("EI / VLA")

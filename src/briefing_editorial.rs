@@ -59,6 +59,108 @@ pub(crate) fn topic_score(paper: &WorkMetadata, keywords: &[String]) -> usize {
         .unwrap_or(0)
 }
 
+/// Reuse the briefing's semantic search plan; never hard-code folder names or
+/// confuse an incidental abstract match with a strong title match. Suggestions
+/// are advisory and revalidated against the current project tree on every read.
+pub(crate) fn project_suggestions(
+    paper: &WorkMetadata,
+    plan: &Value,
+    sources: &[Value],
+    owner: &str,
+    projects: &[crate::domain::Project],
+) -> Vec<Value> {
+    let mut scores = std::collections::BTreeMap::<String, (usize, String)>::new();
+    let topics = plan["topics"].as_array().cloned().unwrap_or_else(|| {
+        sources
+            .iter()
+            .find(|source| source["paper"]["canonical_key"] == paper.canonical_key)
+            .and_then(|source| source["research_topics"].as_array())
+            .cloned()
+            .unwrap_or_default()
+    });
+    for topic in topics {
+        let terms: Vec<String> = topic["terms"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect();
+        let score = if terms.is_empty() {
+            1
+        } else {
+            topic_score(paper, &terms)
+        };
+        if score == 0 {
+            continue;
+        }
+        for id in topic["project_ids"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            let mut cursor = Some(id);
+            let mut visited = BTreeSet::new();
+            let mut in_scope = false;
+            while let Some(current) = cursor {
+                if !visited.insert(current) {
+                    break;
+                }
+                let Some(project) = projects.iter().find(|p| p.id == current) else {
+                    break;
+                };
+                if current == owner {
+                    in_scope = true;
+                    break;
+                }
+                cursor = project.parent_id.as_deref();
+            }
+            if !in_scope {
+                continue;
+            }
+            let entry = scores.entry(id.to_owned()).or_default();
+            if score > entry.0 {
+                *entry = (
+                    score,
+                    topic["label"].as_str().unwrap_or("晨报研究主题").to_owned(),
+                );
+            }
+        }
+    }
+    // Prefer a supported descendant over its generic ancestor on equal evidence.
+    let ids: BTreeSet<_> = scores.keys().cloned().collect();
+    let mut ranked: Vec<_> = scores
+        .iter()
+        .filter(|(id, (score, _))| {
+            !ids.iter().any(|other| {
+                if other == *id || scores[other].0 < *score {
+                    return false;
+                }
+                let mut cursor = projects
+                    .iter()
+                    .find(|p| &p.id == other)
+                    .and_then(|p| p.parent_id.as_deref());
+                let mut seen = BTreeSet::new();
+                while let Some(parent) = cursor {
+                    if !seen.insert(parent) {
+                        break;
+                    }
+                    if parent == id.as_str() {
+                        return true;
+                    }
+                    cursor = projects
+                        .iter()
+                        .find(|p| p.id == parent)
+                        .and_then(|p| p.parent_id.as_deref());
+                }
+                false
+            })
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then_with(|| a.0.cmp(b.0)));
+    ranked.into_iter().map(|(id, (score, reason))| serde_json::json!({"project_id":id,"score":score,"reason":reason})).collect()
+}
+
 pub(crate) fn candidates<'a>(
     papers: &'a [WorkMetadata],
     keywords: &[String],
@@ -354,6 +456,39 @@ mod tests {
         );
         assert!(candidates(&papers, &["unmatched".into()], 12).is_empty());
         assert_eq!(candidates(&papers, &words, 1).len(), 1);
+    }
+
+    #[test]
+    fn import_suggestions_use_topic_strength_and_live_arbitrary_depth_tree() {
+        let project = |id: &str, parent: Option<&str>| crate::domain::Project {
+            id: id.into(),
+            slug: id.into(),
+            name: id.into(),
+            purpose: String::new(),
+            parent_id: parent.map(str::to_owned),
+            sort_order: 0,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let projects = vec![
+            project("root", None),
+            project("branch", Some("root")),
+            project("leaf", Some("branch")),
+            project("other", Some("root")),
+            project("outside", None),
+        ];
+        let plan = json!({"topics":[
+            {"label":"Main method","project_ids":["branch","leaf","deleted","outside"],"terms":["world action model"]},
+            {"label":"Related background","project_ids":["other"],"terms":["robot"]}
+        ]});
+        let work = paper("work", "World Action Models", "robot", "2026-10-04");
+        let result = project_suggestions(&work, &plan, &[], "root", &projects);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0]["project_id"], "leaf");
+        assert_eq!(result[1]["project_id"], "other");
+        assert!(result[0]["score"].as_u64() > result[1]["score"].as_u64());
+        let unmatched = paper("work", "Unrelated", "music", "2026-10-04");
+        assert!(project_suggestions(&unmatched, &plan, &[], "root", &projects).is_empty());
     }
 
     #[test]
