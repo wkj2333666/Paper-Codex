@@ -170,6 +170,11 @@ class MetadataTests(unittest.TestCase):
         result = html_parser.extract('''<figure><img src="data.png"><figcaption>Figure 1: Representative demonstrations from FineART dataset.</figcaption></figure>''')
         self.assertEqual(result['figure']['kind'], 'demonstration')
 
+    def test_nested_panel_is_not_presented_as_complete_teaser(self):
+        result = html_parser.extract('''<figure><figure><img src="teaser.png"><figcaption>Teaser panel A</figcaption></figure>
+        <figure><img src="other.png"><figcaption>Panel B</figcaption></figure><figcaption>Complete teaser</figcaption></figure>''')
+        self.assertIsNone(result['figure'])
+
 
 if __name__ == "__main__":
     unittest.main()

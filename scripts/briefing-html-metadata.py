@@ -82,11 +82,13 @@ def extract(html):
         hint = filename + ' ' + caption.lower()
         ancestor = node
         appendix = False
+        nested_figure = False
         while ancestor is not None:
+            nested_figure |= ancestor is not node and ancestor.tag == 'figure'
             appendix |= bool(re.search(r'appendix|supplement', ancestor.attrs.get('class', ''), re.I))
             appendix |= bool(re.match(r'^A\d+(?:\.|$)', ancestor.attrs.get('id', '')))
             ancestor = getattr(ancestor, 'parent', None)
-        if appendix or re.search(r'\b(logo|ablation|hyperparameter|sensitivity|success.rate|accuracy.curve)\b', hint):
+        if nested_figure or appendix or re.search(r'\b(logo|ablation|hyperparameter|sensitivity|success.rate|accuracy.curve)\b', hint):
             continue
         # Strip figure numbering; inspect the subject of the caption, not an
         # incidental mention of "our framework" halfway through an experiment.
