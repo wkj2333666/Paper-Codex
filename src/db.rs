@@ -1333,6 +1333,11 @@ impl Database {
         )
     }
 
+    pub async fn latest_paper_ingest(&self, paper_id: &str) -> Result<Option<Task>> {
+        Ok(sqlx::query_as("SELECT * FROM tasks WHERE paper_id=? AND kind='ingest' ORDER BY CASE WHEN state NOT IN ('done','failed','cancelled','needs-input') THEN 0 ELSE 1 END, created_at DESC, rowid DESC LIMIT 1")
+            .bind(paper_id).fetch_optional(&self.pool).await?)
+    }
+
     pub async fn dismiss_task(&self, id: &str) -> Result<bool> {
         let mut transaction = self.pool.begin().await?;
         let state = sqlx::query_scalar::<_, String>("SELECT state FROM tasks WHERE id=?")
@@ -1443,6 +1448,51 @@ fn parse_kind(value: &str) -> KnowledgeKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn latest_paper_ingest_keeps_failure_and_prefers_active_work() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let first = db.create_task("ingest", "{}").await.unwrap();
+        db.update_task_context(&first, Some("paper"), None, None)
+            .await
+            .unwrap();
+        db.force_task_state(&first, TaskState::Failed, Some("403"))
+            .await
+            .unwrap();
+        assert_eq!(
+            db.latest_paper_ingest("paper")
+                .await
+                .unwrap()
+                .unwrap()
+                .error
+                .as_deref(),
+            Some("403")
+        );
+        let second = db.create_task("ingest", "{}").await.unwrap();
+        db.update_task_context(&second, Some("paper"), None, None)
+            .await
+            .unwrap();
+        let question = db.create_task("question", "{}").await.unwrap();
+        db.update_task_context(&question, Some("paper"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.latest_paper_ingest("paper").await.unwrap().unwrap().id,
+            second
+        );
+        db.force_task_state(&second, TaskState::Done, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.latest_paper_ingest("paper")
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            "done"
+        );
+        assert!(db.latest_paper_ingest("unrelated").await.unwrap().is_none());
+    }
 
     #[tokio::test]
     async fn every_file_database_connection_waits_for_transient_write_locks() {

@@ -465,6 +465,7 @@ async fn get_briefing(
     let settings = serde_json::from_str::<Value>(&item.settings_json).unwrap_or_default();
     let search_plan = settings["search_plan"].clone();
     let diagnostics = settings["search_diagnostics"].clone();
+    let projects = state.db.list_projects().await?;
     let mut papers = Vec::new();
     for work in crate::briefing::selected_works(&item.markdown, &sources) {
         let existing = state
@@ -477,7 +478,19 @@ async fn get_briefing(
         } else {
             vec![]
         };
-        papers.push(json!({"key":work.canonical_key,"title":work.title,"authors":work.authors,"source_url":work.source_url,"year":work.year,"paper_id":existing.map(|paper| paper.id),"project_ids":memberships}));
+        let analysis = if let Some(paper) = &existing {
+            briefing_analysis_status(&state.db, &paper.id).await?
+        } else {
+            Value::Null
+        };
+        let suggestions = crate::briefing_editorial::project_suggestions(
+            &work,
+            &search_plan,
+            &sources,
+            &item.project_id,
+            &projects,
+        );
+        papers.push(json!({"key":work.canonical_key,"title":work.title,"authors":work.authors,"source_url":work.source_url,"year":work.year,"paper_id":existing.map(|paper| paper.id),"project_ids":memberships,"analysis":analysis,"suggested_projects":suggestions}));
     }
     let mail_body = crate::briefing::delivery_body(&item);
     item.sources_json = "[]".into();
@@ -499,6 +512,28 @@ async fn get_briefing(
     response["search_plan"] = search_plan;
     response["search_diagnostics"] = diagnostics;
     Ok(Json(response))
+}
+
+async fn briefing_analysis_status(
+    db: &crate::db::Database,
+    paper_id: &str,
+) -> anyhow::Result<Value> {
+    let has_description = db.paper_analysis(paper_id).await?.is_some();
+    let task = db.latest_paper_ingest(paper_id).await?;
+    let status = match task.as_ref().map(|task| task.state.as_str()) {
+        Some("failed" | "cancelled" | "needs-input") => "failed",
+        Some("done") | None => {
+            if has_description {
+                "ready"
+            } else {
+                "missing"
+            }
+        }
+        Some(_) => "running",
+    };
+    Ok(
+        json!({"state":status,"has_description":has_description,"task_id":task.as_ref().map(|task| &task.id),"error":task.as_ref().and_then(|task| task.error.as_deref())}),
+    )
 }
 
 #[derive(Deserialize)]

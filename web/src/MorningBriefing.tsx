@@ -38,7 +38,7 @@ export function BriefingSearchDiagnostics({ diagnostics }: { diagnostics: Briefi
   {diagnostics.empty_reviewed && <p>已执行独立分类检索复查；无新增只表示当前窗口内未选出未介绍的相关论文，不表示没有论文发表。</p>}</details>
 }
 export const canNotifyBriefing = (item: Briefing) => ["completed", "empty"].includes(item.status) || (item.status === "failed" && (item.attempts >= 3 || !item.next_attempt_at))
-export interface BriefingPaper { key: string; title: string; authors: string[]; source_url: string; year: number | null; paper_id: string | null; project_ids: string[] }
+export interface BriefingPaper { key: string; title: string; authors: string[]; source_url: string; year: number | null; paper_id: string | null; project_ids: string[]; suggested_projects?: {project_id:string;score:number;reason:string}[]; analysis?: {state:"ready"|"missing"|"running"|"failed";has_description:boolean;task_id?:string|null;error?:string|null}|null }
 export interface BriefingResponse { configs: BriefingConfig[]; config_error: string | null; mail_configured: boolean; items: Briefing[] }
 export const newBriefingConfig = (projectId: string): BriefingConfig => ({ project_id: projectId, enabled: false, time: "08:00", timezone: "Asia/Shanghai", categories: ["cs.RO", "cs.CV", "cs.AI"], keywords: [], max_papers: 12, fulltext_papers: 4, timeout_minutes: 15, email_enabled: false, recipient: "" })
 const labels: Record<string, string> = { running: "生成中", completed: "已生成", empty: "暂无新论文", failed: "失败", pending: "待发送", sending: "发送中", sent: "已发送", skipped: "未安排发送", uncertain: "发送结果待确认", blocked: "需检查发信配置" }

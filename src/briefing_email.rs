@@ -35,7 +35,7 @@ fn figure<'a>(markdown: &str, source: &'a Value) -> Option<&'a Value> {
         && allowed(&image_url)
         && allowed(&paper_html)
         && same_paper
-        && [".png", ".jpg", ".jpeg"]
+        && [".png", ".jpg", ".jpeg", ".svg"]
             .iter()
             .any(|suffix| image_url.path().to_ascii_lowercase().ends_with(suffix)))
     .then_some(figure)
@@ -68,6 +68,7 @@ pub(crate) fn render_with_sources(day: &str, markdown: &str, sources: &[Value]) 
         let label = match figure["kind"].as_str() {
             Some("teaser") => "论文 teaser",
             Some("overview") => "论文总览图",
+            Some("demonstration") => "论文代表性演示图",
             _ => "论文图示（未标注为 teaser）",
         };
         let caption = figure["caption"].as_str().unwrap_or_default();
@@ -80,7 +81,15 @@ pub(crate) fn render_with_sources(day: &str, markdown: &str, sources: &[Value]) 
         let source_url = source["presentation"]["source_url"]
             .as_str()
             .unwrap_or(paper_url);
-        let block = format!("<div class=\"briefing-figure\" style=\"margin:18px 0 22px;padding:0;\"><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"display:block;\"><img src=\"{}\" referrerpolicy=\"no-referrer\" alt=\"{}\" width=\"100%\" style=\"display:block;max-width:100%;width:100%;height:auto;border:0;\"></a><p style=\"margin:10px 0 0;font-size:13px;line-height:1.65;color:#52665c;\"><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#246b53;\">{}</a> · {}<br><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#246b53;\">查看原图</a></p></div>", escape(src), escape(src), escape(caption), escape(source_url), label, escape(&short_caption), escape(src));
+        // SVG is commonly stripped by mail clients. Keep the correct figure
+        // as an explicit link instead of substituting an unrelated bitmap or
+        // embedding active SVG markup into email.
+        let visual = if src.to_ascii_lowercase().ends_with(".svg") {
+            "<span>查看完整总览图（SVG；邮件内不直接显示）</span>".to_owned()
+        } else {
+            format!("<img src=\"{}\" referrerpolicy=\"no-referrer\" alt=\"{}\" width=\"100%\" style=\"display:block;max-width:100%;width:100%;height:auto;border:0;\">", escape(src), escape(caption))
+        };
+        let block = format!("<div class=\"briefing-figure\" style=\"margin:18px 0 22px;padding:0;\"><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"display:block;\">{visual}</a><p style=\"margin:10px 0 0;font-size:13px;line-height:1.65;color:#52665c;\"><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#246b53;\">{}</a> · {}<br><a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#246b53;\">查看原图</a></p></div>", escape(src), escape(source_url), label, escape(&short_caption), escape(src));
         output.insert_str(insertion, &block);
     }
     output
@@ -259,6 +268,14 @@ mod tests {
             mail.find("<img ").unwrap() > mail.find("Example: A Complete Paper Title").unwrap()
         );
         assert!(mail.contains("查看原图"));
+        let mut svg_source = sources[0].clone();
+        svg_source["presentation"]["figure"]["image_url"] =
+            json!("https://arxiv.org/html/1234.56789v1/overview.svg");
+        let svg_mail = render_with_sources("2026-09-27", markdown, &[svg_source]);
+        assert!(svg_mail.contains("查看完整总览图（SVG"));
+        assert!(svg_mail.contains("overview.svg"));
+        assert!(!svg_mail.contains("<img "));
+        assert!(!svg_mail.contains("<object"));
         let mut unversioned_source = sources[0].clone();
         unversioned_source["presentation"]["source_url"] =
             json!("https://arxiv.org/html/1234.56789");

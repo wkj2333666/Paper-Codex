@@ -148,6 +148,33 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(result['figure']['kind'], 'teaser')
         self.assertEqual(result['figure']['caption'], 'A < B')
 
+    def test_toast_svg_overview_beats_experiment_bitmap(self):
+        result = html_parser.extract('''<figure id="S1.F1"><object type="image/svg+xml" data="2610.00899v1/overview_fig.svg"></object>
+        <figcaption>Fig. 1: We propose TOAST, a novel framework for stochastic action tokenization.</figcaption></figure>
+        <figure><img src="tasks_fig.png"><figcaption>Fig. 3: Evaluation tasks.</figcaption></figure>''')
+        self.assertEqual(result['figure']['image_ref'], '2610.00899v1/overview_fig.svg')
+        self.assertEqual(result['figure']['format'], 'svg')
+
+    def test_no_arbitrary_plot_fallback_or_directory_keyword_match(self):
+        result = html_parser.extract('''<figure><img src="teaser/plot.png"><figcaption>Figure 3: Evaluation tasks for our framework.</figcaption></figure>
+        <figure><img src="plot.png"><figcaption>Success rate of the proposed pipeline.</figcaption></figure>''')
+        self.assertIsNone(result['figure'])
+        self.assertEqual(result['figure_selection'], 'no_confident_complete_figure')
+
+    def test_appendix_teaser_does_not_displace_main_method(self):
+        result = html_parser.extract('''<figure><img src="method.png"><figcaption>Figure 2: Overview of our method.</figcaption></figure>
+        <section class="ltx_appendix" id="A1"><figure><img src="teaser.png"><figcaption>Supplemental example.</figcaption></figure></section>''')
+        self.assertEqual(result['figure']['image_ref'], 'method.png')
+
+    def test_complete_representative_demonstration_is_labelled_honestly(self):
+        result = html_parser.extract('''<figure><img src="data.png"><figcaption>Figure 1: Representative demonstrations from FineART dataset.</figcaption></figure>''')
+        self.assertEqual(result['figure']['kind'], 'demonstration')
+
+    def test_nested_panel_is_not_presented_as_complete_teaser(self):
+        result = html_parser.extract('''<figure><figure><img src="teaser.png"><figcaption>Teaser panel A</figcaption></figure>
+        <figure><img src="other.png"><figcaption>Panel B</figcaption></figure><figcaption>Complete teaser</figcaption></figure>''')
+        self.assertIsNone(result['figure'])
+
 
 if __name__ == "__main__":
     unittest.main()
