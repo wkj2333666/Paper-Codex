@@ -29,7 +29,7 @@ export const api = {
   sendBriefing:(id:string)=>request<void>(`/api/briefings/${encodeURIComponent(id)}/send`,{method:"POST"}),
   paper:(id:string)=>request<PaperDetail>(`/api/paper?id=${encodeURIComponent(id)}`),
   tasks:()=>request<Task[]>("/api/tasks"),
-  task:(id:string)=>request<Task>(`/api/tasks/${encodeURIComponent(id)}`),
+  task:(id:string,signal?:AbortSignal)=>request<Task>(`/api/tasks/${encodeURIComponent(id)}`,{signal}),
   cancelTask:(id:string)=>request<void>(`/api/tasks/${encodeURIComponent(id)}/cancel`,{method:"POST"}),
   dismissTask:(id:string)=>request<void>(`/api/tasks/${encodeURIComponent(id)}`,{method:"DELETE"}),
   intake:(source:string,project_id?:string)=>request<DirectIntakeResult>("/api/intake",{method:"POST",body:JSON.stringify({source,project_id:project_id||null})}),

@@ -1,23 +1,23 @@
-import { FileText, LoaderCircle, Network, Sparkles, Trash2 } from "lucide-react"
+import { FileText, Network, Trash2 } from "lucide-react"
+import type { ReactNode } from "react"
+import "./paper-actions.css"
 
 export function PaperHeaderActions({
-  reanalyzing,
+  analysisAction,
   paperGraphOpen,
-  onOpenPdf,
-  onReanalyze,
+  sourceUrl,
   onTrash,
   onToggleGraph,
 }: {
-  reanalyzing: boolean
+  analysisAction: ReactNode
   paperGraphOpen: boolean
-  onOpenPdf: () => void
-  onReanalyze: () => void
+  sourceUrl: string | null
   onTrash: () => void
   onToggleGraph: (trigger: HTMLButtonElement) => void
 }) {
   return <div className="paper-head-actions">
-    <button className="outline" onClick={onOpenPdf}><FileText/>阅读原文</button>
-    <button className="outline" disabled={reanalyzing} onClick={onReanalyze}>{reanalyzing?<LoaderCircle className="spin"/>:<Sparkles/>}重新分析</button>
+    {sourceUrl ? <a className="outline paper-source-link" href={sourceUrl} target="_blank" rel="noopener noreferrer"><FileText/>打开原始链接</a> : <button className="outline" disabled title="本地上传的论文没有原始链接"><FileText/>无原始链接</button>}
+    {analysisAction}
     <button className="danger-outline" onClick={onTrash}><Trash2/>移入回收站</button>
     <button
       className="outline paper-graph-action"

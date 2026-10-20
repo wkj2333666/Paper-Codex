@@ -19,6 +19,8 @@ import { IntakeSearchResults } from "./IntakeSearchResults"
 import { routeIntakeSubmission } from "./intake-flow"
 import { MobilePanelRails, PanelCollapseButton, PanelRail } from "./PanelControls"
 import { PaperHeaderActions } from "./PaperHeaderActions"
+import { PaperReanalysis } from "./PaperReanalysis"
+import { originalPaperUrl } from "./paper-actions"
 import { CodexPanel } from "./CodexPanel"
 import { citationsForPaper } from "./citation-overlay"
 import { selectionsEqual, type CodexSelection } from "./conversation-scope"
@@ -326,7 +328,7 @@ function ProjectView({project,dashboard,select,refresh,researchRevision,candidat
 }
 
 function PaperView({id,dashboard,select,refresh,citations,citationFocus,paperGraphOpen,paperGraphWidth,isNarrow,drawerOpen,onExpandGraph,onCollapseGraph,onResizeGraph,onResetGraph,theme}:{id:string;dashboard:Dashboard;select:Select;refresh:()=>Promise<void>;citations:MessageCitation[];citationFocus:MessageCitation|null;paperGraphOpen:boolean;paperGraphWidth:number;isNarrow:boolean;drawerOpen:boolean;onExpandGraph:(trigger:HTMLButtonElement)=>void;onCollapseGraph:()=>void;onResizeGraph:(delta:number)=>void;onResetGraph:()=>void;theme:ResolvedTheme}){
-  const [detail,setDetail]=useState<PaperDetail|null>(null);const [graph,setGraph]=useState<GraphPayload>({nodes:[],edges:[]});const [annotations,setAnnotations]=useState<PaperAnnotation[]>([]);const [focusedCitation,setFocusedCitation]=useState<MessageCitation|null>(null);const [project,setProject]=useState("");const [tab,setTab]=useState("overview");const [readerMode,setReaderMode]=useState<"smart"|"enhanced"|"original">("smart");const [reanalyzing,setReanalyzing]=useState(false)
+  const [detail,setDetail]=useState<PaperDetail|null>(null);const [graph,setGraph]=useState<GraphPayload>({nodes:[],edges:[]});const [annotations,setAnnotations]=useState<PaperAnnotation[]>([]);const [focusedCitation,setFocusedCitation]=useState<MessageCitation|null>(null);const [project,setProject]=useState("");const [tab,setTab]=useState("overview");const [readerMode,setReaderMode]=useState<"smart"|"enhanced"|"original">("smart")
   const savedReadingPosition=useMemo(()=>loadPaperReadingPosition(id),[id])
   const restoredPaperId=useRef<string|null>(null)
   const saveReadingPosition=useCallback((position:Parameters<typeof savePaperReadingPosition>[1])=>savePaperReadingPosition(id,position),[id])
@@ -345,8 +347,6 @@ function PaperView({id,dashboard,select,refresh,citations,citationFocus,paperGra
   const brief=briefFromAnalysis(detail.analysis)
   const add=async()=>{if(!project)return;await api.addPaper(project,id);setProject("");await reload();await refresh()}
   const removeMembership=async(projectId:string)=>{await api.removePaper(projectId,id);await reload();await refresh()}
-  const openPdf=()=>setReaderMode("original")
-  const reanalyze=async()=>{const source=detail.paper.source_url??(detail.paper.arxiv_id?`arxiv:${detail.paper.arxiv_id}`:detail.paper.doi?`doi:${detail.paper.doi}`:detail.paper.title);setReanalyzing(true);try{await api.intake(source,detail.projects[0])}finally{setReanalyzing(false)}}
   const trash=async()=>{const impact=await api.paperImpact(id);if(!window.confirm(`把这篇论文移入回收站？\n${describePaperImpact(impact)}。PDF、笔记和关系会保留，可随时恢复。`))return;await api.trashPaper(id);await refresh();select({kind:"inbox"})}
   const selectedAnnotation=annotations.find(item=>item.citation.id===focusedCitation?.id)
   const pinActive=async(citation:MessageCitation=focusedCitation as MessageCitation)=>{if(!citation)return;await api.pinCitation(citation.id);await reload()}
@@ -354,7 +354,7 @@ function PaperView({id,dashboard,select,refresh,citations,citationFocus,paperGra
   const visibleAnnotations=annotations.filter(item=>item.annotation.state==="visible")
   const available=dashboard.projects.filter(item=>!detail.projects.includes(item.id))
   const paperGraphVisible=isNarrow?drawerOpen:paperGraphOpen
-  return <div className={`paper-page${readerMode!=="smart"?" reader-active":""}${!paperGraphVisible?" paper-graph-collapsed":""}`}><div className="paper-reading"><header className="paper-head"><div><p className="eyebrow">{detail.paper.year??"论文"} · {detail.paper.doi??detail.paper.arxiv_id??detail.paper.id}</p><h1>{detail.paper.title}</h1><p>{authors.join(", ")||"作者信息待补充"}</p></div><PaperHeaderActions reanalyzing={reanalyzing} paperGraphOpen={paperGraphVisible} onOpenPdf={openPdf} onReanalyze={()=>void reanalyze()} onTrash={()=>void trash()} onToggleGraph={trigger=>paperGraphVisible?onCollapseGraph():onExpandGraph(trigger)}/></header>
+  return <div className={`paper-page${readerMode!=="smart"?" reader-active":""}${!paperGraphVisible?" paper-graph-collapsed":""}`}><div className="paper-reading"><header className="paper-head"><div><p className="eyebrow">{detail.paper.year??"论文"} · {detail.paper.doi??detail.paper.arxiv_id??detail.paper.id}</p><h1>{detail.paper.title}</h1><p>{authors.join(", ")||"作者信息待补充"}</p></div><PaperHeaderActions sourceUrl={originalPaperUrl(detail.paper)} analysisAction={<PaperReanalysis key={id} paper={detail.paper} tasks={dashboard.tasks} onComplete={reload}/>} paperGraphOpen={paperGraphVisible} onTrash={()=>void trash()} onToggleGraph={trigger=>paperGraphVisible?onCollapseGraph():onExpandGraph(trigger)}/></header>
     <div className="reader-mode-tabs">{[["smart","智能阅读"],["enhanced","增强阅读"],["original","原文"]].map(([key,label])=><button key={key} className={readerMode===key?"active":""} onClick={()=>setReaderMode(key as typeof readerMode)}>{label}</button>)}</div>
     {readerMode==="smart"?<>
     <div className="takeaway"><span>一句话读懂</span><strong>{brief.takeaway}</strong></div>
