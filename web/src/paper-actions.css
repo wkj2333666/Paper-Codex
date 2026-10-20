@@ -1,0 +1,8 @@
+.paper-head-actions .paper-source-link{display:flex;align-items:center;justify-content:center;gap:5px;border:1px solid var(--line);background:var(--surface,#fff);color:var(--green);padding:8px 10px;border-radius:7px;font-size:11px;text-decoration:none}
+.paper-source-link svg{width:14px}
+.paper-reanalysis{display:flex;flex-direction:column;gap:6px;max-width:240px}
+.paper-reanalysis button{width:100%}
+.paper-reanalysis p{font-size:12px;line-height:1.5;margin:0;color:var(--muted);overflow-wrap:anywhere}
+.paper-reanalysis [role="alert"]{color:var(--danger,#c97668)}
+.paper-source-link:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+[data-theme="dark"] .paper-head-actions .paper-source-link{background:#202722;color:var(--green);border-color:var(--line)}
