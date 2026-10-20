@@ -464,7 +464,16 @@ async fn get_briefing(
     let sources: Vec<Value> = serde_json::from_str(&item.sources_json).unwrap_or_default();
     let settings = serde_json::from_str::<Value>(&item.settings_json).unwrap_or_default();
     let search_plan = settings["search_plan"].clone();
-    let diagnostics = settings["search_diagnostics"].clone();
+    let mut diagnostics = settings["search_diagnostics"].clone();
+    if item.status == "completed" {
+        if let Err(error) = crate::briefing::validate_briefing_draft(&item.markdown, &sources) {
+            if !diagnostics.is_object() {
+                diagnostics = json!({});
+            }
+            diagnostics["draft_validation"] =
+                json!({"status":"rejected","reason":error.to_string()});
+        }
+    }
     let projects = state.db.list_projects().await?;
     let mut papers = Vec::new();
     for work in crate::briefing::selected_works(&item.markdown, &sources) {

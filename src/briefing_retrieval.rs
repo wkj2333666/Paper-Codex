@@ -80,6 +80,28 @@ pub(crate) async fn prune_cache(workspace: &crate::workspace::Workspace) -> Resu
 
 pub(crate) const REQUEST_TIMEOUT_SECONDS: u64 = 60;
 
+/// A validated prefix remains useful even when the bounded scan is incomplete.
+pub(crate) struct FetchBatch {
+    pub papers: Vec<WorkMetadata>,
+    pub cached_pages: usize,
+    pub complete: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("检索覆盖未完成且没有可用候选；未认定无新增，也未推进检索位置。请调整范围后手动重试")]
+pub(crate) struct IncompleteCoverage;
+
+pub(crate) fn needs_category_review(primary_incomplete: bool, candidates: usize) -> bool {
+    primary_incomplete || candidates == 0
+}
+
+pub(crate) fn ensure_usable_coverage(incomplete: bool, candidates: usize) -> Result<()> {
+    if incomplete && candidates == 0 {
+        return Err(IncompleteCoverage.into());
+    }
+    Ok(())
+}
+
 pub(crate) fn fallback_eligible(error: &anyhow::Error) -> bool {
     if let Some(error) = error.downcast_ref::<crate::arxiv_http::ArxivError>() {
         return error.0.retry_at.is_none()
@@ -221,6 +243,17 @@ impl FetchAudit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_topics_with_useful_papers_do_not_trigger_broad_empty_review() {
+        // October 14/19: twelve candidates from completed topic searches. A
+        // single empty direction must not force a 2000-result category scan.
+        assert!(!needs_category_review(false, 12));
+        assert!(needs_category_review(false, 0));
+        assert!(needs_category_review(true, 12));
+        assert!(ensure_usable_coverage(true, 12).is_ok());
+        assert!(ensure_usable_coverage(true, 0).is_err());
+        assert!(ensure_usable_coverage(false, 0).is_ok());
+    }
     #[test]
     fn retries_keep_the_original_issue_window() {
         let history =

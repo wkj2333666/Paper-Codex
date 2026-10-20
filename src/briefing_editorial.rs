@@ -381,6 +381,7 @@ pub(crate) fn prompt(
     let policy = projects["briefing_editorial_skill"]
         .as_str()
         .unwrap_or(crate::briefing_skill::EDITORIAL);
+    let policy = format!("{policy}\n成稿交付约束：只输出面向读者的 Markdown 正文，不输出分析、工作过程、工具记录、JSON 或包裹整篇的代码围栏。正文最多 24000 字符；每篇保留完整原文标题、作者及证据快照中的原文链接。不要使用工作简称代替完整标题。若检索覆盖不完整，只基于已有证据介绍，不宣称全面覆盖或无新增。");
     let mut project_context = projects.clone();
     if let Some(object) = project_context.as_object_mut() {
         object.remove("briefing_editorial_skill");
