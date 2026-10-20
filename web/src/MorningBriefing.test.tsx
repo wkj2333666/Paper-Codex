@@ -7,6 +7,11 @@ import type { BriefingPaper } from "./MorningBriefing"
 import type { Project } from "./types"
 
 describe("MorningBriefing", () => {
+  it("distinguishes partial coverage and rejected drafts from successful full reports", () => {
+    const html = renderToStaticMarkup(<BriefingSearchDiagnostics diagnostics={{stage:"validating",coverage_incomplete:true,draft_saved:true,draft_validation:{status:"rejected",reason:"正文长度异常"},topic_retrievals:[{id:"a",label:"世界模型",status:"partial",within_window:200,pages:1}]}}/> )
+    for(const text of ["校验成稿","检索覆盖不完整","不推进完整检索位置","成稿校验未通过","正文长度异常","原始草稿已保留","检索截断，保留已验证的 200 条"]) expect(html).toContain(text)
+    expect(html).not.toContain("复查后无新增")
+  })
   it("shows rate limits, server cooldown and cached pages without claiming empty results",()=>{
     const html=renderToStaticMarkup(<BriefingSearchDiagnostics diagnostics={{stage:"failed",last_response:{http_status:429,error_kind:"rate_limited",retry_after_seconds:7200,retry_at:"2026-10-01T02:00:00Z",cooldown_blocked:true,server:"Google Frontend",cache_status:"MISS",body_kind:"rate_exceeded"},topic_retrievals:[{id:"topic",label:"世界模型",status:"complete",within_window:12,pages:0,cached_pages:2}]}}/> )
     for(const text of ["arXiv 限流（429）","HTTP 429","7200 秒","最早可重试","本次未联网","Google Frontend","复用本期已验证页面 2 页"]) expect(html).toContain(text)

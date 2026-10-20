@@ -37,8 +37,102 @@ CREATE TABLE IF NOT EXISTS briefing_legacy_owner (singleton INTEGER PRIMARY KEY 
 #[error("模型拒绝或无法完成晨报，请检查模型提供商/凭据后手动重试；未进行自动重试")]
 struct ModelRejected;
 
+#[derive(Debug, thiserror::Error)]
+#[error("晨报成稿校验失败：{0}；不能作为正常日报投递，请查看任务记录后手动处理")]
+pub(crate) struct InvalidBriefingDraft(&'static str);
+
+/// Validate before publication, seen-cursor changes, archival and delivery.
+/// Never salvage an answer by guessing where a reasoning trace ends.
+pub(crate) fn validate_briefing_draft(
+    markdown: &str,
+    sources: &[Value],
+) -> std::result::Result<(), InvalidBriefingDraft> {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    let count = markdown.chars().count();
+    if !(200..=32_000).contains(&count) {
+        return Err(InvalidBriefingDraft("正文长度异常"));
+    }
+    let beginning: String = markdown.trim_start().chars().take(1500).collect();
+    let beginning = beginning.to_lowercase();
+    if beginning.starts_with("```")
+        || beginning.starts_with("~~~")
+        || beginning.starts_with('{')
+        || beginning.starts_with("[{")
+        || beginning.starts_with("[analysis]")
+        || beginning.lines().any(|line| {
+            let line = line.trim().trim_start_matches('#').trim();
+            [
+                "we need answer",
+                "we need to write",
+                "need follow",
+                "need output",
+                "let's produce",
+                "analysis:",
+                "reasoning:",
+                "<think>",
+                "<analysis>",
+                "思考过程：",
+                "推理过程：",
+            ]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+        })
+    {
+        return Err(InvalidBriefingDraft(
+            "输出包含工作过程或协议包装，不是面向读者的成稿",
+        ));
+    }
+    let mut plain = String::new();
+    let mut code_chars = 0;
+    let mut in_code = false;
+    for event in Parser::new(markdown) {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => in_code = true,
+            Event::End(TagEnd::CodeBlock) => in_code = false,
+            Event::Text(value) | Event::Code(value) => {
+                if in_code {
+                    code_chars += value.chars().count();
+                } else {
+                    plain.push_str(&value);
+                    plain.push(' ');
+                }
+            }
+            _ => {}
+        }
+    }
+    if code_chars > count / 4 {
+        return Err(InvalidBriefingDraft("正文主要是代码块或过程记录"));
+    }
+    let published = selected_works(markdown, sources);
+    if published.is_empty() {
+        return Err(InvalidBriefingDraft("没有可核验的候选论文原文链接"));
+    }
+    let normalized = |value: &str| {
+        value
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let normalized_body = normalized(&plain);
+    if published.iter().any(|paper| {
+        let title = normalized(&paper.title);
+        title.is_empty() || !normalized_body.contains(&title)
+    }) {
+        return Err(InvalidBriefingDraft("已引用论文缺少完整工作名称"));
+    }
+    if !plain.contains("作者") && !plain.to_lowercase().contains("author") {
+        return Err(InvalidBriefingDraft("正文缺少作者信息"));
+    }
+    Ok(())
+}
+
 fn permanent_failure(error: &anyhow::Error) -> bool {
     error.downcast_ref::<ModelRejected>().is_some()
+        || error
+            .downcast_ref::<crate::briefing_retrieval::IncompleteCoverage>()
+            .is_some()
+        || error.downcast_ref::<InvalidBriefingDraft>().is_some()
         || error
             .downcast_ref::<crate::arxiv_http::ArxivError>()
             .is_some_and(|error| {
@@ -542,7 +636,7 @@ impl BriefingService {
         since: DateTime<Utc>,
         query: &str,
         remaining_pages: &mut usize,
-    ) -> Result<(Vec<WorkMetadata>, usize)> {
+    ) -> Result<crate::briefing_retrieval::FetchBatch> {
         let client = research_http_client()?;
         let mut all = Vec::new();
         let mut audit = crate::briefing_retrieval::FetchAudit::new(query);
@@ -564,7 +658,14 @@ impl BriefingService {
                 page
             } else {
                 if *remaining_pages == 0 {
-                    bail!("晨报共享检索预算已用完，未确认所有主题覆盖；不视作无新增");
+                    audit.limit_reached = true;
+                    audit.error_kind = Some("budget_exhausted".into());
+                    self.diagnostic(id, phase, json!(&audit)).await?;
+                    return Ok(crate::briefing_retrieval::FetchBatch {
+                        papers: all,
+                        cached_pages: audit.cached_pages,
+                        complete: false,
+                    });
                 }
                 *remaining_pages -= 1;
                 let mut url = url::Url::parse("https://export.arxiv.org/api/query")?;
@@ -600,6 +701,13 @@ impl BriefingService {
                         self.diagnostic(id, phase, json!(&audit)).await?;
                         self.diagnostic(id, "last_response", json!(&audit.response))
                             .await?;
+                        if !all.is_empty() && crate::briefing_retrieval::fallback_eligible(&error) {
+                            return Ok(crate::briefing_retrieval::FetchBatch {
+                                papers: all,
+                                cached_pages: audit.cached_pages,
+                                complete: false,
+                            });
+                        }
                         return Err(error);
                     }
                 };
@@ -621,12 +729,21 @@ impl BriefingService {
                 tracing::warn!(%error,"could not cache validated briefing page");
             }
             if audit.complete {
-                return Ok((all, audit.cached_pages));
+                return Ok(crate::briefing_retrieval::FetchBatch {
+                    papers: all,
+                    cached_pages: audit.cached_pages,
+                    complete: true,
+                });
             }
         }
         audit.limit_reached = true;
+        audit.error_kind = Some("page_limit".into());
         self.diagnostic(id, phase, json!(&audit)).await?;
-        bail!("检索达到 10 页 / 2000 篇上限，无法确认完整覆盖；未当作无新增，未推进检索位置")
+        Ok(crate::briefing_retrieval::FetchBatch {
+            papers: all,
+            cached_pages: audit.cached_pages,
+            complete: false,
+        })
     }
     async fn unseen(
         &self,
@@ -663,12 +780,7 @@ impl BriefingService {
         if let Err(error) = crate::briefing_retrieval::prune_cache(&self.workspace).await {
             tracing::warn!(%error,"could not prune expired briefing pages");
         }
-        let previous: Option<String> = sqlx::query_scalar(
-            "SELECT max(started_at) FROM daily_briefings WHERE project_id=? AND status IN ('completed','empty')",
-        )
-        .bind(&config.project_id)
-        .fetch_one(self.db.pool())
-        .await?;
+        let previous = last_complete_start(&self.db, &config.project_id).await?;
         let since = crate::briefing_retrieval::since(previous.as_deref(), issue_start);
         self.diagnostic(id, "since", json!(since.to_rfc3339()))
             .await?;
@@ -710,9 +822,10 @@ impl BriefingService {
                 )
                 .await;
             match result {
-                Ok((found, cached_pages)) => {
-                    retrievals.push(json!({"id":topic.id,"label":topic.label,"status":"complete","within_window":found.len(),"pages":before-remaining_pages,"cached_pages":cached_pages}));
-                    papers.extend(found);
+                Ok(batch) => {
+                    retrievals.push(json!({"id":topic.id,"label":topic.label,"status":if batch.complete { "complete" } else { "partial" },"within_window":batch.papers.len(),"pages":before-remaining_pages,"cached_pages":batch.cached_pages}));
+                    primary_failed |= !batch.complete;
+                    papers.extend(batch.papers);
                 }
                 Err(error) => {
                     retrievals.push(json!({"id":topic.id,"label":topic.label,"status":"failed","error_kind":crate::briefing_retrieval::error_kind(&error),"pages":before-remaining_pages}));
@@ -729,15 +842,14 @@ impl BriefingService {
         }
         let primary_count = papers.len();
         let mut unseen = self.unseen(&config.project_id, papers).await?;
-        self.diagnostic(id, "primary_selection", json!({"retrieved":primary_count,"unseen":unseen.len(),"candidates":crate::briefing_editorial::select(&unseen, &plan, config.max_papers).len()})).await?;
+        let primary_candidates =
+            crate::briefing_editorial::select(&unseen, &plan, config.max_papers).len();
+        self.diagnostic(id, "primary_selection", json!({"retrieved":primary_count,"unseen":unseen.len(),"candidates":primary_candidates})).await?;
         let mut reviewed_empty = false;
-        // A shared category review is bounded and runs at most once, even when
-        // several themes have no unseen matches or suffered transient failure.
-        if primary_failed
-            || plan.topics.iter().any(|topic| {
-                crate::briefing_editorial::candidates(&unseen, &topic.terms, 1).is_empty()
-            })
-        {
+        let mut coverage_incomplete = primary_failed;
+        // A single empty topic does not justify an all-category scan when the
+        // other completed topics already produced a useful briefing.
+        if crate::briefing_retrieval::needs_category_review(primary_failed, primary_candidates) {
             self.diagnostic(
                 id,
                 "stage",
@@ -755,16 +867,40 @@ impl BriefingService {
                 .map(|category| format!("cat:{category}"))
                 .collect::<Vec<_>>()
                 .join(" OR ");
-            let (fallback, _) = self
+            match self
                 .fetch(id, "fallback", since, &fallback_query, &mut remaining_pages)
-                .await?;
-            let fallback_count = fallback.len();
-            unseen.extend(fallback);
-            unseen = self.unseen(&config.project_id, unseen).await?;
-            self.diagnostic(id, "fallback_selection", json!({"retrieved":fallback_count,"unseen":unseen.len(),"candidates":crate::briefing_editorial::select(&unseen, &plan, config.max_papers).len()})).await?;
-            reviewed_empty = true;
+                .await
+            {
+                Ok(batch) => {
+                    reviewed_empty = batch.complete;
+                    coverage_incomplete = !batch.complete;
+                    let fallback_count = batch.papers.len();
+                    unseen.extend(batch.papers);
+                    unseen = self.unseen(&config.project_id, unseen).await?;
+                    self.diagnostic(id, "fallback_selection", json!({"retrieved":fallback_count,"unseen":unseen.len(),"candidates":crate::briefing_editorial::select(&unseen, &plan, config.max_papers).len()})).await?;
+                }
+                Err(error)
+                    if primary_candidates > 0
+                        && crate::briefing_retrieval::fallback_eligible(&error) =>
+                {
+                    // Only optional coverage failed; verified topic results are
+                    // still usable. Never bypass 429/auth/schema failures.
+                    coverage_incomplete = true;
+                    self.diagnostic(
+                        id,
+                        "fallback_reason",
+                        json!(crate::briefing_retrieval::error_kind(&error)),
+                    )
+                    .await?;
+                }
+                Err(error) => return Err(error),
+            }
         }
+        self.diagnostic(id, "coverage_incomplete", json!(coverage_incomplete))
+            .await?;
+        context["briefing_coverage_incomplete"] = json!(coverage_incomplete);
         let candidates = crate::briefing_editorial::select(&unseen, &plan, config.max_papers);
+        crate::briefing_retrieval::ensure_usable_coverage(coverage_incomplete, candidates.len())?;
         let coverage = crate::briefing_editorial::coverage(&unseen, &candidates, &plan);
         self.diagnostic(id, "coverage", coverage.clone()).await?;
         self.diagnostic(id, "dispositions", json!(plan.dispositions))
@@ -866,8 +1002,34 @@ impl BriefingService {
                 }
                 return Err(ModelRejected.into());
             }
+            self.diagnostic(id, "stage", json!("validating")).await?;
+            let draft = self
+                .workspace
+                .state_dir()
+                .join("briefing-drafts")
+                .join(format!(
+                    "{}-attempt-{}.md",
+                    crate::workspace::safe_key(id),
+                    item.attempts
+                ));
+            atomic_write(&draft, outcome.final_text.as_bytes()).await?;
+            self.diagnostic(id, "draft_saved", json!(true)).await?;
+            if let Err(error) = validate_briefing_draft(&outcome.final_text, &sources) {
+                self.diagnostic(
+                    id,
+                    "draft_validation",
+                    json!({"status":"rejected","reason":error.to_string()}),
+                )
+                .await?;
+                return Err(error.into());
+            }
+            self.diagnostic(id, "draft_validation", json!({"status":"accepted"}))
+                .await?;
             outcome.final_text
         };
+        if coverage_incomplete {
+            markdown.push_str("\n\n**检索覆盖说明：** 本期基于已验证的候选论文生成；部分检索因分页上限或临时故障未完成，不能据此认定其他方向没有新增。未推进完整检索位置，后续会继续复查遗漏范围。");
+        }
         // Keep omissions observable without throwing away a useful answer or
         // initiating extra model retries merely to satisfy a layout template.
         let published = selected_works(&markdown, &sources);
@@ -983,9 +1145,16 @@ impl BriefingService {
         {
             return Ok(());
         }
+        let sources: Vec<Value> = serde_json::from_str(&item.sources_json).unwrap_or_default();
+        if item.status == "completed" {
+            if let Err(error) = validate_briefing_draft(&item.markdown, &sources) {
+                sqlx::query("UPDATE daily_briefings SET mail_status='blocked',mail_error=?,mail_next_attempt_at=NULL WHERE id=?")
+                    .bind(error.to_string()).bind(id).execute(self.db.pool()).await?;
+                return Err(error.into());
+            }
+        }
         let env_path = self.mail_env_path.as_ref().context("未配置邮件凭据文件")?;
         sqlx::query("UPDATE daily_briefings SET mail_status='sending',mail_attempts=mail_attempts+1 WHERE id=?").bind(id).execute(self.db.pool()).await?;
-        let sources: Vec<Value> = serde_json::from_str(&item.sources_json).unwrap_or_default();
         let body = delivery_body(&item);
         let label = match item.status.as_str() {
             "empty" => "论文晨报 · 暂无新增",
@@ -1084,7 +1253,15 @@ pub(crate) fn can_deliver(item: &Briefing) -> bool {
 }
 
 pub(crate) fn delivery_body(item: &Briefing) -> String {
-    if item.status == "failed" {
+    if item.status == "completed"
+        && validate_briefing_draft(
+            &item.markdown,
+            &serde_json::from_str::<Vec<Value>>(&item.sources_json).unwrap_or_default(),
+        )
+        .is_err()
+    {
+        "## 这份晨报的成稿校验未通过\n\n旧记录虽然标为完成，但正文不符合正常晨报要求，已停止将它作为正常邮件正文展示或再次投递。原始记录仍保留，已发出的邮件无法撤回；请查看成稿校验提示后手动处理。".into()
+    } else if item.status == "failed" {
         // Provider errors can include sensitive request details. Keep the email
         // notification factual and direct the owner to the authenticated UI.
         let settings = serde_json::from_str::<Value>(&item.settings_json).unwrap_or_default();
@@ -1095,6 +1272,7 @@ pub(crate) fn delivery_body(item: &Briefing) -> String {
             Some("fallback_retrieval") => "分类降级检索",
             Some("collecting_evidence") => "证据收集",
             Some("writing") => "晨报撰写",
+            Some("validating") => "成稿校验（异常正文未投递）",
             _ => "检索或生成",
         };
         format!("## 今日晨报未能完成\n\n出错阶段：{phase}。已结束自动重试或遇到不可自动重试的错误（已尝试 {} 次）。\n\n**这不是“没有新增论文”。** 本邮件仅通知任务异常，没有生成正常论文晨报。\n\n请打开 Paper Codex 的「论文晨报」栏目查看失败原因和检索记录，再决定是否手动重试。", item.attempts)
@@ -1119,6 +1297,20 @@ fn briefing_chat_scope(config: &BriefingConfig) -> Option<ConversationScopeInput
     })
 }
 
+async fn last_complete_start(db: &Database, project_id: &str) -> Result<Option<String>> {
+    let reports: Vec<Briefing> = sqlx::query_as("SELECT * FROM daily_briefings WHERE project_id=? AND status IN ('completed','empty') AND json_extract(settings_json,'$.search_diagnostics.coverage_incomplete') IS NOT 1 AND json_extract(settings_json,'$.search_diagnostics.draft_validation.status') IS NOT 'rejected' ORDER BY started_at DESC")
+        .bind(project_id).fetch_all(db.pool()).await?;
+    for report in reports {
+        let sources = serde_json::from_str::<Vec<Value>>(&report.sources_json).unwrap_or_default();
+        // Legacy versions could publish malformed output without a validation
+        // diagnostic. Do not let that record advance the coverage watermark.
+        if report.status == "empty" || validate_briefing_draft(&report.markdown, &sources).is_ok() {
+            return Ok(Some(report.started_at));
+        }
+    }
+    Ok(None)
+}
+
 async fn persist_briefing(
     db: &Database,
     id: &str,
@@ -1126,6 +1318,9 @@ async fn persist_briefing(
     sources: &[Value],
     email_enabled: bool,
 ) -> Result<()> {
+    if !sources.is_empty() {
+        validate_briefing_draft(markdown, sources)?;
+    }
     let mut transaction = db.pool().begin_with("BEGIN IMMEDIATE").await?;
     let project_id: String =
         sqlx::query_scalar("SELECT project_id FROM daily_briefings WHERE id=?")
@@ -1152,6 +1347,102 @@ async fn persist_briefing(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn valid_draft(paper: &WorkMetadata) -> String {
+        format!("# 今日晨报\n\n今天重点关注信息表示与决策之间的关系。\n\n## [{}]({})\n\n**作者：** {}\n\n**工作内容：** {}\n\n**阅读判断：** 证据来自提供的论文摘要；具体性能需阅读原文，不能把通用推断当成作者实验结论。", paper.title, paper.source_url, paper.authors.join(", "), "论文研究紧凑规则中的信息结构及其对决策的影响。".repeat(10))
+    }
+
+    #[test]
+    fn rejects_process_dumps_and_broken_drafts_without_rejecting_normal_markdown() {
+        let works =
+            parse_arxiv_search(include_str!("../fixtures/research/arxiv-search.xml")).unwrap();
+        let sources = [json!({"paper":works[0]})];
+        let valid = valid_draft(&works[0]);
+        assert!(validate_briefing_draft(&valid, &sources).is_ok());
+        // A reader-facing introduction need not begin with a heading.
+        assert!(validate_briefing_draft(&valid.replace("# 今日晨报\n\n", ""), &sources).is_ok());
+        for broken in [
+            "We need answer reader-facing Markdown only. ".repeat(6000),
+            format!("We need answer reader-facing Markdown only.\n\n{valid}"),
+            format!("```markdown\n{valid}\n```"),
+            serde_json::to_string(&json!({"markdown":valid})).unwrap(),
+            valid.replace(&works[0].source_url, "https://example.test/unverified"),
+            valid.replace(&works[0].title, "只给简称"),
+            valid.replace("作者", "未提供身份"),
+        ] {
+            let error = validate_briefing_draft(&broken, &sources).unwrap_err();
+            assert!(permanent_failure(&error.into()));
+        }
+        assert!(permanent_failure(
+            &crate::briefing_retrieval::IncompleteCoverage.into()
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_draft_never_changes_seen_records_or_queues_normal_mail() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        BriefingService::recover_states(&db).await.unwrap();
+        sqlx::query("INSERT INTO daily_briefings(id,project_id,day,status,started_at,settings_json) VALUES('bad','p','2026-10-20','running','2026-10-20','{}')").execute(db.pool()).await.unwrap();
+        let works =
+            parse_arxiv_search(include_str!("../fixtures/research/arxiv-search.xml")).unwrap();
+        let dump = "We need answer reader-facing Markdown only. ".repeat(6000);
+        let sources = [json!({"paper":works[0]})];
+        assert!(persist_briefing(&db, "bad", &dump, &sources, true)
+            .await
+            .is_err());
+        let mut item: Briefing = sqlx::query_as("SELECT * FROM daily_briefings WHERE id='bad'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(item.status, "running");
+        assert!(item.markdown.is_empty());
+        assert!(!can_deliver(&item));
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM briefing_seen")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        // Old versions could mark a trace completed. Preview/delivery still
+        // guard that legacy state without deleting its original record.
+        item.status = "completed".into();
+        item.markdown = dump;
+        item.sources_json = serde_json::to_string(&sources).unwrap();
+        assert!(delivery_body(&item).contains("成稿校验未通过"));
+        assert!(!delivery_body(&item).contains("We need answer"));
+    }
+
+    #[tokio::test]
+    async fn incomplete_and_rejected_reports_never_advance_complete_search_watermark() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        BriefingService::recover_states(&db).await.unwrap();
+        for (day, settings) in [
+            ("2026-10-17", json!({})),
+            (
+                "2026-10-18",
+                json!({"search_diagnostics":{"coverage_incomplete":true}}),
+            ),
+            (
+                "2026-10-20",
+                json!({"search_diagnostics":{"draft_validation":{"status":"rejected"}}}),
+            ),
+            ("2026-10-21", json!({})),
+        ] {
+            sqlx::query("INSERT INTO daily_briefings(id,project_id,day,status,started_at,settings_json) VALUES(?,'p',?,'completed',?,?)").bind(day).bind(day).bind(day).bind(settings.to_string()).execute(db.pool()).await.unwrap();
+        }
+        let works =
+            parse_arxiv_search(include_str!("../fixtures/research/arxiv-search.xml")).unwrap();
+        sqlx::query("UPDATE daily_briefings SET markdown=?,sources_json=? WHERE id='2026-10-17'")
+            .bind(valid_draft(&works[0]))
+            .bind(json!([{ "paper": works[0] }]).to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            last_complete_start(&db, "p").await.unwrap().as_deref(),
+            Some("2026-10-17")
+        );
+        assert!(last_complete_start(&db, "other").await.unwrap().is_none());
+    }
     #[test]
     fn retry_scheduler_never_shortens_server_cooldown_and_keeps_permanent_errors_terminal() {
         let now = Utc::now();
@@ -1233,7 +1524,7 @@ mod tests {
         sqlx::query("INSERT INTO daily_briefings(id,project_id,day,status,started_at,settings_json) VALUES('digest','project-a','2026-09-27','running','2026-09-27','{}')").execute(db.pool()).await.unwrap();
         let works =
             parse_arxiv_search(include_str!("../fixtures/research/arxiv-search.xml")).unwrap();
-        let markdown = format!("# 已生成的正文\n\n[论文]({})", works[0].source_url);
+        let markdown = valid_draft(&works[0]);
         persist_briefing(&db, "digest", &markdown, &[json!({"paper":works[0]})], true)
             .await
             .unwrap();
