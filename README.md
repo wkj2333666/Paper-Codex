@@ -127,6 +127,19 @@ Selecting a Skill sends it to Codex as a structured app-server input for the nex
 
 Project literature discovery additionally requires Codex app-server dynamic tools. Paper Codex detects this capability at runtime: unsupported installations keep ordinary conversations available and clearly disable controlled paper search.
 
+### Paper analysis model
+
+Paper ingestion and “Reanalyze” no longer use a hardcoded GPT fallback chain. By default they use the isolated Codex runtime's configured model and reasoning effort. To override only paper analysis, create `.runtime/codex-home/paper-analysis.yaml` (or the same filename under `PAPER_CODEX_CODEX_HOME`):
+
+```yaml
+model: glm-5.3-flash
+reasoning_effort: max
+```
+
+This file is read before each analysis task; no rebuild or restart is needed for subsequent edits. The model and effort must be advertised by the active runtime. Invalid configuration fails visibly instead of silently selecting another model. A task makes one model attempt and never falls back to a different model after capacity or permission errors. The `analysis-settings` task event records the selected model and effort.
+
+Provider and credentials remain in the isolated Codex configuration; this file does not accept a provider, key, or endpoint. For the example above, the existing `config.toml` provider must serve GLM (provider id `glm` in this deployment). Chat and briefing settings are unchanged. Configuration changes apply to new tasks, not an already running analysis.
+
 ## Start from source
 
 Build and start the service from the repository root after authenticating the isolated Codex home:

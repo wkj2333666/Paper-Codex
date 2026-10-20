@@ -620,59 +620,30 @@ impl TaskEngine {
         cwd: &std::path::Path,
         prompt: &str,
         output_schema: Option<serde_json::Value>,
-        mut cancel: watch::Receiver<bool>,
+        cancel: watch::Receiver<bool>,
     ) -> Result<PaperAnalysisRun> {
-        let settings = self.codex.paper_analysis_settings();
-        if settings.is_empty() {
-            bail!("no supported Codex paper-analysis model is available");
-        }
-        for (index, current) in settings.iter().enumerate() {
-            self.check_cancel(&cancel)?;
-            let outcome = self
-                .codex
-                .run_turn(
-                    CodexTurn {
-                        thread_id: None,
-                        cwd: cwd.to_path_buf(),
-                        prompt: prompt.to_owned(),
-                        skill: None,
-                        tool_preferences: Vec::new(),
-                        output_schema: output_schema.clone(),
-                        settings: current.clone(),
-                    },
-                    cancel.clone(),
-                )
-                .await?;
-            let result = PaperAnalysisRun {
-                outcome,
-                settings: current.clone(),
-            };
-            let Some(next) = settings.get(index + 1) else {
-                return Ok(result);
-            };
-            if !result.outcome.is_capacity_failure() {
-                return Ok(result);
-            }
-            self.emit(
-                id,
-                "model-switch",
-                serde_json::json!({
-                    "from":current.model,
-                    "to":next.model,
-                    "reason":result.outcome.error
-                }),
+        let settings = self.codex.paper_analysis_settings()?;
+        self.check_cancel(&cancel)?;
+        self.emit(id, "analysis-settings", serde_json::to_value(&settings)?)
+            .await?;
+        let outcome = self
+            .codex
+            .run_turn(
+                CodexTurn {
+                    thread_id: None,
+                    cwd: cwd.to_path_buf(),
+                    prompt: prompt.to_owned(),
+                    skill: None,
+                    tool_preferences: Vec::new(),
+                    output_schema,
+                    settings: settings.clone(),
+                },
+                cancel,
             )
             .await?;
-            tokio::select! {
-                _ = tokio::time::sleep(paper_analysis_backoff(index)) => {}
-                changed = cancel.changed() => {
-                    if changed.is_ok() && *cancel.borrow() {
-                        bail!("task cancelled");
-                    }
-                }
-            }
-        }
-        unreachable!("paper analysis settings are non-empty")
+        // A provider rejection or capacity error must not select an unrelated
+        // model, incur another model request, or undo an explicit user choice.
+        Ok(PaperAnalysisRun { outcome, settings })
     }
 
     async fn question(
@@ -789,13 +760,6 @@ impl TaskEngine {
     }
 }
 
-fn paper_analysis_backoff(index: usize) -> std::time::Duration {
-    if cfg!(test) {
-        return std::time::Duration::from_millis(1);
-    }
-    std::time::Duration::from_secs(if index == 0 { 2 } else { 5 })
-}
-
 fn redact_error(value: &str) -> String {
     let lower = value.to_ascii_lowercase();
     if lower.contains("token") || lower.contains("authorization") || lower.contains("secret") {
@@ -839,7 +803,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paper_analysis_retries_capacity_on_a_fresh_lower_priority_model() {
+    async fn paper_analysis_uses_runtime_default_without_hardcoded_gpt_preference() {
         let (engine, db, root) = engine().await;
         let task_id = db.create_task("ingest", "{}").await.unwrap();
         let (_cancel_tx, cancel_rx) = watch::channel(false);
@@ -849,16 +813,19 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.settings.model, "gpt-5.6-terra");
+        assert_eq!(result.settings.model, "gpt-test");
+        assert_eq!(result.settings.reasoning_effort, "low");
         assert_eq!(result.outcome.status, "completed");
         let events = db.events_after(0).await.unwrap();
-        let switch = events
+        let selected = events
             .iter()
-            .find(|event| event.event_type == "model-switch")
-            .expect("capacity fallback event");
-        let payload: serde_json::Value = serde_json::from_str(&switch.payload_json).unwrap();
-        assert_eq!(payload["from"], "gpt-5.6-sol");
-        assert_eq!(payload["to"], "gpt-5.6-terra");
+            .find(|event| event.event_type == "analysis-settings")
+            .expect("selected analysis settings event");
+        let payload: serde_json::Value = serde_json::from_str(&selected.payload_json).unwrap();
+        assert_eq!(payload["model"], "gpt-test");
+        assert!(events
+            .iter()
+            .all(|event| event.event_type != "model-switch"));
     }
 
     #[tokio::test]
@@ -872,7 +839,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.settings.model, "gpt-5.6-sol");
+        assert_eq!(result.settings.model, "gpt-test");
         assert_eq!(result.outcome.status, "failed");
         assert!(db
             .events_after(0)
@@ -883,7 +850,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paper_analysis_stops_after_the_three_bounded_capacity_candidates() {
+    async fn paper_analysis_stops_on_capacity_without_switching_models() {
         let (engine, db, root) = engine().await;
         let task_id = db.create_task("ingest", "{}").await.unwrap();
         let (_cancel_tx, cancel_rx) = watch::channel(false);
@@ -893,7 +860,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.settings.model, "gpt-5.6-luna");
+        assert_eq!(result.settings.model, "gpt-test");
         assert_eq!(result.outcome.status, "failed");
         assert_eq!(
             db.events_after(0)
@@ -902,7 +869,7 @@ mod tests {
                 .iter()
                 .filter(|event| event.event_type == "model-switch")
                 .count(),
-            2
+            0
         );
     }
 

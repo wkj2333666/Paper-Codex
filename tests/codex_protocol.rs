@@ -936,22 +936,58 @@ async fn identifies_explicit_model_capacity_without_treating_other_failures_as_c
 }
 
 #[tokio::test]
-async fn paper_analysis_prefers_sol_then_terra_then_luna_at_medium_standard() {
+async fn paper_analysis_defaults_to_configured_runtime_settings() {
     let runtime = CodexRuntime::spawn(fake_command()).await.unwrap();
 
-    let settings = runtime.paper_analysis_settings();
-
     assert_eq!(
-        settings
-            .iter()
-            .map(|item| item.model.as_str())
-            .collect::<Vec<_>>(),
-        vec!["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+        runtime.paper_analysis_settings().unwrap(),
+        standard_settings()
     );
-    assert!(settings
-        .iter()
-        .all(|item| item.reasoning_effort == "medium"));
-    assert!(settings.iter().all(|item| item.service_tier.is_none()));
+}
+
+#[tokio::test]
+async fn paper_analysis_pins_glm_flash_max_and_hot_reloads_without_changing_chat() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("config.toml"),
+        "model = \"glm-5.3\"\nmodel_provider = \"glm\"\nmodel_reasoning_effort = \"max\"\n",
+    )
+    .unwrap();
+    let mut command = fake_command();
+    command.codex_home = Some(home.path().to_path_buf());
+    let runtime = CodexRuntime::spawn(command).await.unwrap();
+    let path = home.path().join("paper-analysis.yaml");
+    std::fs::write(&path, "model: glm-5.3-flash\nreasoning_effort: max\n").unwrap();
+    let settings = runtime.paper_analysis_settings().unwrap();
+    assert_eq!(settings.model, "glm-5.3-flash");
+    assert_eq!(settings.reasoning_effort, "max");
+    assert!(settings.service_tier.is_none());
+    assert_eq!(runtime.default_settings().model, "glm-5.3");
+    let (_tx, rx) = watch::channel(false);
+    let result = runtime
+        .run_turn(
+            CodexTurn {
+                settings,
+                ..research_turn("assert-glm-paper-analysis")
+            },
+            rx,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.status, "completed");
+    std::fs::write(&path, "model: glm-5.3\nreasoning_effort: max\n").unwrap();
+    assert_eq!(runtime.paper_analysis_settings().unwrap().model, "glm-5.3");
+    for invalid in [
+        "model: unknown\nreasoning_effort: max\n",
+        "model: glm-5.3-flash\nreasoning_effort: unsupported\n",
+        "model: [broken\n",
+        "model: glm-5.3-flash\nreasoning_effort: max\napi_key: secret-not-for-output\n",
+    ] {
+        std::fs::write(&path, invalid).unwrap();
+        let error = runtime.paper_analysis_settings().unwrap_err().to_string();
+        assert!(!error.contains("secret-not-for-output"));
+        assert_eq!(runtime.default_settings().model, "glm-5.3");
+    }
 }
 
 #[tokio::test]
