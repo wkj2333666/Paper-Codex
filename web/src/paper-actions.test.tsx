@@ -30,6 +30,13 @@ describe("paper actions", () => {
     expect(html).toContain('disabled=""')
     expect(html).toContain("正在分析论文")
   })
+  it("does not let stale polling hide a terminal SSE event", () => {
+    const stale = task("analyzing")
+    const completed = task("done", { updated_at: "2026-10-20T03:11:00Z" })
+    expect(latestPaperAnalysis([completed, stale], paper)).toBe(completed)
+    expect(latestPaperAnalysis([stale, completed], paper)).toBe(completed)
+    expect(analysisActive(latestPaperAnalysis([stale, completed], paper))).toBe(false)
+  })
   it("shows provider rejection on the paper page without credentials or raw transport output", () => {
     const error = '403 Forbidden: This account only allows Codex official clients; sk-secret123 event: response.failed'
     const html = renderToStaticMarkup(<PaperReanalysis paper={paper} tasks={[task("failed", { error })]} onComplete={async () => {}}/> )

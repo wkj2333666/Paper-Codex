@@ -12,19 +12,23 @@ export function PaperReanalysis({ paper, tasks, onComplete }: { paper: Paper; ta
   const [pollError, setPollError] = useState("")
   const submittingRef = useRef(false)
   const refreshed = useRef<string | null>(null)
-  // A locally fetched task replaces its stale dashboard copy.
-  const task = latestPaperAnalysis(tracked ? [...tasks.filter(item => item.id !== tracked.id), tracked] : tasks, paper)
+  // Prefer the newest copy whether it arrived through SSE or polling.
+  const task = latestPaperAnalysis(tracked ? [tracked, ...tasks] : tasks, paper)
   const active = analysisActive(task)
   const source = originalPaperUrl(paper)
   useEffect(() => {
     if (!task || !active) return
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    let requestTimeout: ReturnType<typeof setTimeout> | undefined
+    let controller: AbortController | undefined
     const id = task.id
     const poll = async () => {
       let delay = 3000
       try {
-        const next = await api.task(id)
+        controller = new AbortController()
+        requestTimeout = setTimeout(() => controller?.abort(), 15000)
+        const next = await api.task(id, controller.signal)
         if (stopped) return
         setTracked(next); setPollError("")
         if (!analysisActive(next)) return
@@ -32,11 +36,11 @@ export function PaperReanalysis({ paper, tasks, onComplete }: { paper: Paper; ta
         if (stopped) return
         setPollError("暂时无法读取任务状态，正在恢复连接；不会重复提交分析。")
         delay = 15000
-      }
+      } finally { clearTimeout(requestTimeout) }
       if (!stopped) timer = setTimeout(() => void poll(), delay)
     }
     void poll()
-    return () => { stopped = true; clearTimeout(timer) }
+    return () => { stopped = true; clearTimeout(timer); clearTimeout(requestTimeout); controller?.abort() }
   }, [task?.id, active])
   useEffect(() => {
     if (!task || task.state !== "done" || refreshed.current === task.id) return

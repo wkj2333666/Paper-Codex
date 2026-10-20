@@ -17,13 +17,18 @@ export function analysisActive(task: Task | null): boolean {
 }
 
 export function latestPaperAnalysis(tasks: Task[], paper: Paper): Task | null {
+  const timestamp = (value: string) => Date.parse(value.includes("T") ? value : value.replace(" ", "T") + "Z") || 0
+  const current = new Map<string, Task>()
+  for (const task of tasks) {
+    const previous = current.get(task.id)
+    if (!previous || timestamp(task.updated_at) >= timestamp(previous.updated_at)) current.set(task.id, task)
+  }
   const sources = new Set([paper.source_url, paper.arxiv_id && `arxiv:${paper.arxiv_id}`, paper.doi && `doi:${paper.doi}`].filter(Boolean))
-  const matches = tasks.filter(task => {
+  const matches = [...current.values()].filter(task => {
     if (task.kind !== "ingest") return false
     if (task.paper_id) return task.paper_id === paper.id
     try { return sources.has(JSON.parse(task.input_json).source) } catch { return false }
   })
-  const timestamp = (value: string) => Date.parse(value.includes("T") ? value : value.replace(" ", "T") + "Z") || 0
   return matches.sort((a, b) => Number(analysisActive(b)) - Number(analysisActive(a)) || timestamp(b.created_at) - timestamp(a.created_at) || timestamp(b.updated_at) - timestamp(a.updated_at))[0] ?? null
 }
 
