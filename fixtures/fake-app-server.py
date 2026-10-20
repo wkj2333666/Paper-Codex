@@ -199,6 +199,10 @@ for raw in sys.stdin:
             send({"method": "test/runtime-tmp", "params": {"path": os.environ.get("TMPDIR")}})
         if "settings" in text or "skill-turn" in text or "observe-turn-params" in text:
             send({"method": "test/turn-params", "params": msg["params"]})
+        if "assert-glm-paper-analysis" in text:
+            assert msg["params"]["model"] == "glm-5.3-flash"
+            assert msg["params"]["effort"] == "max"
+            assert "serviceTier" not in msg["params"]
         if "fail-me" in text:
             send({"method": "turn/completed", "params": {"threadId": msg["params"]["threadId"], "turn": {"id": pending_turn, "items": [], "status": "failed", "error": {
                 "message": "structured output rejected",

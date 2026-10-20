@@ -63,6 +63,13 @@ struct ConfiguredCodexSettings {
     model_provider: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PaperAnalysisSettings {
+    model: String,
+    reasoning_effort: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexSkill {
     pub name: String,
@@ -847,30 +854,24 @@ impl CodexRuntime {
         self.default_settings()
     }
 
-    pub fn paper_analysis_settings(&self) -> Vec<CodexRunSettings> {
-        ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
-            .into_iter()
-            .filter_map(|preferred| {
-                let model = self
-                    .capabilities
-                    .models
-                    .iter()
-                    .find(|model| model.id == preferred)?;
-                Some(CodexRunSettings {
-                    model: model.id.clone(),
-                    reasoning_effort: if model
-                        .supported_reasoning_efforts
-                        .iter()
-                        .any(|effort| effort == "medium")
-                    {
-                        "medium".into()
-                    } else {
-                        model.default_reasoning_effort.clone()
-                    },
-                    service_tier: None,
-                })
-            })
-            .collect()
+    pub fn paper_analysis_settings(&self) -> Result<CodexRunSettings> {
+        let mut settings = self.default_settings();
+        settings.service_tier = None;
+        if let Some(home) = &self.command.codex_home {
+            match std::fs::read_to_string(home.join("paper-analysis.yaml")) {
+                Ok(contents) => {
+                    // Reread for each task, but never accept credentials/provider
+                    // overrides here or fall back silently after invalid config.
+                    let configured: PaperAnalysisSettings = serde_yaml::from_str(&contents)
+                        .map_err(|_| anyhow::anyhow!("invalid paper-analysis.yaml: expected model and reasoning_effort strings"))?;
+                    settings.model = configured.model;
+                    settings.reasoning_effort = configured.reasoning_effort;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("read paper-analysis.yaml"),
+            }
+        }
+        self.validate_settings(&settings)
     }
 
     pub fn validate_settings(&self, settings: &CodexRunSettings) -> Result<CodexRunSettings> {

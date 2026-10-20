@@ -1,0 +1,4 @@
+# Save as PAPER_CODEX_CODEX_HOME/paper-analysis.yaml.
+# Read before each paper-analysis task; provider/auth stay in config.toml.
+model: glm-5.3-flash
+reasoning_effort: max
